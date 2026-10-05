@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<!--
+  ONLINE CUSTOMER FACE VIEWER
+  ===========================
+  Admin-only tool. Fetches customer data through the Netlify function
+  (key stays server-side). Requires an admin account login.
+  This page does NOT contain any database keys.
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Customer Viewer - PrintKiosk</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0f1220; --panel:#171b2e; --panel2:#1f2440; --line:#2a3050;
+    --text:#e8eaf6; --muted:#8b91b8; --accent:#6c5ce7; --accent2:#a29bfe;
+    --green:#00cec9; --red:#ff6b6b; --yellow:#fdcb6e;
+  }
+  *{ box-sizing:border-box; margin:0; padding:0; }
+  body{ background:var(--bg); color:var(--text); font-family:'Inter',system-ui,sans-serif; padding:24px; }
+  header{ display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; margin-bottom:20px; }
+  header h1{ font-size:22px; font-weight:800; letter-spacing:.3px; }
+  header h1 span{ color:var(--accent2); }
+  .head-actions{ display:flex; gap:10px; align-items:center; }
+  .head-actions a, .head-actions button{ background:var(--panel2); color:var(--text); border:1px solid var(--line); padding:8px 14px; border-radius:10px; font-size:13px; text-decoration:none; cursor:pointer; font-family:inherit; }
+  .head-actions a:hover, .head-actions button:hover{ border-color:var(--accent); color:var(--accent2); }
+  .warn{ font-size:12px; color:var(--yellow); background:rgba(253,203,110,.08); border:1px solid rgba(253,203,110,.25); padding:8px 12px; border-radius:10px; }
+  #toolbar{ display:flex; gap:12px; align-items:center; margin-bottom:16px; flex-wrap:wrap; }
+  #search{ flex:1; min-width:220px; background:var(--panel); border:1px solid var(--line); color:var(--text); padding:10px 14px; border-radius:10px; font-size:14px; outline:none; }
+  #search:focus{ border-color:var(--accent); }
+  #count{ font-size:13px; color:var(--muted); background:var(--panel); padding:9px 14px; border-radius:10px; }
+  .table-wrap{ overflow:auto; border:1px solid var(--line); border-radius:14px; background:var(--panel); }
+  table{ width:100%; border-collapse:collapse; font-size:13.5px; min-width:920px; }
+  thead th{ position:sticky; top:0; background:var(--panel2); text-align:left; padding:12px 14px; font-size:12px; text-transform:uppercase; letter-spacing:.5px; color:var(--muted); }
+  tbody td{ padding:12px 14px; border-top:1px solid var(--line); vertical-align:middle; }
+  tbody tr:hover{ background:var(--panel2); }
+  .mono{ font-family:ui-monospace,Consolas,monospace; font-size:12px; color:var(--muted); }
+  .badge{ display:inline-block; padding:3px 9px; border-radius:99px; font-size:11.5px; font-weight:700; }
+  .badge.admin{ background:rgba(255,107,107,.15); color:var(--red); }
+  .badge.customer{ background:rgba(0,206,201,.12); color:var(--green); }
+  .yes{ color:var(--green); }
+  .no{ color:var(--red); }
+  .faces-btn{ background:var(--accent); color:#fff; border:none; padding:7px 12px; border-radius:9px; font-size:12.5px; font-weight:700; cursor:pointer; }
+  .faces-btn:hover{ background:var(--accent2); }
+  .faces-btn[disabled]{ background:#3a3f63; color:var(--muted); cursor:not-allowed; }
+  .del-btn{ background:rgba(255,107,107,.12); color:var(--red); border:1px solid rgba(255,107,107,.35); padding:7px 12px; border-radius:9px; font-size:12.5px; font-weight:700; cursor:pointer; }
+  .del-btn:hover{ background:var(--red); color:#fff; }
+  .ghost-btn{ background:var(--panel2); color:var(--muted); border:1px solid var(--line); padding:4px 8px; border-radius:7px; font-size:11px; cursor:pointer; }
+  .ghost-btn:hover{ color:var(--text); border-color:var(--accent); }
+  .cell-actions{ display:flex; gap:8px; align-items:center; }
+  .thumb{ width:38px; height:38px; object-fit:cover; border-radius:8px; border:1px solid var(--line); display:block; }
+
+  /* login gate */
+  #loginScreen{ position:fixed; inset:0; display:flex; align-items:center; justify-content:center; background:var(--bg); z-index:9999; }
+  #loginScreen.hidden{ display:none; }
+  .login-card{ width:min(380px,92vw); background:var(--panel); border:1px solid var(--line); border-radius:18px; padding:28px; }
+  .login-card h2{ font-size:19px; margin-bottom:4px; }
+  .login-card p{ font-size:13px; color:var(--muted); margin-bottom:20px; }
+  .login-card label{ font-size:12px; color:var(--muted); display:block; margin:12px 0 5px; }
+  .login-card input{ width:100%; background:var(--bg); border:1px solid var(--line); color:var(--text); padding:11px 13px; border-radius:10px; font-size:14px; outline:none; }
+  .login-card input:focus{ border-color:var(--accent); }
+  .login-card button{ width:100%; margin-top:18px; background:var(--accent); color:#fff; border:none; padding:12px; border-radius:10px; font-size:14px; font-weight:700; cursor:pointer; }
+  .login-card button:hover{ background:var(--accent2); }
+  #loginError{ color:var(--red); font-size:13px; margin-top:12px; display:none; }
+
+  /* lightbox */
+  #lightbox{ position:fixed; inset:0; background:rgba(5,7,15,.9); display:none; align-items:center; justify-content:center; flex-direction:column; z-index:999; padding:20px; }
+  #lightbox.open{ display:flex; }
+  #lbTitle{ margin-bottom:10px; text-align:center; }
+  #lbTitle h2{ font-size:17px; }
+  #lbTitle p{ font-size:12.5px; color:var(--muted); margin-top:3px; }
+  #lbMain{ position:relative; display:flex; align-items:center; gap:14px; }
+  #lbStage img{ max-width:min(520px,82vw); max-height:60vh; border-radius:14px; border:1px solid var(--line); background:#000; }
+  #lbNav button{ background:var(--panel2); color:var(--text); border:1px solid var(--line); width:42px; height:42px; border-radius:12px; font-size:18px; cursor:pointer; }
+  #lbNav button:hover{ border-color:var(--accent); color:var(--accent2); }
+  #lbThumbs{ display:flex; gap:10px; margin-top:14px; flex-wrap:wrap; justify-content:center; }
+  #lbThumbs img{ width:62px; height:62px; object-fit:cover; border-radius:10px; border:2px solid transparent; cursor:pointer; }
+  #lbThumbs img.active{ border-color:var(--accent); }
+  #lbClose{ position:absolute; top:14px; right:18px; background:none; border:none; color:#fff; font-size:34px; cursor:pointer; line-height:1; }
+  #lbMeta{ font-size:12.5px; color:var(--muted); margin-top:8px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Customer <span>Face Viewer</span></h1>
+  <div class="head-actions">
+    <a href="admin.html">Admin Dashboard</a>
+    <button onclick="logout()">Log out</button>
+  </div>
+</header>
+<div class="warn">Admin-only. Shows every customer and their stored face photos. Data is fetched through the server, keys never leave it.</div>
+
+<div id="toolbar">
+  <input id="search" type="text" placeholder="Search by name, email or phone...">
+  <button class="faces-btn" onclick="load()" style="background:var(--panel2);border:1px solid var(--line);">Refresh</button>
+  <span id="count">Loading...</span>
+</div>
+
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>Name</th>
+        <th>Email</th>
+        <th>Password</th>
+        <th>Phone</th>
+        <th>Coins</th>
+        <th>Role</th>
+        <th>Verified</th>
+        <th>PIN</th>
+        <th>Profile</th>
+        <th>Face Data</th>
+        <th>Joined</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody id="rows"><tr><td colspan="13" style="text-align:center;color:var(--muted);padding:24px;">Loading customers...</td></tr></tbody>
+  </table>
+</div>
+
+<div id="loginScreen">
+  <div class="login-card">
+    <h2>Admin login</h2>
+    <p>Log in with an admin account to view customer data.</p>
+    <label>Email</label>
+    <input type="email" id="loginEmail" placeholder="you@example.com">
+    <label>Password</label>
+    <input type="password" id="loginPassword" placeholder="••••••••">
+    <button id="loginBtn" onclick="doLogin()">Log in</button>
+    <p id="loginError"></p>
+  </div>
+</div>
+
+<div id="lightbox">
+  <button id="lbClose" onclick="closeLightbox()">&times;</button>
+  <div id="lbTitle"><h2></h2><p></p></div>
+  <div id="lbMain">
+    <div id="lbNav"><button onclick="step(-1)">&#10094;</button></div>
+    <div id="lbStage"><img id="lbImg" alt=""></div>
+    <div id="lbNav"><button onclick="step(1)">&#10095;</button></div>
+  </div>
+  <div id="lbThumbs"></div>
+  <div id="lbMeta"></div>
+</div>
+
+<script src="../frontend_config.js"></script>
+<script src="../website/pstore.js"></script>
+<script>
+let token = null;
+let allUsers = [];
+let lbItems = [];
+let lbIndex = 0;
+
+function fmtDate(v){ if(!v) return '-'; return new Date(v).toLocaleString(); }
+
+function faceInfo(u){
+  const desc = Array.isArray(u.face_descriptor) ? u.face_descriptor.length : 0;
+  const imgs = Array.isArray(u.face_images) ? u.face_images.length : 0;
+  if (desc === 0 && imgs === 0) return '<span class="no">None</span>';
+  return '<span class="yes">' + desc + ' dims / ' + imgs + ' photo(s)</span>';
+}
+
+function hashCell(u){
+  const h = u.password_hash;
+  if (!h) return '<span class="no">-</span>';
+  if (h.length <= 26) return h;
+  const short = h.slice(0, 10) + '…' + h.slice(-6);
+  const ck = 'ph' + (allUsers.indexOf(u));
+  return '<div style="display:flex;gap:5px;align-items:center;">' +
+    '<span class="mono" id="' + ck + '" title="' + h + '">' + short + '</span>' +
+    '<button class="ghost-btn" title="Copy hash" onclick="copyHash(' + allUsers.indexOf(u) + ')">copy</button></div>';
+}
+
+function copyHash(i){
+  const h = allUsers[i] && allUsers[i].password_hash;
+  if (h && navigator.clipboard) navigator.clipboard.writeText(h);
+  alert(h ? 'Hash copied to clipboard' : 'No hash');
+}
+
+function render(filter){
+  const q = (filter || '').toLowerCase();
+  const list = allUsers.filter(u =>
+    (u.name||'').toLowerCase().includes(q) ||
+    (u.email||'').toLowerCase().includes(q) ||
+    (u.phone||'').toLowerCase().includes(q)
+  );
+  document.getElementById('count').textContent = list.length + ' customer(s)';
+  if (!list.length){
+    document.getElementById('rows').innerHTML = '<tr><td colspan="13" style="text-align:center;color:var(--muted);padding:24px;">No customers found</td></tr>';
+    return;
+  }
+  document.getElementById('rows').innerHTML = list.map((u,i) => {
+    const pics = [];
+    if (u.profile_picture) pics.push({ src: u.profile_picture, label: 'Profile picture' });
+    for (const ir in (u.face_images || [])) pics.push({ src: u.face_images[ir], label: 'Face photo ' + (+ir+1) });
+    const disabled = pics.length ? '' : ' disabled';
+    return '<tr>' +
+      '<td class="mono">' + (i+1) + '</td>' +
+      '<td><strong>' + (u.name || '-') + '</strong>' + (u.username ? '<div class="mono">@' + u.username + '</div>' : '') + '</td>' +
+      '<td>' + (u.email || '-') + '</td>' +
+      '<td class="mono">' + hashCell(u) + '</td>' +
+      '<td>' + (u.phone || '-') + '</td>' +
+      '<td>' + (u.coins ?? 0) + '</td>' +
+      '<td><span class="badge ' + (u.role === 'admin' ? 'admin' : 'customer') + '">' + (u.role || 'customer') + '</span></td>' +
+      '<td>' + (u.email_verified ? '<span class="yes">Yes</span>' : '<span class="no">No</span>') + '</td>' +
+      '<td>' + (u.pin_code ? '<span class="yes">Set</span>' : '<span class="no">No</span>') + '</td>' +
+      '<td>' + (u.profile_picture ? '<img class="thumb" src="' + u.profile_picture + '">' : '<span class="no">no</span>') + '</td>' +
+      '<td>' + faceInfo(u) + '</td>' +
+      '<td class="mono">' + fmtDate(u.created_at) + '</td>' +
+      '<td><div class="cell-actions"><button class="faces-btn"' + disabled + ' onclick="openFaces(' + i + ')">View ' + pics.length + '</button>' +
+      '<button class="del-btn" onclick="delUser(' + i + ')">Delete</button></div></td>' +
+      '</tr>';
+  }).join('');
+}
+
+function openFaces(listIdx){
+  const u = allUsers[listIdx];
+  lbItems = [];
+  if (u.profile_picture) lbItems.push({ src: u.profile_picture, label: 'Profile picture' });
+  (u.face_images || []).forEach((src, ir) => lbItems.push({ src, label: 'Face photo ' + (ir+1) }));
+  lbIndex = 0;
+  document.querySelector('#lbTitle h2').textContent = (u.name || 'Unknown') + ' - ' + (u.email || '');
+  document.querySelector('#lbTitle p').textContent = (u.phone || 'no phone') + ' · registered ' + fmtDate(u.created_at);
+  document.getElementById('lightbox').classList.add('open');
+  showLb();
+}
+
+function showLb(){
+  const item = lbItems[lbIndex];
+  document.getElementById('lbImg').src = item.src;
+  document.getElementById('lbMeta').textContent = item.label + '  (' + (lbIndex+1) + ' / ' + lbItems.length + ')';
+  const thumbs = document.getElementById('lbThumbs');
+  thumbs.innerHTML = '';
+  lbItems.forEach((it, i) => {
+    const t = document.createElement('img');
+    t.src = it.src;
+    t.title = it.label;
+    if (i === lbIndex) t.classList.add('active');
+    t.onclick = () => { lbIndex = i; showLb(); };
+    thumbs.appendChild(t);
+  });
+}
+
+function step(d){
+  lbIndex = (lbIndex + d + lbItems.length) % lbItems.length;
+  showLb();
+}
+
+function closeLightbox(){ document.getElementById('lightbox').classList.remove('open'); }
+
+async function delUser(listIdx){
+  const u = allUsers[listIdx];
+  if (!u || !u.id) return;
+  if (!confirm('Delete account of "' + (u.name || u.email) + '" ?\n\nThis permanently removes their profile, face data, coins, sessions, payments and ALL print jobs and files. This cannot be undone.')) return;
+  const btn = document.querySelector('[onclick="delUser(' + listIdx + ')"]');
+  if (btn){ btn.textContent = 'Deleting...'; btn.disabled = true; }
+  try {
+    const res = await fetch(API('admin', 'delete-user'), {
+      method: 'POST',
+      headers: Object.assign({ 'Content-Type': 'application/json' }, authHeader()),
+      body: JSON.stringify({ user_id: u.id })
+    });
+    const data = await res.json();
+    if (res.status === 403 || res.status === 401){ showLogin(); return; }
+    if (!data.success){ alert(data.error || 'Failed to delete'); }
+    else {
+      allUsers.splice(listIdx, 1);
+      render(document.getElementById('search').value);
+      alert('Account deleted: ' + (u.name || u.email));
+    }
+  } catch(e){
+    alert('Connection error. Could not delete account.');
+  }
+  if (btn){ btn.textContent = 'Delete'; btn.disabled = false; }
+}
+
+document.addEventListener('keydown', (e) => {
+  if (!document.getElementById('lightbox').classList.contains('open')) return;
+  if (e.key === 'ArrowLeft') step(-1);
+  else if (e.key === 'ArrowRight') step(1);
+  else if (e.key === 'Escape') closeLightbox();
+});
+
+document.getElementById('search').addEventListener('input', (e) => render(e.target.value));
+document.getElementById('loginPassword').addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });
+
+function logout(){
+  if (token) fetch(API('auth', 'logout'), { method: 'POST', headers: { 'X-Session-Token': token } }).catch(() => {});
+  if (window.PKS) { PKS.clear(); } else { localStorage.clear(); }
+  showLogin();
+}
+
+function showLogin(){
+  document.getElementById('loginScreen').classList.remove('hidden');
+  document.getElementById('loginError').style.display = 'none';
+  document.getElementById('rows').innerHTML = '<tr><td colspan="12" style="text-align:center;color:var(--muted);padding:24px;">Please log in to continue</td></tr>';
+}
+
+function hideLogin(){ document.getElementById('loginScreen').classList.add('hidden'); }
+
+async function doLogin(){
+  const email = document.getElementById('loginEmail').value.trim();
+  const password = document.getElementById('loginPassword').value;
+  const errorEl = document.getElementById('loginError');
+  const btn = document.getElementById('loginBtn');
+  errorEl.style.display = 'none';
+  if (!email || !password){ errorEl.textContent = 'Enter email and password'; errorEl.style.display = 'block'; return; }
+  btn.disabled = true; btn.textContent = 'Logging in...';
+  try {
+    const res = await fetch(API('auth', 'login'), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password })
+    });
+    const data = await res.json();
+    if (!data.success || data.user.role !== 'admin'){
+      errorEl.textContent = (data.error || 'Not an admin account'); errorEl.style.display = 'block';
+      btn.disabled = false; btn.textContent = 'Log in'; return;
+    }
+    if (window.PKS) {
+      PKS.set('session_token', data.session_token);
+      PKS.set('user', JSON.stringify(data.user));
+    } else {
+      localStorage.setItem('session_token', data.session_token);
+      localStorage.setItem('user', JSON.stringify(data.user));
+    }
+    token = data.session_token;
+    hideLogin();
+    load();
+  } catch(e){
+    errorEl.textContent = 'Connection error. Please try again.'; errorEl.style.display = 'block';
+  }
+  btn.disabled = false; btn.textContent = 'Log in';
+}
+
+function authHeader(){ return { 'X-Session-Token': token }; }
+
+async function load(){
+  if (!token) { showLogin(); return; }
+  document.getElementById('rows').innerHTML = '<tr><td colspan="12" style="text-align:center;color:var(--muted);padding:24px;">Loading customers...</td></tr>';
+  document.getElementById('count').textContent = 'Loading...';
+  try {
+    const res = await fetch(API('admin', 'viewer-data'), { headers: authHeader() });
+    if (res.status === 403 || res.status === 401){ showLogin(); return; }
+    const data = await res.json();
+    if (!data.success){ throw new Error(data.error || 'Failed'); }
+    allUsers = data.users || [];
+    render(document.getElementById('search').value);
+  } catch(e){
+    document.getElementById('rows').innerHTML = '<tr><td colspan="12" style="text-align:center;color:var(--red);padding:24px;">Error: ' + (e.message || 'Could not load data') + '</td></tr>';
+    document.getElementById('count').textContent = 'Error';
+  }
+}
+
+(async function init(){
+  await PKS.init();
+  token = localStorage.getItem('session_token');
+  const userData = localStorage.getItem('user');
+  let u = null;
+  try { u = userData ? JSON.parse(userData) : null; } catch(e) { u = null; }
+  if (token && u && u.role === 'admin') { hideLogin(); load(); }
+  else showLogin();
+})();
+</script>
+</body>
+</html>

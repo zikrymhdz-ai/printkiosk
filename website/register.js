@@ -249,6 +249,11 @@ document.getElementById('registerForm').addEventListener('submit', async (e) => 
   if (password.length < 6) { showError(errorEl, 'Password must be at least 6 characters'); return; }
   if (password !== confirm) { showError(errorEl, 'Passwords do not match'); return; }
 
+  if (!document.getElementById('termsAccepted') || !document.getElementById('termsAccepted').checked) {
+    showError(errorEl, 'Please accept the Terms and Conditions to continue');
+    return;
+  }
+
   pendingName = name;
   pendingEmail = email;
   pendingPassword = password;

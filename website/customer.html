@@ -14,11 +14,13 @@
 <title>PrintKiosk - Customer Portal</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="../styles.css">
+<link href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.css" rel="stylesheet">
 <script src="../frontend_config.js"></script>
 <script src="pstore.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script>pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
 <script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/dist/face-api.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.js"></script>
 <style>
   /* ===== LIQUID BOTTOM NAVIGATION (mobile/app only) ===== */
   .liquid-nav { display: none; }
@@ -239,7 +241,18 @@
             <div id="livePreviewContainer" style="background:var(--gray-50); border:1px solid var(--gray-200); border-radius:var(--radius); overflow:visible; min-height:200px; display:flex; align-items:center; justify-content:center; position:relative; padding:8px;">
               <p class="text-sm text-muted" id="livePreviewPlaceholder">Select a file to preview</p>
               <div id="livePreviewContent" style="display:none; width:100%;"></div>
-              <div class="crop-overlay" id="cropOverlay"></div>
+            </div>
+            <div id="cropToolbar" style="display:none; margin-top:10px; flex-wrap:wrap; gap:6px; align-items:center; justify-content:center;">
+              <select id="cropRatioSel" class="input" style="width:auto; font-size:12px; padding:5px 8px;" onchange="setCropRatio()">
+                <option value="free" selected>Free</option>
+                <option value="a4">A4 (210:297)</option>
+                <option value="1:1">1:1</option>
+              </select>
+              <button class="btn btn-secondary" style="font-size:12px; padding:5px 10px;" onclick="cropZoom(-0.1)">-</button>
+              <button class="btn btn-secondary" style="font-size:12px; padding:5px 10px;" onclick="cropZoom(0.1)">+</button>
+              <button class="btn btn-secondary" style="font-size:12px; padding:5px 10px;" onclick="cropRotate()">Rotate</button>
+              <button class="btn btn-secondary" style="font-size:12px; padding:5px 10px;" onclick="resetManualCrop()">Reset</button>
+              <button class="btn btn-primary" style="font-size:12px; padding:5px 14px;" onclick="applyManualCrop()">Apply Crop</button>
             </div>
             <div id="livePreviewInfo" style="margin-top:12px; display:grid; grid-template-columns:1fr 1fr; gap:8px;">
               <div style="padding:8px 12px; background:var(--gray-50); border-radius:var(--radius); border:1px solid var(--gray-100);">
@@ -423,6 +436,7 @@
             <p class="text-sm text-muted" id="accountEmail">-</p>
           </div>
         </div>
+        <p class="text-sm text-muted" id="profilePicHint" style="display:none; margin:0 0 12px;">Saving picture…</p>
         <button class="btn btn-secondary btn-block" onclick="logout()" style="margin-top:4px;">Sign Out</button>
       </div>
 
@@ -533,7 +547,6 @@ let selectedFileIndex = 0;
 let pdfDoc = null;
 let pdfTotalPages = 1;
 let currentPreviewPage = 1;
-let cropData = { x: 0, y: 0, w: 1, h: 1 };
 
 async function init() {
   await PKS.init();
@@ -685,7 +698,8 @@ function selectFile(idx) {
 
 function saveCurrentSettings() {
   if (selectedFileIndex < 0 || selectedFileIndex >= bulkFiles.length) return;
-  bulkFiles[selectedFileIndex].settings = {
+  var item = bulkFiles[selectedFileIndex];
+  item.settings = {
     color: document.getElementById('colorMode').value,
     copies: parseInt(document.getElementById('copies').value) || 1,
     pages: parseInt(document.getElementById('pages').value) || 1,
@@ -693,6 +707,10 @@ function saveCurrentSettings() {
     contrast: parseInt(document.getElementById('contrast').value) || 0,
     crop_mode: document.getElementById('cropMode').value
   };
+  if (item.settings.crop_mode !== 'manual') {
+    item.croppedFile = undefined;
+    item._cropApplied = false;
+  }
 }
 
 function loadSettingsToUI() {
@@ -858,11 +876,6 @@ function updateSummary() {
 }
 
 /* ===== LIVE PREVIEW ===== */
-function buildCropOverlay() {
-  var overlay = document.getElementById('cropOverlay');
-  overlay.innerHTML = '<div class="crop-box" id="cropBox"><div class="crop-handle tl" data-handle="tl"></div><div class="crop-handle tr" data-handle="tr"></div><div class="crop-handle bl" data-handle="bl"></div><div class="crop-handle br" data-handle="br"></div><div class="crop-dimensions" id="cropDimensions">--</div></div>';
-}
-
 function initLivePreview() {
   var placeholder = document.getElementById('livePreviewPlaceholder');
   var content = document.getElementById('livePreviewContent');
@@ -874,10 +887,10 @@ function initLivePreview() {
   placeholder.style.display = 'none';
   content.style.display = 'block';
   content.innerHTML = '';
+  destroyManualCropper();
   pdfDoc = null;
   pdfTotalPages = 1;
   currentPreviewPage = 1;
-  cropData = { x: 0, y: 0, w: 1, h: 1 };
 
   var item = bulkFiles[selectedFileIndex];
   var f = item.file;
@@ -888,15 +901,14 @@ function initLivePreview() {
   if (isImage) {
     var reader = new FileReader();
     reader.onload = function(e) {
-      content.innerHTML = '<div class="preview-wrap"><img id="livePreviewImg" src="' + e.target.result + '" style="transition: filter 0.3s ease;"></div>';
-      buildCropOverlay();
-      updateLivePreview();
-      initCropEvents();
+      content.innerHTML = '<div class="preview-wrap"><img id="livePreviewImg" src="" style="transition: filter 0.3s ease;"></div>';
+      var img = document.getElementById('livePreviewImg');
+      img.onload = function() { updateLivePreview(); syncManualCropMode(); };
+      img.src = e.target.result;
     };
     reader.readAsDataURL(f);
   } else if (isPdf && typeof pdfjsLib !== 'undefined') {
     content.innerHTML = '<canvas id="livePreviewCanvas" style="display:block; max-width:100%; max-height:480px;"></canvas>';
-    buildCropOverlay();
     var reader = new FileReader();
     reader.onload = async function(e) {
       try {
@@ -965,148 +977,92 @@ function applyLivePreviewFilters() {
   document.getElementById('livePreviewContrast').textContent = contrast;
   var cropMode = document.getElementById('cropMode').value;
   document.getElementById('livePreviewCrop').textContent = cropMode === 'none' ? 'None' : cropMode === 'auto' ? 'Auto' : 'Manual';
-  toggleCropOverlay(cropMode === 'manual');
+  syncManualCropMode();
 }
 
 function updateLivePreview() {
   applyLivePreviewFilters();
 }
 
-/* ===== MANUAL CROP ===== */
-let cropDrag = null;
-let cropImgRect = null;
+/* ===== MANUAL CROP (CROPPER.JS) ===== */
+let cropperInstance = null;
 
-function toggleCropOverlay(show) {
-  const overlay = document.getElementById('cropOverlay');
-  if (!overlay) return;
-  if (show) {
-    overlay.classList.add('active');
-    positionCropBox();
-  } else {
-    overlay.classList.remove('active');
-    cropData = { x: 0, y: 0, w: 1, h: 1 };
-  }
-}
-
-function positionCropBox() {
-  const img = document.getElementById('livePreviewImg');
-  const overlay = document.getElementById('cropOverlay');
-  const box = document.getElementById('cropBox');
-  if (!img || !img.complete || !img.naturalWidth) { setTimeout(positionCropBox, 100); return; }
-
-  const container = document.getElementById('livePreviewContainer');
-  const cRect = container.getBoundingClientRect();
-  const iRect = img.getBoundingClientRect();
-  cropImgRect = {
-    left: iRect.left - cRect.left,
-    top: iRect.top - cRect.top,
-    width: iRect.width,
-    height: iRect.height
-  };
-
-  overlay.style.left = cropImgRect.left + 'px';
-  overlay.style.top = cropImgRect.top + 'px';
-  overlay.style.width = cropImgRect.width + 'px';
-  overlay.style.height = cropImgRect.height + 'px';
-
-  const a4 = 210 / 297;
-  let boxW = cropImgRect.width * 0.8;
-  let boxH = boxW / a4;
-  if (boxH > cropImgRect.height * 0.8) { boxH = cropImgRect.height * 0.8; boxW = boxH * a4; }
-  const boxX = (cropImgRect.width - boxW) / 2;
-  const boxY = (cropImgRect.height - boxH) / 2;
-
-  setCropBox(boxX, boxY, boxW, boxH);
-}
-
-function setCropBox(x, y, w, h) {
-  const box = document.getElementById('cropBox');
-  if (!box || !cropImgRect) return;
-  w = Math.max(30, Math.min(w, cropImgRect.width));
-  h = Math.max(20, Math.min(h, cropImgRect.height));
-  x = Math.max(0, Math.min(x, cropImgRect.width - w));
-  y = Math.max(0, Math.min(y, cropImgRect.height - h));
-
-  box.style.left = x + 'px';
-  box.style.top = y + 'px';
-  box.style.width = w + 'px';
-  box.style.height = h + 'px';
-
-  cropData = {
-    x: Math.round((x / cropImgRect.width) * 1000) / 1000,
-    y: Math.round((y / cropImgRect.height) * 1000) / 1000,
-    w: Math.round((w / cropImgRect.width) * 1000) / 1000,
-    h: Math.round((h / cropImgRect.height) * 1000) / 1000
-  };
-
-  const dim = document.getElementById('cropDimensions');
-  if (dim) dim.textContent = Math.round(cropData.w * 100) + '% x ' + Math.round(cropData.h * 100) + '%';
-}
-
-function initCropEvents() {
-  const overlay = document.getElementById('cropOverlay');
-  const box = document.getElementById('cropBox');
-  if (!overlay || !box) return;
-
-  box.addEventListener('mousedown', startCropDrag);
-  box.addEventListener('touchstart', startCropDrag, { passive: false });
-  overlay.addEventListener('mousedown', function(e) { if (e.target === overlay) startCropDrag(e); });
-  overlay.addEventListener('touchstart', function(e) { if (e.target === overlay) startCropDrag(e); }, { passive: false });
-  document.querySelectorAll('.crop-handle').forEach(h => {
-    h.addEventListener('mousedown', startCropResize);
-    h.addEventListener('touchstart', startCropResize, { passive: false });
+function initManualCropper() {
+  destroyManualCropper();
+  var img = document.getElementById('livePreviewImg');
+  if (!img || typeof Cropper === 'undefined') return false;
+  cropperInstance = new Cropper(img, {
+    viewMode: 1,
+    dragMode: 'move',
+    autoCropArea: 0.9,
+    background: false,
+    minContainerWidth: 200,
+    minContainerHeight: 120,
+    ready: function() { setCropRatio(); }
   });
-
-  document.addEventListener('mousemove', onCropMove);
-  document.addEventListener('touchmove', onCropMove, { passive: false });
-  document.addEventListener('mouseup', endCropDrag);
-  document.addEventListener('touchend', endCropDrag);
+  return true;
 }
 
-function startCropDrag(e) {
-  if (e.target.classList.contains('crop-handle')) return;
-  e.preventDefault();
-  const box = document.getElementById('cropBox');
-  const touch = e.touches ? e.touches[0] : e;
-  cropDrag = { type: 'move', startX: touch.clientX, startY: touch.clientY, boxX: box.offsetLeft, boxY: box.offsetTop };
+function destroyManualCropper() {
+  if (cropperInstance) { cropperInstance.destroy(); cropperInstance = null; }
 }
 
-function startCropResize(e) {
-  e.preventDefault();
-  e.stopPropagation();
-  const handle = e.target.dataset.handle;
-  const box = document.getElementById('cropBox');
-  const touch = e.touches ? e.touches[0] : e;
-  cropDrag = { type: 'resize', handle, startX: touch.clientX, startY: touch.clientY,
-    boxX: box.offsetLeft, boxY: box.offsetTop, boxW: box.offsetWidth, boxH: box.offsetHeight };
-}
-
-function onCropMove(e) {
-  if (!cropDrag) return;
-  e.preventDefault();
-  const touch = e.touches ? e.touches[0] : e;
-  const dx = touch.clientX - cropDrag.startX;
-  const dy = touch.clientY - cropDrag.startY;
-
-  if (cropDrag.type === 'move') {
-    setCropBox(cropDrag.boxX + dx, cropDrag.boxY + dy, document.getElementById('cropBox').offsetWidth, document.getElementById('cropBox').offsetHeight);
+function syncManualCropMode() {
+  var toolbar = document.getElementById('cropToolbar');
+  var isManual = document.getElementById('cropMode').value === 'manual';
+  var img = document.getElementById('livePreviewImg');
+  if (toolbar) toolbar.style.display = (isManual && img) ? 'flex' : 'none';
+  if (isManual && img) {
+    if (!cropperInstance) initManualCropper();
   } else {
-    const a4 = 210 / 297;
-    let nx = cropDrag.boxX, ny = cropDrag.boxY, nw = cropDrag.boxW, nh = cropDrag.boxH;
-    const h = cropDrag.handle;
-    if (h === 'br') { nw = cropDrag.boxW + dx; nh = nw / a4; }
-    else if (h === 'tl') { nw = cropDrag.boxW - dx; nh = nw / a4; nx = cropDrag.boxX + dx; ny = cropDrag.boxY + (cropDrag.boxH - nh); }
-    else if (h === 'tr') { nw = cropDrag.boxW + dx; nh = nw / a4; ny = cropDrag.boxY + (cropDrag.boxH - nh); }
-    else if (h === 'bl') { nw = cropDrag.boxW - dx; nh = nw / a4; nx = cropDrag.boxX + dx; }
-    setCropBox(nx, ny, nw, nh);
+    destroyManualCropper();
   }
 }
 
-function endCropDrag() { cropDrag = null; }
+function setCropRatio() {
+  if (!cropperInstance) return;
+  var v = document.getElementById('cropRatioSel').value;
+  var ratio = NaN;
+  if (v === 'a4') ratio = 210 / 297;
+  else if (v === '1:1') ratio = 1;
+  cropperInstance.setAspectRatio(ratio);
+}
 
-function resetCrop() {
-  cropData = { x: 0, y: 0, w: 1, h: 1 };
-  positionCropBox();
+function cropZoom(delta) {
+  if (cropperInstance) cropperInstance.zoom(delta);
+}
+
+function cropRotate() {
+  if (cropperInstance) cropperInstance.rotate(90);
+}
+
+function resetManualCrop() {
+  if (cropperInstance) cropperInstance.reset();
+}
+
+function applyManualCrop() {
+  if (!cropperInstance) return;
+  var item = bulkFiles[selectedFileIndex];
+  if (!item) return;
+  var ext = (item.file.name.split('.').pop() || '').toLowerCase();
+  var isPng = ext === 'png';
+  var type = isPng ? 'image/png' : 'image/jpeg';
+  var quality = isPng ? 1 : 0.92;
+  var canvas = cropperInstance.getCroppedCanvas({ imageSmoothingQuality: 'high', maxWidth: 4096, maxHeight: 4096 });
+  canvas.toBlob(function(blob) {
+    if (!blob) { alert('Failed to crop image'); return; }
+    item.croppedFile = new File([blob], item.file.name, { type: type });
+    toastMsg('Crop applied to ' + item.file.name);
+  }, type, quality);
+}
+
+function toastMsg(msg) {
+  var t = document.getElementById('toastMsg');
+  if (!t) { alert(msg); return; }
+  t.textContent = msg;
+  t.style.display = 'block';
+  t.style.opacity = '1';
+  setTimeout(function() { t.style.opacity = '0'; setTimeout(function() { t.style.display = 'none'; }, 300); }, 2200);
 }
 
 /* ===== COINS ===== */
@@ -1293,13 +1249,14 @@ async function placeOrder() {
       btn.textContent = 'Uploading file ' + (i + 1) + ' of ' + bulkFiles.length + '...';
       const item = bulkFiles[i];
       const s = item.settings;
+      var upFile = item.croppedFile || item.file;
       var d;
       if (IS_NETLIFY) {
-        d = await uploadJobNetlify(item.file, s, orderPin, token);
+        d = await uploadJobNetlify(upFile, s, orderPin, token);
       } else {
         const fd = new FormData();
-        var blob = await fileToBlob(item.file);
-        fd.append('file', blob, item.file.name || 'file');
+        var blob = await fileToBlob(upFile);
+        fd.append('file', blob, upFile.name || 'file');
         fd.append('print_pin', orderPin);
         fd.append('color_mode', s.color || 'bw');
         fd.append('paper_size', 'a4');
@@ -1390,7 +1347,6 @@ function resetUpload() {
   pdfDoc = null;
   pdfTotalPages = 1;
   currentPreviewPage = 1;
-  cropData = { x: 0, y: 0, w: 1, h: 1 };
   currentPrice = 0;
   redeemOriginalTotal = 0;
   document.getElementById('step3Pre').style.display = 'block';
@@ -1628,9 +1584,9 @@ function renderJobsList(jobs, list) {
         '</div>' +
         '<div style="display:flex; align-items:center; gap:8px;">' +
           '<span class="badge ' + statusClass + '">' + statusLabel + '</span>' +
-          (isCompleted ? '' : '<button onclick="deleteJob(\'' + j.job_id + '\')" style="background:none; border:none; cursor:pointer; padding:4px; color:var(--gray-400); transition:color 0.2s;" onmouseover="this.style.color=\'var(--danger)\'" onmouseout="this.style.color=\'var(--gray-400)\'">' +
+          '<button onclick="deleteJob(\'' + j.job_id + '\')" style="background:none; border:none; cursor:pointer; padding:4px; color:var(--gray-400); transition:color 0.2s;" onmouseover="this.style.color=\'var(--danger)\'" onmouseout="this.style.color=\'var(--gray-400)\'">' +
             '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>' +
-          '</button>') +
+          '</button>' +
         '</div>' +
       '</div>' +
       '<div style="display:flex; gap:16px; margin-top:10px; flex-wrap:wrap;">' +
@@ -1705,7 +1661,7 @@ function statusBadge(s) {
 /* ===== ACCOUNT SETTINGS ===== */
 function loadAccountSettings() {
   if (!user) return;
-  document.getElementById('accountDisplayName').textContent = user.name || '-';
+  document.getElementById('accountDisplayName').textContent = user.username || user.name || '-';
   document.getElementById('accountEmail').textContent = user.email || '-';
   document.getElementById('accountUsername').value = user.username || user.name || '';
   document.getElementById('accountGmail').textContent = user.email || '-';
@@ -1716,14 +1672,50 @@ function loadAccountSettings() {
 
 function previewProfilePic(e) {
   var file = e.target.files[0];
+  e.target.value = '';
   if (!file) return;
   var reader = new FileReader();
   reader.onload = function(ev) {
-    document.getElementById('profilePic').innerHTML = '<img src="' + ev.target.result + '" style="width:100%;height:100%;object-fit:cover;">';
-    user.profile_picture = ev.target.result;
-    PKS.set('user', JSON.stringify(user));
+    var img = new Image();
+    img.onload = function() {
+      var maxDim = 256;
+      var scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+      var w = Math.max(1, Math.round(img.width * scale));
+      var h = Math.max(1, Math.round(img.height * scale));
+      var canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      var ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, w, h);
+      var isPng = file.type === 'image/png' || /\.png$/i.test(file.name);
+      var dataUrl = isPng ? canvas.toDataURL('image/png') : canvas.toDataURL('image/jpeg', 0.85);
+      user.profile_picture = dataUrl;
+      document.getElementById('profilePic').innerHTML = '<img src="' + dataUrl + '" style="width:100%;height:100%;object-fit:cover;">';
+      PKS.set('user', JSON.stringify(user));
+      autosaveProfilePic(dataUrl);
+    };
+    img.onerror = function() { alert('Could not read that image.'); };
+    img.src = ev.target.result;
   };
   reader.readAsDataURL(file);
+}
+
+function autosaveProfilePic(dataUrl) {
+  var hint = document.getElementById('profilePicHint');
+  if (hint) { hint.textContent = 'Saving picture…'; hint.style.display = 'block'; }
+  fetch(API('auth', 'update-profile'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Session-Token': token },
+    body: JSON.stringify({ profile_picture: dataUrl })
+  }).then(r => r.json()).then(data => {
+    if (data.success) {
+      user.profile_picture = dataUrl;
+      PKS.set('user', JSON.stringify(user));
+      if (hint) { hint.textContent = 'Picture saved'; setTimeout(function() { hint.style.display = 'none'; }, 1500); }
+    } else if (hint) { hint.style.display = 'none'; }
+  }).catch(function() {
+    if (hint) hint.style.display = 'none';
+  });
 }
 
 function saveAccountInfo() {
@@ -1750,12 +1742,8 @@ function saveAccountInfo() {
       alert(data.error || 'Failed to save');
     }
   }).catch(function() {
-    Object.assign(user, payload);
-    PKS.set('user', JSON.stringify(user));
-    document.getElementById('navUser').textContent = payload.username || user.name;
-    document.getElementById('accountDisplayName').textContent = payload.username || user.name;
-    btn.textContent = 'Saved!';
-    setTimeout(function() { btn.textContent = 'Save Changes'; }, 1500);
+    btn.textContent = 'Save Changes';
+    alert('Connection error. Your changes were not saved.');
   }).finally(function() { btn.disabled = false; });
 }
 
@@ -2179,5 +2167,6 @@ init();
   }
 })();
 </script>
+<div id="toastMsg" style="display:none; position:fixed; bottom:120px; left:50%; transform:translateX(-50%); background:rgba(17,24,39,0.92); color:white; padding:10px 18px; border-radius:10px; font-size:13px; z-index:9999; transition:opacity 0.3s; max-width:90vw; text-align:center;"></div>
 </body>
 </html>

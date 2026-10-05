@@ -6,6 +6,10 @@ const SUPABASE_REST_URL = SUPABASE_URL + '/rest/v1';
 
 const SESSION_DURATION = 86400 * 7;
 
+// Shared secret between the PrintKiosk Payment Watcher APK and this backend,
+// used to sign server-side "payment detected" events (HMAC-SHA256).
+const NOTIFICATION_SECRET = process.env.NOTIFICATION_SECRET || 'pk_notif_v1_9f8b2c7e';
+
 const PRICE_BW_PER_PAGE = 0.20;
 const PRICE_COLOR_PER_PAGE = 1.10;
 const PRICE_A3_MULTIPLIER = 2.0;
@@ -135,81 +139,79 @@ function smtpSend(to, subject, htmlBody) {
       resolve(result);
     }
 
-    function onLine() {
+    function pump() {
       let idx;
       while ((idx = buffer.indexOf('\n')) !== -1) {
-        const line = buffer.slice(0, idx);
+        const line = buffer.slice(0, idx).replace(/\r$/, '');
         buffer = buffer.slice(idx + 1);
         if (line.trim() === '') continue;
-        const nextLine = queue.shift();
-        if (nextLine) nextLine(line);
+        const next = queue.shift();
+        if (next) next(line);
       }
     }
 
-    function onData(d) { buffer += d.toString(); onLine(); }
+    function onData(d) { buffer += d.toString(); pump(); }
 
-    const onSockError = () => done(false);
     sock.on('data', onData);
-    sock.on('error', onSockError);
+    sock.on('error', () => done(false));
 
-    function send(cmd) {
-      return new Promise((res, rej) => {
-        const timer = setTimeout(() => { rej(new Error('SMTP timeout')); done(false); }, 15000);
-        queue.push((line) => {
-          clearTimeout(timer);
-          res(line);
-        });
-        conn.write(cmd + '\r\n');
-      });
-    }
+    const TIMEOUT = 20000;
 
-    function readReply() {
-      return new Promise((res, rej) => {
-        const timer = setTimeout(() => { rej(new Error('SMTP reply timeout')); done(false); }, 15000);
+    // Write cmd and collect the full reply. Handles multi-line ("NNN-")
+    // replies like EHLO by only ending when a line matches "NNN ".
+    function exchange(cmd) {
+      return new Promise((res) => {
+        let reply = '';
+        const timer = setTimeout(() => { done(false); res(''); }, TIMEOUT);
         const collect = (line) => {
+          reply += line + '\n';
           if (/^[0-9]{3} /.test(line)) {
             clearTimeout(timer);
-            res(line);
+            res(reply.trim());
           } else {
             queue.unshift(collect);
           }
         };
         queue.unshift(collect);
+        if (cmd) conn.write(cmd + '\r\n');
       });
     }
 
     async function run() {
       try {
-        await readReply();
-        await send('EHLO localhost');
+        let r = await exchange('');
 
-        const starttls = await send('STARTTLS');
-        if (!/^220/.test(starttls)) return done(false);
+        r = await exchange('EHLO localhost');
+        if (!/^250/.test(r)) return done(false);
 
-        const secure = tls.connect({ socket: sock, servername: SMTP_HOST });
-        await new Promise((res, rej) => {
-          secure.once('secureConnect', res);
-          secure.once('error', rej);
+        r = await exchange('STARTTLS');
+        if (!/^220/.test(r)) return done(false);
+
+        const secure = await new Promise((res, rej) => {
+          const s = tls.connect({ socket: sock, servername: SMTP_HOST });
+          s.once('secureConnect', () => res(s));
+          s.once('error', rej);
         });
-        secure.on('error', onSockError);
+        secure.on('error', () => done(false));
 
         sock.removeListener('data', onData);
         conn = secure;
         secure.on('data', onData);
 
-        await send('EHLO localhost');
+        r = await exchange('EHLO localhost');
+        if (!/^250/.test(r)) return done(false);
 
-        const auth = await send('AUTH PLAIN ' + Buffer.from('\0' + SMTP_USER + '\0' + SMTP_PASS).toString('base64'));
-        if (!/^235/.test(auth)) return done(false);
+        r = await exchange('AUTH PLAIN ' + Buffer.from('\0' + SMTP_USER + '\0' + SMTP_PASS).toString('base64'));
+        if (!/^235\b/.test(r)) return done(false);
 
-        const mf = await send('MAIL FROM:<' + SMTP_USER + '>');
-        if (!/^250/.test(mf)) return done(false);
+        r = await exchange('MAIL FROM:<' + SMTP_USER + '>');
+        if (!/^250/.test(r)) return done(false);
 
-        const rcpt = await send('RCPT TO:<' + to + '>');
-        if (!/^250/.test(rcpt)) return done(false);
+        r = await exchange('RCPT TO:<' + to + '>');
+        if (!/^250/.test(r)) return done(false);
 
-        const data = await send('DATA');
-        if (!/^354/.test(data)) return done(false);
+        r = await exchange('DATA');
+        if (!/^354/.test(r)) return done(false);
 
         const cleanSubject = String(subject).replace(/[\r\n]+/g, ' ');
         const headers = 'From: ' + SMTP_FROM_NAME + ' <' + SMTP_USER + '>\r\n'
@@ -219,10 +221,11 @@ function smtpSend(to, subject, htmlBody) {
           + 'Content-Type: text/html; charset=UTF-8\r\n'
           + 'Date: ' + new Date().toUTCString() + '\r\n';
 
-        const bodyData = htmlBody.replace(/\r\n\./g, '\r\n..').replace(/\n/g, '\r\n');
-        await send(headers + '\r\n' + bodyData + '\r\n.');
+        const bodyData = String(htmlBody).replace(/\r\n\./g, '\r\n..').replace(/\n/g, '\r\n');
+        r = await exchange(headers + '\r\n' + bodyData + '\r\n.');
+        if (!/^250/.test(r)) return done(false);
 
-        await send('QUIT');
+        await exchange('QUIT');
         done(true);
       } catch (e) {
         done(false);
@@ -389,6 +392,7 @@ module.exports = {
   SUPABASE_URL, SUPABASE_KEY, SUPABASE_REST_URL,
   SESSION_DURATION, PRICE_BW_PER_PAGE, PRICE_COLOR_PER_PAGE,
   PRICE_A3_MULTIPLIER, PRICE_DOUBLE_SIDED_MULTIPLIER, ALLOWED_EXTENSIONS,
+  NOTIFICATION_SECRET,
   SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM_NAME,
   VERIFICATION_CODE_LENGTH, VERIFICATION_CODE_TTL,
   corsHeaders, json, err, supabaseRequest, generateJobId,

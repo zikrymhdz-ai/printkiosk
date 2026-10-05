@@ -1,4 +1,4 @@
-const { json, err, supabaseRequest, validateSession } = require('./_shared');
+const { json, err, supabaseRequest, validateSession, supabaseStorageDelete } = require('./_shared');
 
 exports.handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') return json({});
@@ -18,12 +18,14 @@ exports.handler = async (event) => {
       case 'alerts': return getAlerts(url);
       case 'coin-transactions': return getCoinTransactions(url);
       case 'all-users': return getAllUsers();
+      case 'viewer-data': return getViewerData();
       default: return err('Invalid action');
     }
   } else if (event.httpMethod === 'POST') {
     switch (action) {
       case 'mark-alert-read': return markAlertRead(event);
       case 'mark-all-alerts-read': return markAllAlertsRead();
+      case 'delete-user': return deleteUser(event);
       default: return err('Invalid action');
     }
   }
@@ -184,6 +186,59 @@ async function getAllUsers() {
   });
 
   return json({ success: true, users: result.error ? [] : result.data });
+}
+
+async function getViewerData() {
+  const result = await supabaseRequest('GET', '/users', null, {
+    'select': 'id,name,username,email,phone,role,coins,created_at,email_verified,pin_code,password_hash,face_descriptor,face_images,profile_picture',
+    'order': 'created_at.desc',
+    'role': 'eq.customer'
+  });
+
+  return json({ success: true, users: result.error ? [] : result.data });
+}
+
+async function deleteUser(event) {
+  const body = JSON.parse(event.body || '{}');
+  const userId = body.user_id || '';
+  if (!userId) return err('user_id required');
+
+  const userResult = await supabaseRequest('GET', '/users', null, {
+    'id': 'eq.' + userId,
+    'select': 'id,role'
+  });
+  const target = userResult.data && userResult.data[0];
+  if (!target) return err('User not found', 404);
+  if (target.role === 'admin') return err('Admin accounts cannot be deleted', 403);
+
+  const jobsResult = await supabaseRequest('GET', '/print_jobs', null, {
+    'user_id': 'eq.' + userId,
+    'select': 'file_path'
+  });
+  if (!jobsResult.error && jobsResult.data) {
+    for (const job of jobsResult.data) {
+      const filePath = job.file_path || '';
+      if (filePath.includes('/storage/v1/object/')) {
+        try {
+          const parts = filePath.split('/storage/v1/object/')[1].split('/');
+          let bucket, path;
+          if (parts[0] === 'public') { bucket = parts[1]; path = parts.slice(2).join('/'); }
+          else { bucket = parts[0]; path = parts.slice(1).join('/'); }
+          await supabaseStorageDelete(bucket, path);
+        } catch (e) {}
+      }
+    }
+  }
+
+  await supabaseRequest('DELETE', '/sessions', null, { 'user_id': 'eq.' + userId });
+  await supabaseRequest('DELETE', '/payments', null, { 'user_id': 'eq.' + userId });
+  await supabaseRequest('DELETE', '/coin_transactions', null, { 'user_id': 'eq.' + userId });
+  await supabaseRequest('DELETE', '/print_jobs', null, { 'user_id': 'eq.' + userId });
+
+  const result = await supabaseRequest('DELETE', '/users', null, { 'id': 'eq.' + userId });
+  if (result.error) return err('Failed to delete account', 500);
+
+  return json({ success: true, message: 'Account deleted successfully' });
 }
 
 async function markAlertRead(event) {

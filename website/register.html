@@ -12,96 +12,543 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/assets/icon-192.png">
 <link rel="icon" type="image/png" sizes="512x512" href="/assets/icon-512.png">
 <title>PrintKiosk - Register</title>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="../styles.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700;800;900&display=swap" rel="stylesheet">
 <script src="../frontend_config.js"></script>
 <script src="pstore.js"></script>
+<style>
+  :root{
+    --bg-top:#eaf1ff;
+    --bg-bottom:#f8faff;
+    --accent:#3b6ef6;
+    --accent-2:#22c7b8;
+    --accent-deep:#2a4fd6;
+    --ink:#1b2033;
+    --muted:#8892ac;
+    --field:#f2f4fa;
+    --field-border:#e6e9f5;
+  }
+  *{ box-sizing:border-box; }
+  html,body{
+    margin:0;
+    min-height:100%;
+    font-family:'DM Sans', -apple-system, system-ui, sans-serif;
+    background:linear-gradient(180deg,var(--bg-top),var(--bg-bottom));
+  }
+  body{ display:flex; min-height:100vh; }
+
+  .auth-card{
+    width:100%;
+    max-width:430px;
+    margin:auto;
+    padding:28px 6px;
+  }
+
+  /* ---- header: printer intro animation (loops every 3s) ---- */
+  .intro-rig{
+    position:relative;
+    width:100%;
+    height:150px;
+    margin-bottom:6px;
+    overflow:hidden;
+  }
+  .intro-printer{
+    position:absolute;
+    left:50%;
+    bottom:14px;
+    width:118px;
+    height:58px;
+    transform:translateX(-50%);
+    transform-origin:bottom center;
+    animation:introSquashLoop 3s ease-out infinite;
+  }
+  .intro-printer .body{
+    position:absolute;
+    inset:0;
+    background:var(--ink);
+    border-radius:12px 12px 6px 6px;
+  }
+  .intro-printer .body::before{
+    content:'';
+    position:absolute;
+    left:8px; right:8px; top:6px;
+    height:6px;
+    border-radius:4px;
+    background:#333a4d;
+  }
+  .intro-printer .slot{
+    position:absolute;
+    top:-5px; left:18px; right:18px;
+    height:9px;
+    background:#12141d;
+    border-radius:4px;
+  }
+  .intro-printer .light{
+    position:absolute;
+    right:12px; bottom:11px;
+    width:6px; height:6px;
+    border-radius:50%;
+    background:var(--accent-2);
+    box-shadow:0 0 6px 2px rgba(34,199,184,0.6);
+    animation:introBlink 1.1s ease-in-out infinite;
+  }
+  .intro-printer .base{
+    position:absolute;
+    left:-6px; right:-6px; bottom:-8px;
+    height:10px;
+    background:#12141d;
+    border-radius:6px;
+  }
+
+  .intro-paper{
+    position:absolute;
+    left:50%;
+    bottom:58px;
+    width:66px;
+    height:84px;
+    margin-left:-33px;
+    background:#ffffff;
+    border-radius:3px;
+    box-shadow:0 6px 14px rgba(20,30,60,0.18);
+    opacity:0;
+    padding:10px 9px;
+    animation:introPaperLoop 3s linear infinite;
+  }
+  .intro-paper .line{
+    height:4px;
+    border-radius:2px;
+    background:#cfd8e6;
+    margin-bottom:6px;
+  }
+  .intro-paper .line.w3{
+    background:var(--accent);
+    opacity:0.55;
+    width:55%;
+  }
+
+  @keyframes introSquashLoop{
+    0%{ transform:translateX(-50%) scaleY(1); }
+    3%{ transform:translateX(-50%) scaleY(0.9); }
+    7%{ transform:translateX(-50%) scaleY(1.04); }
+    12%,100%{ transform:translateX(-50%) scaleY(1); }
+  }
+  @keyframes introBlink{
+    0%,100%{ opacity:1; }
+    50%{ opacity:0.35; }
+  }
+  @keyframes introPaperLoop{
+    0%,6.4%{ opacity:0; bottom:44px; left:50%; margin-left:-33px; transform:rotate(0deg) scale(1); }
+    8%{ opacity:1; }
+    26.6%{ opacity:1; bottom:80px; left:50%; margin-left:-33px; transform:rotate(-3deg) scale(1); }
+    28.4%{ opacity:1; bottom:80px; left:50%; margin-left:-33px; transform:rotate(-3deg) scale(1); }
+    48.3%{ opacity:0; bottom:230px; left:66%; margin-left:-33px; transform:rotate(26deg) scale(0.45); }
+    100%{ opacity:0; bottom:230px; left:66%; margin-left:-33px; transform:rotate(26deg) scale(0.45); }
+  }
+
+  .auth-title{
+    font-size:26px;
+    font-weight:800;
+    margin:0 0 6px;
+    color:var(--ink);
+    text-align:center;
+  }
+  .auth-subtitle{
+    margin:0 0 24px;
+    font-size:13.5px;
+    color:var(--muted);
+    text-align:center;
+  }
+
+  /* ---- fields ---- */
+  .field{
+    position:relative;
+    margin-bottom:12px;
+  }
+  .field input{
+    width:100%;
+    padding:15px 16px;
+    border-radius:14px;
+    border:1px solid var(--field-border);
+    background:var(--field);
+    font-family:inherit;
+    font-size:14px;
+    color:var(--ink);
+    outline:none;
+    transition:border-color 0.15s ease, background 0.15s ease;
+  }
+  .field input[type=password]{ padding-right:46px; }
+  .field input::placeholder{ color:#a7afc7; }
+  .field input:focus{
+    border-color:var(--accent);
+    background:#fff;
+  }
+  .field .eye{
+    position:absolute;
+    right:14px; top:50%;
+    transform:translateY(-50%);
+    width:18px; height:18px;
+    stroke:var(--muted);
+    stroke-width:1.7;
+    fill:none;
+    cursor:pointer;
+  }
+
+  .submit-btn{
+    width:100%;
+    margin-top:22px;
+    padding:16px 0;
+    border:none;
+    border-radius:999px;
+    background:linear-gradient(135deg,var(--accent),var(--accent-deep));
+    color:#fff;
+    font-family:inherit;
+    font-size:14px;
+    font-weight:800;
+    letter-spacing:0.06em;
+    cursor:pointer;
+    box-shadow:0 14px 26px rgba(59,110,246,0.32);
+  }
+  .submit-btn:active{ transform:scale(0.98); }
+  .submit-btn:disabled{ opacity:0.6; cursor:default; }
+
+  .switch-line{
+    text-align:center;
+    margin-top:20px;
+    font-size:13px;
+    color:var(--muted);
+  }
+  .switch-line a{
+    color:var(--accent);
+    font-weight:800;
+    text-decoration:none;
+    cursor:pointer;
+  }
+
+  /* ---- face capture / verify blocks ---- */
+  .auth-block{
+    margin-top:18px;
+    padding:18px 16px;
+    background:var(--field);
+    border:1px solid var(--field-border);
+    border-radius:18px;
+  }
+  .auth-block h3{
+    margin:0 0 6px;
+    font-size:15px;
+    font-weight:700;
+    color:var(--ink);
+    text-align:center;
+  }
+  .auth-block h3 .opt{
+    color:var(--muted);
+    font-size:12px;
+    font-weight:600;
+  }
+  .auth-block .caption{
+    margin:0 0 14px;
+    font-size:13px;
+    color:var(--muted);
+    text-align:center;
+  }
+  .cam-frame{
+    position:relative;
+    border-radius:14px;
+    overflow:hidden;
+    background:#0f1220;
+  }
+  .chip-btn{
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    gap:6px;
+    padding:11px 18px;
+    border-radius:999px;
+    border:1px solid var(--field-border);
+    background:#fff;
+    color:var(--accent);
+    font-family:inherit;
+    font-size:13px;
+    font-weight:700;
+    cursor:pointer;
+  }
+  .chip-btn.primary{
+    background:linear-gradient(135deg,var(--accent),var(--accent-deep));
+    color:#fff;
+    border:none;
+  }
+  .chip-btn.primary:active{ transform:scale(0.97); }
+  .chip-btn.secondary:active{ transform:scale(0.97); }
+  .chip-btn:disabled{ opacity:0.6; cursor:default; }
+  .shot-row{
+    display:flex;
+    gap:8px;
+    margin-top:12px;
+    justify-content:center;
+  }
+  .shot{
+    width:64px; height:64px;
+    background:#fff;
+    border:2px dashed var(--field-border);
+    border-radius:14px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+  }
+  .status-text{
+    text-align:center;
+    font-size:13px;
+    margin-top:8px;
+    color:var(--muted);
+  }
+  .link-btn{
+    background:none;
+    border:none;
+    color:var(--muted);
+    font-size:13px;
+    font-family:inherit;
+    cursor:pointer;
+    text-decoration:underline;
+    display:block;
+    margin:14px auto 0;
+  }
+
+  .error-text{ font-size:13px; color:#dc2626; }
+
+  /* ---- terms & conditions ---- */
+  .terms-row{ margin-top:18px; }
+  .terms-check{
+    display:flex;
+    align-items:flex-start;
+    gap:9px;
+    padding:14px 16px;
+    background:var(--field);
+    border:1px solid var(--field-border);
+    border-radius:14px;
+    cursor:pointer;
+    user-select:none;
+  }
+  .terms-check input{
+    width:17px; height:17px;
+    margin:1px 0 0;
+    accent-color:var(--accent);
+    cursor:pointer;
+    flex-shrink:0;
+  }
+  .terms-check span{
+    font-size:12.5px;
+    color:var(--muted);
+    line-height:1.45;
+  }
+  .terms-check a{
+    color:var(--accent);
+    font-weight:700;
+    text-decoration:underline;
+    cursor:pointer;
+  }
+
+  .modal-overlay{
+    position:fixed;
+    inset:0;
+    background:rgba(20,30,60,0.45);
+    display:none;
+    align-items:center;
+    justify-content:center;
+    padding:20px;
+    z-index:9998;
+  }
+  .modal-overlay.open{ display:flex; }
+  .modal-card{
+    background:#fff;
+    width:100%;
+    max-width:520px;
+    max-height:82vh;
+    border-radius:20px;
+    display:flex;
+    flex-direction:column;
+    overflow:hidden;
+    box-shadow:0 24px 60px rgba(20,30,60,0.3);
+  }
+  .modal-head{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    padding:18px 20px 12px;
+  }
+  .modal-head h3{
+    margin:0;
+    font-size:17px;
+    font-weight:800;
+    color:var(--ink);
+  }
+  .modal-close{
+    background:none;
+    border:none;
+    font-size:26px;
+    line-height:1;
+    color:var(--muted);
+    cursor:pointer;
+    padding:0 4px;
+  }
+  .modal-body{
+    padding:0 20px 18px;
+    overflow-y:auto;
+    font-size:13px;
+    color:#3b4257;
+    line-height:1.6;
+  }
+  .modal-body h4{
+    margin:16px 0 4px;
+    font-size:13.5px;
+    font-weight:800;
+    color:var(--ink);
+  }
+  .modal-body p{ margin:0 0 8px; }
+  .modal-foot{ padding:0 20px 18px; }
+</style>
 </head>
 <body>
-<div class="auth-page">
-  <div class="auth-card animate-slide-up" style="max-width:480px;">
-    <div class="auth-header">
-      <div class="auth-logo">
-        <svg viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <defs><linearGradient id="rbg" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#4C7CFF"/><stop offset="100%" stop-color="#1C2740"/></linearGradient><linearGradient id="rfold" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#E4EBFA"/><stop offset="100%" stop-color="#C7D4EE"/></linearGradient></defs>
-          <rect width="512" height="512" rx="112" fill="url(#rbg)"/>
-          <g transform="rotate(-7 256 256)"><rect x="149" y="352" width="214" height="32" rx="16" fill="#22C7B8"/><path d="M179 136L305 136L351 182L351 358Q351 376 333 376L179 376Q161 376 161 358L161 154Q161 136 179 136Z" fill="#FFF"/><path d="M305 136L351 182L305 182Z" fill="url(#rfold)"/></g>
-        </svg>
-      </div>
-      <h1 class="auth-title">Create Account</h1>
-      <p class="auth-subtitle">Earn 10 bonus coins on sign up</p>
+
+<div class="auth-card">
+
+  <div class="intro-rig">
+    <div class="intro-paper">
+      <div class="line" style="width:100%"></div>
+      <div class="line" style="width:80%"></div>
+      <div class="line w3"></div>
+    </div>
+    <div class="intro-printer">
+      <div class="slot"></div>
+      <div class="body"><div class="light"></div></div>
+      <div class="base"></div>
+    </div>
+  </div>
+
+  <form id="registerForm">
+    <h1 class="auth-title">Create Account</h1>
+    <p class="auth-subtitle">Earn 10 bonus coins on sign up</p>
+
+    <div class="field">
+      <input type="text" id="name" placeholder="Full name" required>
+    </div>
+    <div class="field">
+      <input type="email" id="email" placeholder="Gmail address" required pattern="[a-zA-Z0-9._%+\-]+@gmail\.com" title="Only Gmail addresses are accepted" oninput="validateGmailInput()">
+    </div>
+    <div class="field">
+      <input type="tel" id="phone" placeholder="Phone number (e.g. 010-1234567)" required oninput="validatePhoneInput()">
+    </div>
+    <div class="field">
+      <input type="password" id="password" placeholder="Password (min 6 characters)" minlength="6" required>
+      <svg class="eye" data-target="password" viewBox="0 0 24 24"><path d="M1.5 12S5 5 12 5s10.5 7 10.5 7-3.5 7-10.5 7S1.5 12 1.5 12Z"/><circle cx="12" cy="12" r="3"/></svg>
+    </div>
+    <div class="field">
+      <input type="password" id="confirm" placeholder="Confirm password" required>
+      <svg class="eye" data-target="confirm" viewBox="0 0 24 24"><path d="M1.5 12S5 5 12 5s10.5 7 10.5 7-3.5 7-10.5 7S1.5 12 1.5 12Z"/><circle cx="12" cy="12" r="3"/></svg>
     </div>
 
-    <form id="registerForm">
-      <div class="form-group">
-        <label for="name">Full Name</label>
-        <input type="text" id="name" class="input" placeholder="John Doe" required>
+    <div id="faceStep" class="auth-block">
+      <h3>Face Capture <span class="opt">(Optional)</span></h3>
+      <p class="caption">Position your face in the frame. Auto-detection will capture when ready.</p>
+      <div class="cam-frame">
+        <video id="video" width="100%" height="280" autoplay muted playsinline style="display:block; transform:scaleX(-1);"></video>
+        <canvas id="overlay" style="position:absolute; top:0; left:0; width:100%; height:280px; pointer-events:none; transform:scaleX(-1);"></canvas>
+        <div id="faceGuide" style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); width:140px; height:170px; border:2px dashed rgba(255,255,255,0.5); border-radius:50%; pointer-events:none;"></div>
       </div>
-      <div class="form-group">
-        <label for="email">Gmail Address</label>
-        <input type="email" id="email" class="input" placeholder="name@gmail.com" required pattern="[a-zA-Z0-9._%+\-]+@gmail\.com" title="Only Gmail addresses are accepted" oninput="validateGmailInput()">
+      <div style="display:flex; gap:8px; margin-top:12px; justify-content:center;">
+        <button type="button" id="startCamBtn" class="chip-btn secondary">Start Camera</button>
       </div>
-      <div class="form-group">
-        <label for="phone">Phone Number</label>
-        <input type="tel" id="phone" class="input" placeholder="010-1234567 (Malaysia)" required oninput="validatePhoneInput()">
+      <div id="photoPreview" class="shot-row">
+        <div class="shot" id="preview1"></div>
+        <div class="shot" id="preview2"></div>
+        <div class="shot" id="preview3"></div>
       </div>
-      <div class="form-group">
-        <label for="password">Password</label>
-        <input type="password" id="password" class="input" placeholder="Min 6 characters" minlength="6" required>
-      </div>
-      <div class="form-group">
-        <label for="confirm">Confirm Password</label>
-        <input type="password" id="confirm" class="input" placeholder="Re-enter password" required>
-      </div>
-      <div id="faceStep" style="margin-top:20px; padding:20px; background:var(--primary-light); border-radius:var(--radius-lg); border:2px solid var(--primary);">
-        <h3 style="text-align:center; margin-bottom:8px; font-size:15px; font-weight:600;">Face Capture <span style="color:var(--gray-400); font-size:12px;">(Optional)</span></h3>
-        <p style="text-align:center; color:var(--gray-500); font-size:13px; margin-bottom:16px;">
-          Position your face in the frame. Auto-detection will capture when ready.
-        </p>
-        <div style="position:relative; border-radius:var(--radius); overflow:hidden; background:#000;">
-          <video id="video" width="100%" height="280" autoplay muted playsinline style="display:block; transform:scaleX(-1);"></video>
-          <canvas id="overlay" style="position:absolute; top:0; left:0; width:100%; height:280px; pointer-events:none; transform:scaleX(-1);"></canvas>
-          <div id="faceGuide" style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); width:140px; height:170px; border:2px dashed rgba(255,255,255,0.5); border-radius:50%; pointer-events:none;"></div>
-        </div>
-        <div style="display:flex; gap:8px; margin-top:12px; justify-content:center;">
-          <button type="button" id="startCamBtn" class="btn btn-secondary">Start Camera</button>
-        </div>
-        <div id="photoPreview" style="display:flex; gap:8px; margin-top:12px; justify-content:center;">
-          <div style="width:72px; height:72px; background:var(--gray-100); border-radius:var(--radius); display:flex; align-items:center; justify-content:center; border:2px dashed var(--gray-200);" id="preview1"></div>
-          <div style="width:72px; height:72px; background:var(--gray-100); border-radius:var(--radius); display:flex; align-items:center; justify-content:center; border:2px dashed var(--gray-200);" id="preview2"></div>
-          <div style="width:72px; height:72px; background:var(--gray-100); border-radius:var(--radius); display:flex; align-items:center; justify-content:center; border:2px dashed var(--gray-200);" id="preview3"></div>
-        </div>
-        <p id="faceStatus" style="text-align:center; font-size:13px; margin-top:8px; color:var(--gray-500);"></p>
-      </div>
+      <p id="faceStatus" class="status-text"></p>
+    </div>
 
-      <div id="verifyStep" style="display:none; margin-top:20px; padding:20px; background:var(--primary-light); border-radius:var(--radius-lg); border:2px solid var(--primary);">
-        <h3 style="text-align:center; margin-bottom:8px; font-size:15px; font-weight:600;">Verify Your Email</h3>
-        <p style="text-align:center; color:var(--gray-500); font-size:13px; margin-bottom:16px;">
-          We sent a 6-digit code to <strong id="verifyEmailDisplay"></strong>. Enter it below to complete registration.
-        </p>
-        <div style="text-align:center;">
-          <input type="text" id="verifyCode" class="input" placeholder="------" maxlength="6" inputmode="numeric" pattern="\d{6}" style="text-align:center; font-size:24px; letter-spacing:8px; width:180px;" oninput="this.value=this.value.replace(/\D/g,'')">
-        </div>
-        <div style="display:flex; gap:8px; margin-top:16px;">
-          <button type="button" class="btn btn-secondary" style="flex:1;" onclick="resendCode()" id="resendBtn">Resend Code</button>
-          <button type="button" class="btn btn-primary" style="flex:1;" onclick="verifyEmail()" id="verifyBtn">Verify & Complete</button>
-        </div>
-        <p id="verifyError" class="error-text" style="display:none; text-align:center; margin-top:12px;"></p>
+    <div id="verifyStep" class="auth-block" style="display:none;">
+      <h3>Verify Your Email</h3>
+      <p class="caption">We sent a 6-digit code to <strong id="verifyEmailDisplay"></strong>. Enter it below to complete registration.</p>
+      <div style="text-align:center;">
+        <input type="text" id="verifyCode" placeholder="------" maxlength="6" inputmode="numeric" pattern="\d{6}" style="text-align:center; font-size:24px; letter-spacing:8px; width:180px; padding:12px 10px; border-radius:14px; border:1px solid var(--field-border); background:#fff; font-family:inherit; outline:none;" oninput="this.value=this.value.replace(/\D/g,'')">
       </div>
+      <div style="display:flex; gap:8px; margin-top:16px;">
+        <button type="button" class="chip-btn secondary" style="flex:1;" onclick="resendCode()" id="resendBtn">Resend Code</button>
+        <button type="button" class="chip-btn primary" style="flex:1;" onclick="verifyEmail()" id="verifyBtn">Verify & Complete</button>
+      </div>
+      <p id="verifyError" class="error-text" style="display:none; text-align:center; margin-top:12px;"></p>
+    </div>
 
-      <button type="submit" class="btn btn-primary btn-block btn-lg" id="registerBtn" style="margin-top:20px;">Create Account</button>
-      <p style="text-align:center; margin-top:12px;">
-        <button type="button" id="skipFaceBtn" style="background:none; border:none; color:var(--gray-400); font-size:13px; cursor:pointer; text-decoration:underline;">Skip face capture</button>
-      </p>
-      <p id="registerError" class="error-text" style="display:none; text-align:center; margin-top:12px;"></p>
-    </form>
+    <div class="terms-row">
+      <label class="terms-check">
+        <input type="checkbox" id="termsAccepted">
+        <span>I agree to the <a href="javascript:void(0)" id="termsLink">Terms &amp; Conditions</a></span>
+      </label>
+    </div>
 
-    <div class="auth-footer">
-      Already have an account? <a href="login.html">Sign in</a>
+    <button type="submit" class="submit-btn" id="registerBtn">CREATE ACCOUNT</button>
+    <button type="button" id="skipFaceBtn" class="link-btn">Skip face capture</button>
+    <p id="registerError" class="error-text" style="display:none; text-align:center; margin-top:12px;"></p>
+  </form>
+
+  <p class="switch-line">Already have an account? <a href="login.html">Sign In</a></p>
+
+</div>
+
+<!-- TERMS & CONDITIONS MODAL -->
+<div class="modal-overlay" id="termsModal">
+  <div class="modal-card">
+    <div class="modal-head">
+      <h3>Terms &amp; Conditions</h3>
+      <button type="button" class="modal-close" id="termsClose" aria-label="Close">&times;</button>
+    </div>
+    <div class="modal-body">
+      <p>This explains what information PrintKiosk collects when you create an account, how it is used and protected, and your rights. Please read it carefully.</p>
+
+      <h4>1. What information we collect</h4>
+      <p>When you register we ask for your full name, Gmail address, Malaysian phone number, a password of your choice, and (optionally) face data and a 4-digit PIN for fast kiosk login. When you use the service we store your uploaded print files, print settings, coin transactions, profile picture, and username.</p>
+
+      <h4>2. Why we collect it</h4>
+      <p>Your Gmail and phone number are used to identify your account, verify your email address during registration, and contact you about your orders. Your password lets only you access your account. Face data and PIN are optional conveniences so you can pick up prints at the shop without typing. Your print files and settings exist for one reason: so the shop can print and deliver your documents. Coins and transactions let you earn and use rewards with your account.</p>
+
+      <h4>3. Where and how it is stored</h4>
+      <p>All data is stored securely in the cloud using Supabase (a hosted PostgreSQL database with private file storage) and served by our Netlify website. Passwords are hashed (scrambled) with bcrypt so they are never stored or read in plain text. Your print files are kept in private cloud storage, not on public servers. Your login session is stored only on your own device.</p>
+
+      <h4>4. Who can access it</h4>
+      <p>Only you and the shop owner / administrator who operates PrintKiosk can view your information, and only to complete your bookings, print your files, and provide support. Shop staff may see the files, PIN, and name needed to deliver your prints. No one else - members of the public, other customers, or advertisers - can see your data.</p>
+
+      <h4>5. How long we keep it</h4>
+      <p>Email verification codes expire after 10 minutes and password reset links after 30 minutes. Print files are kept until your job is printed and completed, then deleted from storage. Your account and profile data are kept while your account is active. You can close your account at any time by requesting deletion, which removes your personal data, print jobs, and transaction history.</p>
+
+      <h4>6. Sharing with third parties</h4>
+      <p>We never sell or share your information for marketing. We use trusted service providers purely to run the service: Supabase hosts our database and files, Netlify serves the website and backend, and Gmail sends verification and password-reset emails. These providers process data only on our behalf and cannot use it for their own purposes.</p>
+    </div>
+    <div class="modal-foot">
+      <button type="button" class="chip-btn primary" id="termsAgree" style="width:100%; padding:14px 0;">I Agree</button>
     </div>
   </div>
 </div>
 
+<script>
+document.querySelectorAll('.eye').forEach(function(icon) {
+  icon.addEventListener('click', function() {
+    const input = document.getElementById(icon.dataset.target);
+    if (input) input.type = input.type === 'password' ? 'text' : 'password';
+  });
+});
+
+const termsModal = document.getElementById('termsModal');
+function openTerms() { if (termsModal) termsModal.classList.add('open'); }
+function closeTerms() { if (termsModal) termsModal.classList.remove('open'); }
+document.getElementById('termsLink').addEventListener('click', openTerms);
+document.getElementById('termsClose').addEventListener('click', closeTerms);
+document.getElementById('termsAgree').addEventListener('click', function() {
+  const cb = document.getElementById('termsAccepted');
+  if (cb) cb.checked = true;
+  closeTerms();
+});
+termsModal.addEventListener('click', function(e) {
+  if (e.target === termsModal) closeTerms();
+});
+</script>
 <script defer src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/dist/face-api.min.js"></script>
 <script defer src="register.js"></script>
 </body>

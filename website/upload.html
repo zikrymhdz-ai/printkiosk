@@ -14,9 +14,11 @@
 <title>PrintKiosk - Quick Upload</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="../styles.css">
+<link href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.css" rel="stylesheet">
 <script src="../frontend_config.js"></script>
 <script src="pstore.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.js"></script>
 <script>pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
 <style>
   body { background: var(--gray-50); }
@@ -29,7 +31,15 @@
   .step-dot.done { background: var(--success); color: white; }
   .step-line { flex: 1; height: 2px; background: var(--gray-200); align-self: center; }
   .step-line.done { background: var(--success); }
+  .nav-back { background:none; border:none; cursor:pointer; display:flex; align-items:center; justify-content:center; width:36px; height:36px; margin-right:4px; color:var(--gray-700); border-radius:8px; flex-shrink:0; }
+  .nav-back:hover { background:var(--gray-100); }
   @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+  .file-tab { display:flex; align-items:center; gap:6px; padding:8px 12px; border:1px solid var(--gray-200); border-radius:var(--radius); cursor:pointer; white-space:nowrap; max-width:170px; background:var(--gray-50); }
+  .file-tab.active { border-color: var(--primary); background: var(--primary-light); color: var(--primary); box-shadow: 0 2px 8px rgba(37,99,235,0.15); }
+  .file-tab .ft-name { overflow:hidden; text-overflow:ellipsis; font-size:13px; font-weight:600; }
+  .file-tab .ft-settings { font-size:11px; color:var(--gray-500); overflow:hidden; text-overflow:ellipsis; }
+  .file-tab .ft-remove { color:var(--gray-400); padding:0 2px; font-size:15px; line-height:1; }
+  .file-tab .ft-remove:hover { color:#dc2626; }
 </style>
 </head>
 <body>
@@ -37,6 +47,9 @@
 <div class="nav">
   <div class="nav-inner">
     <div class="nav-left">
+      <button class="nav-back" onclick="window.location.href='login.html'" aria-label="Back">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+      </button>
       <span class="logo"><span class="logo-mark"><svg viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="ubg" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#4C7CFF"/><stop offset="100%" stop-color="#1C2740"/></linearGradient><linearGradient id="ufold" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#E4EBFA"/><stop offset="100%" stop-color="#C7D4EE"/></linearGradient></defs><rect width="512" height="512" rx="112" fill="url(#ubg)"/><g transform="rotate(-7 256 256)"><rect x="149" y="352" width="214" height="32" rx="16" fill="#22C7B8"/><path d="M179 136L305 136L351 182L351 358Q351 376 333 376L179 376Q161 376 161 358L161 154Q161 136 179 136Z" fill="#FFF"/><path d="M305 136L351 182L305 182Z" fill="url(#ufold)"/></g></svg></span>PrintKiosk</span>
       <span class="nav-title">Quick Upload</span>
     </div>
@@ -46,6 +59,7 @@
 <div class="container">
   <div style="text-align:center; padding:16px 0; margin-bottom:8px;">
     <p class="text-sm text-muted">Scan this from the kiosk to upload from your phone</p>
+    <span id="qModeBadge" class="badge" style="margin-top:6px; display:inline-block;"></span>
   </div>
 
   <div class="card" style="border-radius:var(--radius-xl);">
@@ -60,26 +74,31 @@
     <!-- Step 1: Upload -->
     <div class="step active" id="step1">
       <div style="text-align:center; margin-bottom:16px;">
-        <h3 style="font-size:18px; font-weight:600;">Upload Your File</h3>
-        <p class="text-sm text-muted" style="margin-top:4px;">Select a file from your device</p>
+        <h3 style="font-size:18px; font-weight:600;">Upload Your Files</h3>
+        <p class="text-sm text-muted" style="margin-top:4px;">Select one or more files - each file gets its own print settings</p>
       </div>
-      <div class="upload-zone" onclick="document.getElementById('phoneFile').click()" style="padding:32px 16px;">
+      <div class="upload-zone" id="uploadZoneDrop" style="padding:32px 16px;">
         <div class="upload-zone-icon" style="margin-bottom:12px;">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
         </div>
-        <div class="upload-zone-text">Tap to select file</div>
-        <div class="upload-zone-hint">PDF, DOC, DOCX, JPG, PNG -- 20MB max</div>
+        <div class="upload-zone-text">Tap to select files</div>
+        <div class="upload-zone-hint">PDF, DOC, DOCX, JPG, PNG -- 20MB max each, multiple allowed</div>
       </div>
-      <input type="file" id="phoneFile" accept=".pdf,.doc,.docx,.jpg,.jpeg,.png" style="display:none">
-      <div id="phoneFileInfo" style="display:none; margin-top:12px; padding:12px; background:var(--success-light); border-radius:var(--radius); font-size:14px; border:1px solid #bbf7d0;"></div>
+      <input type="file" id="phoneFile" accept=".pdf,.doc,.docx,.jpg,.jpeg,.png" multiple style="display:none">
+      <div id="phoneFileList" style="margin-top:12px; display:flex; flex-direction:column; gap:8px;"></div>
       <button class="btn btn-primary btn-block btn-lg" style="margin-top:16px;" onclick="goStep2()" id="step1Btn" disabled>Next -- Settings</button>
     </div>
 
     <!-- Step 2: Settings -->
     <div class="step" id="step2">
+      <div class="form-group" style="margin-bottom:12px;">
+        <label>Select file to adjust</label>
+        <div id="fileTabs" style="display:flex; gap:6px; overflow-x:auto; padding-bottom:4px;"></div>
+      </div>
+
       <div class="form-group" style="margin-bottom:20px;">
         <label>Color Mode</label>
-        <select id="pColorMode" class="input" onchange="updatePhoneSummary(); updatePhonePreview()">
+        <select id="pColorMode" class="input" onchange="onSettingChanged(); updatePhonePreview()">
           <option value="bw">Black & White (RM 0.20/page)</option>
           <option value="color">Color (RM 1.10/page)</option>
         </select>
@@ -87,11 +106,11 @@
       <div class="grid-2">
         <div class="form-group">
           <label>Copies</label>
-          <input type="number" id="pCopies" class="input" value="1" min="1" onchange="updatePhoneSummary()">
+          <input type="number" id="pCopies" class="input" value="1" min="1" onchange="onSettingChanged()">
         </div>
         <div class="form-group">
           <label>Pages</label>
-          <input type="number" id="pPages" class="input" value="1" min="1" onchange="updatePhoneSummary()">
+          <input type="number" id="pPages" class="input" value="1" min="1" onchange="onSettingChanged()">
         </div>
       </div>
 
@@ -99,15 +118,15 @@
         <p class="text-sm text-muted" style="margin:16px 0 12px; padding-top:12px; border-top:1px solid var(--gray-100);">Image adjustments (JPG/PNG)</p>
         <div class="form-group">
           <label>Brightness (<span id="pBrightnessVal">0</span>)</label>
-          <input type="range" id="pBrightness" min="-100" max="100" value="0" oninput="document.getElementById('pBrightnessVal').textContent=this.value; updatePhonePreview()" style="width:100%;">
+          <input type="range" id="pBrightness" min="-100" max="100" value="0" oninput="document.getElementById('pBrightnessVal').textContent=this.value; onSettingChanged(); updatePhonePreview()" style="width:100%;">
         </div>
         <div class="form-group">
           <label>Contrast (<span id="pContrastVal">0</span>)</label>
-          <input type="range" id="pContrast" min="-100" max="100" value="0" oninput="document.getElementById('pContrastVal').textContent=this.value; updatePhonePreview()" style="width:100%;">
+          <input type="range" id="pContrast" min="-100" max="100" value="0" oninput="document.getElementById('pContrastVal').textContent=this.value; onSettingChanged(); updatePhonePreview()" style="width:100%;">
         </div>
         <div class="form-group">
           <label>Crop Mode</label>
-          <select id="pCropMode" class="input" onchange="updatePhonePreview()">
+          <select id="pCropMode" class="input" onchange="onSettingChanged(); updatePhonePreview()">
             <option value="none">None</option>
             <option value="auto">Auto Crop</option>
             <option value="manual">Manual Crop</option>
@@ -116,10 +135,23 @@
       </div>
       <p id="pImageSettingsNote" class="hidden text-sm text-muted">Image settings only available for image files.</p>
 
+      <button class="btn btn-secondary btn-block" style="margin-top:14px; font-size:13px;" onclick="applyToAllFiles()">Apply These Settings to All Files</button>
+
       <div id="phoneLivePreview" style="background:var(--gray-50); border:1px solid var(--gray-200); border-radius:var(--radius); overflow:visible; margin-top:16px; text-align:center; min-height:160px; display:flex; align-items:center; justify-content:center; position:relative; padding:8px;">
         <p class="text-sm text-muted" id="phonePreviewPlaceholder">Preview will appear here</p>
         <div id="phonePreviewContent" style="display:none; width:100%;"></div>
-        <div class="crop-overlay" id="phoneCropOverlay"></div>
+      </div>
+      <div id="phoneCropToolbar" style="display:none; margin-top:10px; flex-wrap:wrap; gap:6px; align-items:center; justify-content:center;">
+        <select id="phoneCropRatioSel" class="input" style="width:auto; font-size:12px; padding:5px 8px;" onchange="setPhoneCropRatio()">
+          <option value="free" selected>Free</option>
+          <option value="a4">A4 (210:297)</option>
+          <option value="1:1">1:1</option>
+        </select>
+        <button class="btn btn-secondary" style="font-size:12px; padding:5px 10px;" onclick="phoneCropZoom(-0.1)">-</button>
+        <button class="btn btn-secondary" style="font-size:12px; padding:5px 10px;" onclick="phoneCropZoom(0.1)">+</button>
+        <button class="btn btn-secondary" style="font-size:12px; padding:5px 10px;" onclick="phoneCropRotate()">Rotate</button>
+        <button class="btn btn-secondary" style="font-size:12px; padding:5px 10px;" onclick="resetPhoneCrop()">Reset</button>
+        <button class="btn btn-primary" style="font-size:12px; padding:5px 14px;" onclick="applyPhoneCrop()">Apply Crop</button>
       </div>
       <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-top:8px;">
         <div style="padding:6px 8px; background:var(--gray-50); border-radius:var(--radius); border:1px solid var(--gray-100); text-align:center;">
@@ -141,7 +173,9 @@
       </div>
 
       <div class="order-summary" style="margin-top:16px;">
-        <div class="row"><span>File</span><span id="pSummaryFile">-</span></div>
+        <div class="row"><span>Files</span><span id="pSummaryFile">-</span></div>
+        <div class="row"><span>Pages</span><span id="pSummaryPages">-</span></div>
+        <div class="row"><span>Copies</span><span id="pSummaryCopies">-</span></div>
         <div class="row total"><span>Estimated Total</span><span id="pSummaryTotal">RM 0.00</span></div>
       </div>
 
@@ -163,7 +197,7 @@
         <div style="background:var(--gray-50); border-radius:var(--radius-lg); padding:16px; margin-bottom:12px; border:1px solid var(--gray-100); text-align:left;">
           <p class="text-xs text-muted" style="margin-bottom:8px; font-weight:500; text-transform:uppercase; letter-spacing:0.05em;">Order Details</p>
           <div style="display:flex; justify-content:space-between; padding:6px 0;"><span class="text-sm text-muted">Job ID</span><span class="text-sm" style="font-weight:600;" id="phoneJobId">-</span></div>
-          <div style="display:flex; justify-content:space-between; padding:6px 0;"><span class="text-sm text-muted">File</span><span class="text-sm" style="font-weight:600; text-align:right; max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" id="phoneReceiptFile">-</span></div>
+          <div style="display:flex; justify-content:space-between; padding:6px 0;"><span class="text-sm text-muted">Files</span><span class="text-sm" style="font-weight:600; text-align:right; max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" id="phoneReceiptFile">-</span></div>
           <div style="display:flex; justify-content:space-between; padding:6px 0;"><span class="text-sm text-muted">Pages</span><span class="text-sm" style="font-weight:600;" id="phoneReceiptPages">-</span></div>
           <div style="display:flex; justify-content:space-between; padding:6px 0;"><span class="text-sm text-muted">Color</span><span class="text-sm" style="font-weight:600;" id="phoneReceiptColor">-</span></div>
           <div style="display:flex; justify-content:space-between; padding:6px 0;"><span class="text-sm text-muted">Copies</span><span class="text-sm" style="font-weight:600;" id="phoneReceiptCopies">-</span></div>
@@ -192,66 +226,129 @@
         <div style="background:var(--gray-50); border-radius:var(--radius-lg); padding:16px; margin-bottom:16px; border:1px solid var(--gray-100); text-align:left;">
           <p class="text-xs text-muted" style="margin-bottom:8px; font-weight:500; text-transform:uppercase; letter-spacing:0.05em;">Receipt</p>
           <div style="display:flex; justify-content:space-between; padding:6px 0;"><span class="text-sm text-muted">Job ID</span><span class="text-sm" style="font-weight:600;" id="phoneReceiptJobId">-</span></div>
-          <div style="display:flex; justify-content:space-between; padding:6px 0;"><span class="text-sm text-muted">File</span><span class="text-sm" style="font-weight:600; text-align:right; max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" id="phoneReceiptFile2">-</span></div>
+          <div style="display:flex; justify-content:space-between; padding:6px 0;"><span class="text-sm text-muted">Files</span><span class="text-sm" style="font-weight:600; text-align:right; max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" id="phoneReceiptFile2">-</span></div>
           <div style="display:flex; justify-content:space-between; padding:6px 0;"><span class="text-sm text-muted">Total</span><span style="font-weight:700; color:var(--primary);" id="phoneReceiptTotal">RM 0.00</span></div>
         </div>
 
-        <button class="btn btn-primary btn-block" onclick="window.location.href='upload.html'">Upload Another</button>
+        <button class="btn btn-primary btn-block" onclick="resetUpload()">Upload Another</button>
       </div>
     </div>
   </div>
 </div>
 
 <script>
-let phoneFile = null;
-let phoneFileDataUrl = null;
+let bulkFiles = [];
+let selectedFileIndex = 0;
 let phonePrice = 0;
 let phonePdfDoc = null;
 let phonePdfPages = 1;
 let phoneCurrentPreviewPage = 1;
 let phoneCurrentJobId = null;
-let phoneUploadedJob = null;
+let phoneUploadedJobs = [];
 let qToken = '';
+let qGuest = false;
 
-PKS.init().then(function() { qToken = localStorage.getItem('session_token') || ''; });
+(function() {
+  var params = new URLSearchParams(window.location.search);
+  if (params.get('guest') === '1') {
+    qGuest = true;
+    try { localStorage.removeItem('session_token'); localStorage.removeItem('user'); } catch(e) {}
+  }
+})();
 
-document.getElementById('phoneFile').addEventListener('change', function() {
-  if (this.files.length) {
-    phoneFile = this.files[0];
-    phoneFileDataUrl = null;
-    phonePdfDoc = null;
-    phonePdfPages = 1;
-    const info = document.getElementById('phoneFileInfo');
-    info.style.display = 'block';
-    info.innerHTML = '<strong>' + phoneFile.name + '</strong> (' + (phoneFile.size/1024/1024).toFixed(2) + ' MB)';
-    document.getElementById('step1Btn').disabled = false;
-    document.getElementById('pSummaryFile').textContent = phoneFile.name;
-
-    const ext = phoneFile.name.split('.').pop().toLowerCase();
-    const isImg = ['jpg','jpeg','png'].includes(ext);
-    const isPdf = ext === 'pdf';
-    document.getElementById('pImageSettings').style.display = isImg ? 'block' : 'none';
-    document.getElementById('pImageSettingsNote').className = isImg ? 'hidden text-sm text-muted' : 'text-sm text-muted';
-
-    if (isImg) {
-      const reader = new FileReader();
-      reader.onload = function(e) { phoneFileDataUrl = e.target.result; };
-      reader.readAsDataURL(phoneFile);
-      document.getElementById('pPages').value = 1;
-    } else if (isPdf && typeof pdfjsLib !== 'undefined') {
-      const reader = new FileReader();
-      reader.onload = async function(e) {
-        try {
-          const pdf = await pdfjsLib.getDocument({ data: e.target.result }).promise;
-          phonePdfDoc = pdf;
-          phonePdfPages = pdf.numPages;
-          document.getElementById('pPages').value = pdf.numPages;
-        } catch(err) {}
-      };
-      reader.readAsArrayBuffer(phoneFile);
+PKS.init().then(function() {
+  qToken = localStorage.getItem('session_token') || '';
+  var params = new URLSearchParams(window.location.search);
+  if (params.get('session')) {
+    qToken = params.get('session');
+    PKS.set('session_token', qToken);
+  }
+  var badgeEl = document.getElementById('qModeBadge');
+  if (badgeEl) {
+    if (qGuest) {
+      badgeEl.textContent = 'Guest mode - no reward coins';
+      badgeEl.className = 'badge badge-gray';
+    } else if (qToken) {
+      badgeEl.textContent = 'Signed in - you will earn reward coins';
+      badgeEl.className = 'badge badge-success';
+    } else {
+      badgeEl.textContent = 'Not signed in - no reward coins';
+      badgeEl.className = 'badge badge-gray';
     }
   }
 });
+
+function getSelectedItem() {
+  return bulkFiles[selectedFileIndex] || null;
+}
+
+document.getElementById('phoneFile').addEventListener('change', function() {
+  addFiles(Array.prototype.slice.call(this.files || []));
+  this.value = '';
+});
+
+function addFiles(files) {
+  var added = 0;
+  var errs = '';
+  files.forEach(function(file) {
+    var ext = (file.name.split('.').pop() || '').toLowerCase();
+    if (!['pdf','doc','docx','jpg','jpeg','png'].includes(ext)) { errs += (errs ? '\n' : '') + file.name + ': unsupported type'; return; }
+    if (file.size > 20 * 1024 * 1024) { errs += (errs ? '\n' : '') + file.name + ': exceeds 20MB'; return; }
+    bulkFiles.push({ file: file, thumb: null, croppedFile: null, settings: { color: 'bw', copies: 1, pages: 1, brightness: 0, contrast: 0, crop_mode: 'none' } });
+    added++;
+  });
+  if (errs) alert('Some files were skipped:\n' + errs);
+  if (added) generateThumbnails();
+  renderFileList();
+}
+
+function generateThumbnails() {
+  bulkFiles.forEach(function(item, i) {
+    if (item.thumb) return;
+    var f = item.file;
+    var ext = (f.name.split('.').pop() || '').toLowerCase();
+    if (['jpg','jpeg','png'].includes(ext)) {
+      var reader = new FileReader();
+      reader.onload = function(e) { item.thumb = e.target.result; renderFileList(); };
+      reader.readAsDataURL(f);
+    }
+  });
+}
+
+function removeFile(idx) {
+  bulkFiles.splice(idx, 1);
+  if (selectedFileIndex >= bulkFiles.length) selectedFileIndex = Math.max(0, bulkFiles.length - 1);
+  renderFileList();
+}
+
+function renderFileList() {
+  var container = document.getElementById('phoneFileList');
+  var info = document.getElementById('phoneFileInfo');
+  if (!bulkFiles.length) { container.innerHTML = ''; document.getElementById('step1Btn').disabled = true; if (info) info.style.display = 'none'; return; }
+  container.innerHTML = bulkFiles.map(function(item, i) {
+    var f = item.file;
+    var ext = (f.name.split('.').pop() || '').toLowerCase();
+    var isImg = ['jpg','jpeg','png'].includes(ext);
+    return '<div style="display:flex; align-items:center; gap:10px; padding:10px 12px; background:var(--success-light); border-radius:var(--radius); border:1px solid #bbf7d0;">' +
+      '<span style="font-size:13px; font-weight:600; background:var(--success); color:white; border-radius:50%; width:20px; height:20px; display:inline-flex; align-items:center; justify-content:center; flex-shrink:0;">' + (i + 1) + '</span>' +
+      (item.thumb ? '<img src="' + item.thumb + '" style="width:32px; height:32px; object-fit:cover; border-radius:6px; flex-shrink:0;">' : '') +
+      '<div style="flex:1; min-width:0;">' +
+        '<p style="font-size:13px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">' + f.name + '</p>' +
+        '<p class="text-xs text-muted">' + (f.size / 1024 / 1024).toFixed(2) + ' MB</p>' +
+      '</div>' +
+      '<button onclick="removeFile(' + i + ')" aria-label="Remove" style="background:none; border:none; cursor:pointer; color:var(--gray-400); padding:4px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>' +
+    '</div>';
+  }).join('');
+  document.getElementById('step1Btn').disabled = false;
+  if (info) info.style.display = 'none';
+}
+
+document.getElementById('uploadZoneDrop').addEventListener('dragover', function(e) { e.preventDefault(); });
+document.getElementById('uploadZoneDrop').addEventListener('drop', function(e) {
+  e.preventDefault();
+  addFiles(Array.prototype.slice.call(e.dataTransfer.files || []));
+});
+document.getElementById('uploadZoneDrop').addEventListener('click', function() { document.getElementById('phoneFile').click(); });
 
 function goStep1() {
   document.querySelectorAll('.step').forEach(s => s.classList.remove('active'));
@@ -264,7 +361,7 @@ function goStep1() {
 }
 
 function goStep2() {
-  if (!phoneFile) { alert('Please select a file'); return; }
+  if (!bulkFiles.length) { alert('Please select a file'); return; }
   document.querySelectorAll('.step').forEach(s => s.classList.remove('active'));
   document.getElementById('step2').classList.add('active');
   document.getElementById('step1Dot').className = 'step-dot done';
@@ -272,8 +369,9 @@ function goStep2() {
   document.getElementById('step3Dot').className = 'step-dot';
   document.getElementById('line1').className = 'step-line done';
   document.getElementById('line2').className = 'step-line';
+  renderFileSelector();
+  selectFile(0);
   updatePhoneSummary();
-  initPhonePreview();
 }
 
 function goStep3() {
@@ -286,50 +384,149 @@ function goStep3() {
   document.getElementById('line2').className = 'step-line done';
 }
 
+/* ===== FILE SELECTOR (per-file settings) ===== */
+function renderFileSelector() {
+  var container = document.getElementById('fileTabs');
+  container.innerHTML = bulkFiles.map(function(item, i) {
+    var active = i === selectedFileIndex;
+    return '<div class="file-tab' + (active ? ' active' : '') + '" onclick="selectFile(' + i + ')">' +
+      '<span class="ft-name">' + (i + 1) + '. ' + item.file.name + '</span>' +
+      '<span class="ft-remove" onclick="event.stopPropagation(); removeFromStep2(' + i + ');">&times;</span>' +
+    '</div>';
+  }).join('');
+}
+
+function selectFile(i) {
+  if (i < 0 || i >= bulkFiles.length) return;
+  saveCurrentSettings();
+  selectedFileIndex = i;
+  renderFileSelector();
+  loadSettingsToUI();
+  initPhonePreview();
+  updatePhoneSummary();
+}
+
+function removeFromStep2(i) {
+  saveCurrentSettings();
+  removeFile(i);
+  renderFileSelector();
+  if (!bulkFiles.length) { goStep1(); return; }
+  loadSettingsToUI();
+  initPhonePreview();
+  updatePhoneSummary();
+}
+
+function saveCurrentSettings() {
+  var item = getSelectedItem();
+  if (!item) return;
+  item.settings.color = document.getElementById('pColorMode').value;
+  item.settings.copies = parseInt(document.getElementById('pCopies').value) || 1;
+  item.settings.pages = parseInt(document.getElementById('pPages').value) || 1;
+  item.settings.brightness = parseInt(document.getElementById('pBrightness').value) || 0;
+  item.settings.contrast = parseInt(document.getElementById('pContrast').value) || 0;
+  item.settings.crop_mode = document.getElementById('pCropMode').value;
+  if (item.settings.crop_mode === 'manual' && phoneCroppedFile) item.croppedFile = phoneCroppedFile;
+}
+
+function loadSettingsToUI() {
+  var item = getSelectedItem();
+  if (!item) return;
+  var s = item.settings;
+  document.getElementById('pColorMode').value = s.color;
+  document.getElementById('pCopies').value = s.copies || 1;
+  document.getElementById('pPages').value = s.pages || 1;
+  document.getElementById('pBrightness').value = s.brightness || 0;
+  document.getElementById('pBrightnessVal').textContent = s.brightness || 0;
+  document.getElementById('pContrast').value = s.contrast || 0;
+  document.getElementById('pContrastVal').textContent = s.contrast || 0;
+  document.getElementById('pCropMode').value = s.crop_mode || 'none';
+  phoneCroppedFile = item.croppedFile || null;
+  var f = item.file;
+  var ext = (f.name.split('.').pop() || '').toLowerCase();
+  var isImg = ['jpg','jpeg','png'].includes(ext);
+  document.getElementById('pImageSettings').style.display = isImg ? 'block' : 'none';
+  document.getElementById('pImageSettingsNote').className = isImg ? 'hidden text-sm text-muted' : 'text-sm text-muted';
+}
+
+function applyToAllFiles() {
+  if (!bulkFiles.length) return;
+  saveCurrentSettings();
+  var src = getSelectedItem();
+  if (!src) return;
+  bulkFiles.forEach(function(item) { item.settings = JSON.parse(JSON.stringify(src.settings)); item.croppedFile = null; });
+  toastMsg('Settings applied to all ' + bulkFiles.length + ' files');
+  renderFileSelector();
+  updatePhoneSummary();
+}
+
+function onSettingChanged() {
+  saveCurrentSettings();
+  renderFileSelector();
+  updatePhoneSummary();
+}
+
+/* ===== SUMMARY ===== */
 function updatePhoneSummary() {
-  const colorMode = document.getElementById('pColorMode').value;
-  const copies = parseInt(document.getElementById('pCopies').value) || 1;
-  const pages = parseInt(document.getElementById('pPages').value) || 1;
-  let pagePrice = colorMode === 'color' ? 1.10 : 0.20;
-  phonePrice = Math.round(pages * pagePrice * copies * 100) / 100;
+  var totalPages = 0;
+  var totalCopies = 0;
+  var totalPrice = 0;
+  var hasColor = false;
+  bulkFiles.forEach(function(item) {
+    var s = item.settings;
+    totalPages += s.pages;
+    totalCopies += s.copies;
+    if (s.color === 'color') hasColor = true;
+    var pagePrice = s.color === 'color' ? 1.10 : 0.20;
+    totalPrice += s.pages * s.copies * pagePrice;
+  });
+  phonePrice = Math.round(totalPrice * 100) / 100;
+  document.getElementById('pSummaryFile').textContent = bulkFiles.length + ' file' + (bulkFiles.length > 1 ? 's' : '');
+  document.getElementById('pSummaryPages').textContent = totalPages;
+  document.getElementById('pSummaryCopies').textContent = totalCopies;
   document.getElementById('pSummaryTotal').textContent = 'RM ' + phonePrice.toFixed(2);
 }
 
-function buildPhoneCropOverlay() {
-  var overlay = document.getElementById('phoneCropOverlay');
-  overlay.innerHTML = '<div class="crop-box" id="phoneCropBox"><div class="crop-handle tl" data-handle="tl"></div><div class="crop-handle tr" data-handle="tr"></div><div class="crop-handle bl" data-handle="bl"></div><div class="crop-handle br" data-handle="br"></div><div class="crop-dimensions" id="phoneCropDimensions">--</div></div>';
-}
-
+/* ===== LIVE PREVIEW ===== */
 function initPhonePreview() {
+  saveCurrentSettings();
   var placeholder = document.getElementById('phonePreviewPlaceholder');
   var content = document.getElementById('phonePreviewContent');
-  if (!phoneFile) { placeholder.style.display = 'block'; content.style.display = 'none'; return; }
+  var item = getSelectedItem();
+  if (!item) {
+    placeholder.style.display = 'block'; content.style.display = 'none'; return;
+  }
   placeholder.style.display = 'none';
   content.style.display = 'block';
   content.innerHTML = '';
-  phoneCropData = { x: 0, y: 0, w: 1, h: 1 };
+  destroyPhoneCropper();
+  phoneCroppedFile = item.croppedFile || null;
+  phonePdfDoc = null;
+  phonePdfPages = 1;
+  phoneCurrentPreviewPage = 1;
 
-  var ext = phoneFile.name.split('.').pop().toLowerCase();
+  var f = item.file;
+  var ext = (f.name.split('.').pop() || '').toLowerCase();
   var isImg = ['jpg','jpeg','png'].includes(ext);
   var isPdf = ext === 'pdf';
 
   if (isImg) {
     var reader = new FileReader();
     reader.onload = function(e) {
-      content.innerHTML = '<div class="preview-wrap"><img id="phonePreviewImg" src="' + e.target.result + '" style="transition: filter 0.3s ease; max-height:260px;"></div>';
-      buildPhoneCropOverlay();
-      updatePhonePreview();
-      initPhoneCropEvents();
+      content.innerHTML = '<div class="preview-wrap"><img id="phonePreviewImg" src="" style="transition: filter 0.3s ease; max-height:260px;"></div>';
+      var img = document.getElementById('phonePreviewImg');
+      img.onload = function() { updatePhonePreview(); phoneSyncManualCrop(); };
+      img.src = e.target.result;
     };
-    reader.readAsDataURL(phoneFile);
+    reader.readAsDataURL(f);
   } else if (isPdf && typeof pdfjsLib !== 'undefined') {
     content.innerHTML = '<canvas id="phonePreviewCanvas" style="display:block; max-width:100%; max-height:300px;"></canvas>';
-    buildPhoneCropOverlay();
     var reader = new FileReader();
     reader.onload = async function(e) {
       try {
         phonePdfDoc = await pdfjsLib.getDocument({ data: e.target.result }).promise;
         phonePdfPages = phonePdfDoc.numPages;
+        var pdfPagesVal = parseInt(document.getElementById('pPages').value) || 1;
+        if (pdfPagesVal <= 1 && phonePdfPages > 1) document.getElementById('pPages').value = phonePdfPages;
         phoneCurrentPreviewPage = 1;
         if (phonePdfPages > 1) {
           var nav = document.createElement('div');
@@ -340,11 +537,12 @@ function initPhonePreview() {
           document.getElementById('phoneLivePreview').appendChild(nav);
         }
         renderPhonePdfPage();
+        onSettingChanged();
       } catch(err) { content.innerHTML = '<p class="text-sm text-muted">Cannot preview PDF</p>'; }
     };
-    reader.readAsArrayBuffer(phoneFile);
+    reader.readAsArrayBuffer(f);
   } else {
-    content.innerHTML = '<div style="padding:20px;text-align:center;"><p style="font-weight:600;color:var(--gray-700);">' + phoneFile.name + '</p><p class="text-xs text-muted">' + (phoneFile.size/1024/1024).toFixed(2) + ' MB</p></div>';
+    content.innerHTML = '<div style="padding:20px;text-align:center;"><p style="font-weight:600;color:var(--gray-700);">' + f.name + '</p><p class="text-xs text-muted">' + (f.size/1024/1024).toFixed(2) + ' MB</p></div>';
   }
 }
 
@@ -390,112 +588,101 @@ function updatePhonePreview() {
   document.getElementById('phonePreviewBright').textContent = brightness;
   document.getElementById('phonePreviewContrast').textContent = contrast;
   document.getElementById('phonePreviewCrop').textContent = cropMode === 'none' ? 'None' : cropMode === 'auto' ? 'Auto' : 'Manual';
-  togglePhoneCropOverlay(cropMode === 'manual');
+  phoneSyncManualCrop();
 }
 
-/* ===== MANUAL CROP (PHONE) ===== */
-let phoneCropData = { x: 0, y: 0, w: 1, h: 1 };
-let phoneCropDrag = null;
-let phoneCropImgRect = null;
+/* ===== MANUAL CROP (PHONE - CROPPER.JS) ===== */
+let phoneCropper = null;
+let phoneCroppedFile = null;
 
-function togglePhoneCropOverlay(show) {
-  var overlay = document.getElementById('phoneCropOverlay');
-  if (!overlay) return;
-  if (show) { overlay.classList.add('active'); positionPhoneCropBox(); }
-  else { overlay.classList.remove('active'); phoneCropData = { x: 0, y: 0, w: 1, h: 1 }; }
-}
-
-function positionPhoneCropBox() {
+function phoneInitCropper() {
+  destroyPhoneCropper();
   var img = document.getElementById('phonePreviewImg');
-  var overlay = document.getElementById('phoneCropOverlay');
-  if (!img || !img.complete || !img.naturalWidth) { setTimeout(positionPhoneCropBox, 100); return; }
-  var container = document.getElementById('phoneLivePreview');
-  var cRect = container.getBoundingClientRect();
-  var iRect = img.getBoundingClientRect();
-  phoneCropImgRect = { left: iRect.left - cRect.left, top: iRect.top - cRect.top, width: iRect.width, height: iRect.height };
-  overlay.style.left = phoneCropImgRect.left + 'px';
-  overlay.style.top = phoneCropImgRect.top + 'px';
-  overlay.style.width = phoneCropImgRect.width + 'px';
-  overlay.style.height = phoneCropImgRect.height + 'px';
-  var a4 = 210 / 297;
-  var boxW = phoneCropImgRect.width * 0.8;
-  var boxH = boxW / a4;
-  if (boxH > phoneCropImgRect.height * 0.8) { boxH = phoneCropImgRect.height * 0.8; boxW = boxH * a4; }
-  setPhoneCropBox((phoneCropImgRect.width - boxW) / 2, (phoneCropImgRect.height - boxH) / 2, boxW, boxH);
-}
-
-function setPhoneCropBox(x, y, w, h) {
-  var box = document.getElementById('phoneCropBox');
-  if (!box || !phoneCropImgRect) return;
-  w = Math.max(20, Math.min(w, phoneCropImgRect.width));
-  h = Math.max(14, Math.min(h, phoneCropImgRect.height));
-  x = Math.max(0, Math.min(x, phoneCropImgRect.width - w));
-  y = Math.max(0, Math.min(y, phoneCropImgRect.height - h));
-  box.style.left = x + 'px'; box.style.top = y + 'px'; box.style.width = w + 'px'; box.style.height = h + 'px';
-  phoneCropData = { x: Math.round((x / phoneCropImgRect.width) * 1000) / 1000, y: Math.round((y / phoneCropImgRect.height) * 1000) / 1000, w: Math.round((w / phoneCropImgRect.width) * 1000) / 1000, h: Math.round((h / phoneCropImgRect.height) * 1000) / 1000 };
-  var dim = document.getElementById('phoneCropDimensions');
-  if (dim) dim.textContent = Math.round(phoneCropData.w * 100) + '% x ' + Math.round(phoneCropData.h * 100) + '%';
-}
-
-function initPhoneCropEvents() {
-  var overlay = document.getElementById('phoneCropOverlay');
-  var box = document.getElementById('phoneCropBox');
-  if (!overlay || !box) return;
-  box.addEventListener('mousedown', function(e) { if (!e.target.classList.contains('crop-handle')) { e.preventDefault(); var t = e.touches ? e.touches[0] : e; phoneCropDrag = { type: 'move', startX: t.clientX, startY: t.clientY, boxX: box.offsetLeft, boxY: box.offsetTop }; }});
-  box.addEventListener('touchstart', function(e) { if (!e.target.classList.contains('crop-handle')) { e.preventDefault(); var t = e.touches[0]; phoneCropDrag = { type: 'move', startX: t.clientX, startY: t.clientY, boxX: box.offsetLeft, boxY: box.offsetTop }; }}, { passive: false });
-  overlay.addEventListener('mousedown', function(e) { if (e.target === overlay) { e.preventDefault(); var t = e; phoneCropDrag = { type: 'move', startX: t.clientX, startY: t.clientY, boxX: box.offsetLeft, boxY: box.offsetTop }; }});
-  overlay.addEventListener('touchstart', function(e) { if (e.target === overlay) { e.preventDefault(); var t = e.touches[0]; phoneCropDrag = { type: 'move', startX: t.clientX, startY: t.clientY, boxX: box.offsetLeft, boxY: box.offsetTop }; }}, { passive: false });
-  document.querySelectorAll('#phoneCropOverlay .crop-handle').forEach(function(h) {
-    h.addEventListener('mousedown', function(e) { e.preventDefault(); e.stopPropagation(); var t = e; phoneCropDrag = { type: 'resize', handle: h.dataset.handle, startX: t.clientX, startY: t.clientY, boxX: box.offsetLeft, boxY: box.offsetTop, boxW: box.offsetWidth, boxH: box.offsetHeight }; });
-    h.addEventListener('touchstart', function(e) { e.preventDefault(); e.stopPropagation(); var t = e.touches[0]; phoneCropDrag = { type: 'resize', handle: h.dataset.handle, startX: t.clientX, startY: t.clientY, boxX: box.offsetLeft, boxY: box.offsetTop, boxW: box.offsetWidth, boxH: box.offsetHeight }; }, { passive: false });
+  if (!img || typeof Cropper === 'undefined') return false;
+  phoneCropper = new Cropper(img, {
+    viewMode: 1,
+    dragMode: 'move',
+    autoCropArea: 0.9,
+    background: false,
+    minContainerWidth: 200,
+    minContainerHeight: 120,
+    ready: function() { setPhoneCropRatio(); }
   });
-  document.addEventListener('mousemove', onPhoneCropMove);
-  document.addEventListener('touchmove', onPhoneCropMove, { passive: false });
-  document.addEventListener('mouseup', function() { phoneCropDrag = null; });
-  document.addEventListener('touchend', function() { phoneCropDrag = null; });
+  return true;
 }
 
-function onPhoneCropMove(e) {
-  if (!phoneCropDrag) return;
-  e.preventDefault();
-  var t = e.touches ? e.touches[0] : e;
-  var dx = t.clientX - phoneCropDrag.startX;
-  var dy = t.clientY - phoneCropDrag.startY;
-  if (phoneCropDrag.type === 'move') {
-    setPhoneCropBox(phoneCropDrag.boxX + dx, phoneCropDrag.boxY + dy, document.getElementById('phoneCropBox').offsetWidth, document.getElementById('phoneCropBox').offsetHeight);
+function destroyPhoneCropper() {
+  if (phoneCropper) { phoneCropper.destroy(); phoneCropper = null; }
+}
+
+function phoneSyncManualCrop() {
+  var toolbar = document.getElementById('phoneCropToolbar');
+  var isManual = document.getElementById('pCropMode').value === 'manual';
+  var img = document.getElementById('phonePreviewImg');
+  if (toolbar) toolbar.style.display = (isManual && img) ? 'flex' : 'none';
+  if (isManual && img) {
+    if (!phoneCropper) phoneInitCropper();
   } else {
-    var a4 = 210 / 297;
-    var nx = phoneCropDrag.boxX, ny = phoneCropDrag.boxY, nw = phoneCropDrag.boxW, nh = phoneCropDrag.boxH;
-    var h = phoneCropDrag.handle;
-    if (h === 'br') { nw = phoneCropDrag.boxW + dx; nh = nw / a4; }
-    else if (h === 'tl') { nw = phoneCropDrag.boxW - dx; nh = nw / a4; nx = phoneCropDrag.boxX + dx; ny = phoneCropDrag.boxY + (phoneCropDrag.boxH - nh); }
-    else if (h === 'tr') { nw = phoneCropDrag.boxW + dx; nh = nw / a4; ny = phoneCropDrag.boxY + (phoneCropDrag.boxH - nh); }
-    else if (h === 'bl') { nw = phoneCropDrag.boxW - dx; nh = nw / a4; nx = phoneCropDrag.boxX + dx; }
-    setPhoneCropBox(nx, ny, nw, nh);
+    destroyPhoneCropper();
   }
 }
 
+function setPhoneCropRatio() {
+  if (!phoneCropper) return;
+  var v = document.getElementById('phoneCropRatioSel').value;
+  var ratio = NaN;
+  if (v === 'a4') ratio = 210 / 297;
+  else if (v === '1:1') ratio = 1;
+  phoneCropper.setAspectRatio(ratio);
+}
+
+function phoneCropZoom(delta) {
+  if (phoneCropper) phoneCropper.zoom(delta);
+}
+
+function phoneCropRotate() {
+  if (phoneCropper) phoneCropper.rotate(90);
+}
+
+function resetPhoneCrop() {
+  if (phoneCropper) phoneCropper.reset();
+}
+
+function applyPhoneCrop() {
+  var item = getSelectedItem();
+  if (!phoneCropper || !item) return;
+  var ext = (item.file.name.split('.').pop() || '').toLowerCase();
+  var isPng = ext === 'png';
+  var type = isPng ? 'image/png' : 'image/jpeg';
+  var quality = isPng ? 1 : 0.92;
+  var canvas = phoneCropper.getCroppedCanvas({ imageSmoothingQuality: 'high', maxWidth: 4096, maxHeight: 4096 });
+  canvas.toBlob(function(blob) {
+    if (!blob) { alert('Failed to crop image'); return; }
+    phoneCroppedFile = new File([blob], item.file.name, { type: type });
+    item.croppedFile = phoneCroppedFile;
+    toastMsg('Crop applied');
+  }, type, quality);
+}
+
+function toastMsg(msg) {
+  var t = document.getElementById('toastMsg');
+  if (!t) { alert(msg); return; }
+  t.textContent = msg;
+  t.style.opacity = '1';
+  t.style.display = 'block';
+  setTimeout(function() { t.style.display = 'none'; }, 2200);
+}
+
+/* ===== UPLOAD (ALL FILES) ===== */
 async function submitPhoneUpload() {
-  if (!phoneFile) return;
+  if (!bulkFiles.length) return;
+  saveCurrentSettings();
+  destroyPhoneCropper();
   var btn = document.querySelector('#step2 .btn-primary');
   btn.disabled = true;
   btn.textContent = 'Uploading...';
 
-  var formData = new FormData();
-  var blob = await phoneFile.arrayBuffer().then(function(b) { return new Blob([b], { type: phoneFile.type || 'application/octet-stream' }); });
-  formData.append('file', blob, phoneFile.name || 'file');
-  formData.append('color_mode', document.getElementById('pColorMode').value);
-  formData.append('paper_size', 'a4');
-  formData.append('sides', 'single');
-  formData.append('copies', document.getElementById('pCopies').value);
-  formData.append('pages', document.getElementById('pPages').value);
-  formData.append('brightness', document.getElementById('pBrightness').value);
-  formData.append('contrast', document.getElementById('pContrast').value);
-  formData.append('crop_mode', document.getElementById('pCropMode').value);
-  formData.append('crop_x', phoneCropData.x);
-  formData.append('crop_y', phoneCropData.y);
-  formData.append('crop_w', phoneCropData.w);
-  formData.append('crop_h', phoneCropData.h);
+  var orderPin = String(Math.floor(100000 + Math.random() * 900000));
 
   function parseRes(res) {
     return res.text().then(function(raw) {
@@ -510,147 +697,183 @@ async function submitPhoneUpload() {
   }
 
   try {
-    var fileName = phoneFile.name || 'file';
-    var data;
-    if (IS_NETLIFY) {
-      // Signed upload: bytes go directly to Supabase Storage (Netlify's 6MB cap never applies)
-      var signRes = await fetch(API('upload', 'sign-upload'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Session-Token': qToken },
-        body: JSON.stringify({ file_name: fileName, file_size: phoneFile.size || 1 })
-      });
-      var signD = await parseRes(signRes);
-      if (!signRes.ok && !signD.success) { uploadFail(signD.error || 'Upload failed'); return; }
+    phoneUploadedJobs = [];
+    for (let i = 0; i < bulkFiles.length; i++) {
+      btn.textContent = 'Uploading file ' + (i + 1) + ' of ' + bulkFiles.length + '...';
+      var item = bulkFiles[i];
+      var s = item.settings;
+      var upFile = (s.crop_mode === 'manual' && item.croppedFile) ? item.croppedFile : item.file;
+      var fileName = upFile.name || 'file';
+      var data;
+      if (IS_NETLIFY) {
+        // Signed upload: bytes go directly to Supabase Storage (Netlify's 6MB cap never applies)
+        var signRes = await fetch(API('upload', 'sign-upload'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Session-Token': qToken },
+          body: JSON.stringify({ file_name: fileName, file_size: upFile.size || 1 })
+        });
+        var signD = await parseRes(signRes);
+        if (!signRes.ok && !signD.success) { uploadFail(signD.error || 'Upload failed'); return; }
 
-      var upRes = await fetch(signD.upload_url, {
-        method: 'PUT',
-        headers: { 'Content-Type': signD.content_type || phoneFile.type || 'application/octet-stream', 'x-upsert': 'true' },
-        body: phoneFile
-      });
-      if (!upRes.ok) {
-        var upMsg = 'Storage upload failed (HTTP ' + upRes.status + ')';
-        try { var upJ = JSON.parse(await upRes.text()); upMsg = upJ.message || upJ.error || upMsg; } catch (e) {}
-        uploadFail(upMsg);
-        return;
-      }
+        var upRes = await fetch(signD.upload_url, {
+          method: 'PUT',
+          headers: { 'Content-Type': signD.content_type || upFile.type || 'application/octet-stream', 'x-upsert': 'true' },
+          body: upFile
+        });
+        if (!upRes.ok) {
+          var upMsg = 'Storage upload failed (HTTP ' + upRes.status + ')';
+          try { var upJ = JSON.parse(await upRes.text()); upMsg = upJ.message || upJ.error || upMsg; } catch (e) {}
+          uploadFail(upMsg);
+          return;
+        }
 
-      var jobRes = await fetch(API('upload'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Session-Token': qToken },
-        body: JSON.stringify({
-          job_id: signD.job_id,
-          file_url: signD.public_url,
-          file_name: fileName,
-          print_pin: '',
-          color_mode: document.getElementById('pColorMode').value,
-          paper_size: 'a4',
-          sides: 'single',
-          copies: document.getElementById('pCopies').value,
-          pages: document.getElementById('pPages').value,
-          brightness: document.getElementById('pBrightness').value,
-          contrast: document.getElementById('pContrast').value,
-          crop_mode: document.getElementById('pCropMode').value,
-          finish: 'none'
-        })
-      });
-      data = await parseRes(jobRes);
-      if (!jobRes.ok && !data.success) { uploadFail(data.error || 'Upload failed'); return; }
-    } else {
-      var res = await fetch(API('upload'), {
-        method: 'POST',
-        headers: { 'X-Session-Token': qToken },
-        body: formData
-      });
-      data = await parseRes(res);
-    }
-    if (data.success) {
-      phoneUploadedJob = data.job;
-      phoneCurrentJobId = data.job.job_id;
-      document.getElementById('phoneJobId').textContent = data.job.job_id;
-      document.getElementById('phoneAmount').textContent = 'RM ' + parseFloat(data.job.total_price).toFixed(2);
-      document.getElementById('phoneReceiptFile').textContent = phoneFile ? phoneFile.name : '-';
-      document.getElementById('phoneReceiptPages').textContent = document.getElementById('pPages').value + ' pages';
-      document.getElementById('phoneReceiptColor').textContent = document.getElementById('pColorMode').value === 'color' ? 'Color' : 'B&W';
-      document.getElementById('phoneReceiptCopies').textContent = 'x' + document.getElementById('pCopies').value;
-      if (phoneFileDataUrl) {
-        var pv = document.getElementById('phonePreview');
-        pv.style.display = 'block';
-        pv.innerHTML = '<img src="' + phoneFileDataUrl + '" style="max-width:100%;max-height:160px;object-fit:contain;display:block;margin:0 auto;">';
+        var jobRes = await fetch(API('upload'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Session-Token': qToken },
+          body: JSON.stringify({
+            job_id: signD.job_id,
+            file_url: signD.public_url,
+            file_name: fileName,
+            print_pin: orderPin,
+            color_mode: s.color || 'bw',
+            paper_size: 'a4',
+            sides: 'single',
+            copies: s.copies || 1,
+            pages: s.pages || 1,
+            brightness: s.brightness || 0,
+            contrast: s.contrast || 0,
+            crop_mode: s.crop_mode || 'none',
+            finish: 'none'
+          })
+        });
+        data = await parseRes(jobRes);
+        if (!jobRes.ok && !data.success) { uploadFail(data.error || 'Upload failed'); return; }
+      } else {
+        var formData = new FormData();
+        var blob = await upFile.arrayBuffer().then(function(b) { return new Blob([b], { type: upFile.type || 'application/octet-stream' }); });
+        formData.append('file', blob, fileName);
+        formData.append('print_pin', orderPin);
+        formData.append('color_mode', s.color || 'bw');
+        formData.append('paper_size', 'a4');
+        formData.append('sides', 'single');
+        formData.append('copies', s.copies || 1);
+        formData.append('pages', s.pages || 1);
+        formData.append('brightness', s.brightness || 0);
+        formData.append('contrast', s.contrast || 0);
+        formData.append('crop_mode', s.crop_mode || 'none');
+        formData.append('finish', 'none');
+        var res = await fetch(API('upload'), {
+          method: 'POST',
+          headers: { 'X-Session-Token': qToken },
+          body: formData
+        });
+        data = await parseRes(res);
       }
-      document.getElementById('phonePaySection').style.display = 'block';
-      document.getElementById('phoneReceiptSection').style.display = 'none';
-      document.getElementById('phoneConfirmPayBtn').disabled = false;
-      document.getElementById('phoneConfirmPayBtn').textContent = 'Confirm Payment';
-      goStep3();
-    } else {
-      alert(data.error || 'Upload failed');
-      btn.disabled = false;
-      btn.textContent = 'Upload & Pay';
+      if (data.success && data.job) {
+        phoneUploadedJobs.push(data.job);
+      } else {
+        throw new Error(data.error || 'Upload failed');
+      }
     }
   } catch(e) {
-    alert('Upload failed');
-    btn.disabled = false;
-    btn.textContent = 'Upload & Pay';
+    uploadFail(e.message || 'Upload failed');
+    return;
   }
+
+  if (!phoneUploadedJobs.length) { alert('No files uploaded successfully'); btn.disabled = false; btn.textContent = 'Upload & Pay'; return; }
+
+  var totalPages = 0;
+  var totalCopies = 0;
+  var totalPrice = 0;
+  var hasColor = false;
+  phoneUploadedJobs.forEach(function(j) { totalPages += j.pages; totalCopies += j.copies || 1; totalPrice += parseFloat(j.total_price) || 0; if ((j.color_mode || 'bw') === 'color') hasColor = true; });
+  var allJobIds = phoneUploadedJobs.map(function(j) { return j.job_id; });
+  phoneCurrentJobId = allJobIds.join(',');
+  var pinEl = document.getElementById('phonePrintPin');
+  var firstPin = phoneUploadedJobs[0].print_pin || orderPin;
+  if (firstPin) pinEl.textContent = firstPin;
+
+  document.getElementById('phoneJobId').textContent = phoneCurrentJobId;
+  document.getElementById('phoneAmount').textContent = 'RM ' + totalPrice.toFixed(2);
+  document.getElementById('phoneReceiptFile').textContent = bulkFiles.length === 1 ? bulkFiles[0].file.name : bulkFiles.length + ' files';
+  document.getElementById('phoneReceiptPages').textContent = totalPages + ' pages';
+  document.getElementById('phoneReceiptColor').textContent = hasColor ? 'Mixed' : 'B&W';
+  document.getElementById('phoneReceiptCopies').textContent = 'x' + totalCopies;
+  var firstItem = getSelectedItem() || bulkFiles[0];
+  if (firstItem && firstItem.thumb) {
+    var pv = document.getElementById('phonePreview');
+    pv.style.display = 'block';
+    pv.innerHTML = '<img src="' + firstItem.thumb + '" style="max-width:100%;max-height:160px;object-fit:contain;display:block;margin:0 auto;">';
+  }
+  document.getElementById('phonePaySection').style.display = 'block';
+  document.getElementById('phoneReceiptSection').style.display = 'none';
+  document.getElementById('phoneConfirmPayBtn').disabled = false;
+  document.getElementById('phoneConfirmPayBtn').textContent = 'Confirm Payment';
+  goStep3();
 }
 
+/* ===== PAYMENT (ALL JOBS) ===== */
 async function confirmPhonePayment() {
   if (!phoneCurrentJobId) return;
   var btn = document.getElementById('phoneConfirmPayBtn');
   btn.disabled = true;
   btn.textContent = 'Processing...';
 
-  var paid = false;
-  try {
-    var r = await fetch(API('payment', 'confirm'), {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ job_id: phoneCurrentJobId })
-    });
-    var d = await r.json();
-    paid = !!(d && d.success);
-  } catch(e) {}
-
-  if (!paid) {
+  var ids = String(phoneCurrentJobId).split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+  var paidAll = true;
+  for (let i = 0; i < ids.length; i++) {
+    var paid = false;
     try {
-      var r2 = await fetch(API('payment', 'simulate'), {
+      var r = await fetch(API('payment', 'confirm'), {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ job_id: phoneCurrentJobId })
+        body: JSON.stringify({ job_id: ids[i] })
       });
-      var d2 = await r2.json();
-      paid = !!(d2 && d2.success);
+      var d = await r.json();
+      paid = !!(d && d.success);
     } catch(e) {}
+    if (!paid) {
+      try {
+        var r2 = await fetch(API('payment', 'simulate'), {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ job_id: ids[i] })
+        });
+        var d2 = await r2.json();
+        paid = !!(d2 && d2.success);
+      } catch(e) {}
+    }
+    if (!paid) paidAll = false;
   }
 
   var uploadedJobs = JSON.parse(localStorage.getItem('uploadedJobs') || '[]');
   var job = uploadedJobs.find(j => j.job_id === phoneCurrentJobId);
+  var totalPrice = phoneUploadedJobs.reduce(function(sum, j) { return sum + (parseFloat(j.total_price) || 0); }, 0);
   if (job) {
-    job.paid = true;
-    job.status = 'ready_to_print';
-    if (phoneUploadedJob && phoneUploadedJob.print_pin) job.print_pin = phoneUploadedJob.print_pin;
+    job.paid = paidAll;
+    job.status = paidAll ? 'ready_to_print' : 'pending';
     localStorage.setItem('uploadedJobs', JSON.stringify(uploadedJobs));
-  } else if (phoneUploadedJob) {
+  } else {
+    var user = null;
+    try { user = JSON.parse(localStorage.getItem('user') || 'null'); } catch(e) {}
     uploadedJobs.push({
       job_id: phoneCurrentJobId,
-      print_pin: phoneUploadedJob.print_pin,
-      file_name: phoneUploadedJob.file_name || (phoneFile ? phoneFile.name : 'Upload'),
-      pages: phoneUploadedJob.pages,
-      copies: phoneUploadedJob.copies || 1,
-      total_price: phoneUploadedJob.total_price,
-      paid: true,
-      status: 'ready_to_print',
-      user_id: qToken ? (JSON.parse(localStorage.getItem('user') || 'null') || {}).id : null,
+      print_pin: phoneUploadedJobs[0] ? (phoneUploadedJobs[0].print_pin || '') : '',
+      file_name: bulkFiles.length === 1 ? bulkFiles[0].file.name : bulkFiles.length + ' files',
+      file_type: 'bulk',
+      file_count: bulkFiles.length,
+      pages: phoneUploadedJobs.reduce(function(sum, j) { return sum + j.pages; }, 0),
+      copies: phoneUploadedJobs.reduce(function(sum, j) { return sum + (j.copies || 1); }, 0),
+      total_price: totalPrice,
+      paid: paidAll,
+      status: paidAll ? 'ready_to_print' : 'pending',
+      user_id: qToken && user ? user.id : null,
       created_at: new Date().toISOString()
     });
     localStorage.setItem('uploadedJobs', JSON.stringify(uploadedJobs));
   }
 
-  var pinEl = document.getElementById('phonePrintPin');
-  var serverPin = phoneUploadedJob ? phoneUploadedJob.print_pin : '';
-  if (serverPin) pinEl.textContent = serverPin;
-  else pinEl.textContent = '------';
   document.getElementById('phoneReceiptJobId').textContent = phoneCurrentJobId;
-  document.getElementById('phoneReceiptFile2').textContent = phoneFile ? phoneFile.name : '-';
-  document.getElementById('phoneReceiptTotal').textContent = 'RM ' + (phoneUploadedJob ? parseFloat(phoneUploadedJob.total_price).toFixed(2) : phonePrice.toFixed(2));
+  document.getElementById('phoneReceiptFile2').textContent = bulkFiles.length === 1 ? bulkFiles[0].file.name : bulkFiles.length + ' files';
+  document.getElementById('phoneReceiptTotal').textContent = 'RM ' + totalPrice.toFixed(2);
 
   document.getElementById('phonePaySection').style.display = 'none';
   document.getElementById('phoneReceiptSection').style.display = 'block';
@@ -664,14 +887,19 @@ function cancelPhonePayment() {
   document.getElementById('line2').className = 'step-line';
 }
 
-document.querySelector('.upload-zone').addEventListener('dragover', function(e) { e.preventDefault(); });
-document.querySelector('.upload-zone').addEventListener('drop', function(e) {
-  e.preventDefault();
-  if (e.dataTransfer.files.length) {
-    document.getElementById('phoneFile').files = e.dataTransfer.files;
-    document.getElementById('phoneFile').dispatchEvent(new Event('change'));
-  }
-});
+function resetUpload() {
+  bulkFiles = [];
+  selectedFileIndex = 0;
+  phoneCurrentJobId = null;
+  phoneUploadedJobs = [];
+  phoneCroppedFile = null;
+  destroyPhoneCropper();
+  document.getElementById('phonePaySection').style.display = 'block';
+  document.getElementById('phoneReceiptSection').style.display = 'none';
+  renderFileList();
+  goStep1();
+}
 </script>
+<div id="toastMsg" style="display:none; position:fixed; bottom:60px; left:50%; transform:translateX(-50%); background:rgba(17,24,39,0.92); color:white; padding:10px 18px; border-radius:10px; font-size:13px; z-index:9999; max-width:90vw; text-align:center;"></div>
 </body>
 </html>

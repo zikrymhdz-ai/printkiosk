@@ -19,7 +19,22 @@
 <script>pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
 <style>
   body { background: #0f172a; color: white; margin:0; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
-  .kiosk { max-width: 640px; margin: 0 auto; padding: 16px; min-height: 100vh; display: flex; flex-direction: column; }
+  .kiosk-layout { max-width: 1100px; margin: 0 auto; display: flex; gap: 16px; padding: 16px; min-height: 100vh; align-items: stretch; }
+  .kiosk { flex: 1; min-width: 0; max-width: 640px; margin: 0 auto; padding: 0; display: flex; flex-direction: column; }
+  .printer-panel { width: 260px; flex-shrink: 0; background: #1e293b; border: 1px solid #334155; border-radius: 20px; padding: 18px; height: fit-content; }
+  .pp-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+  .pp-title { font-size: 15px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+  .pp-status-line { font-size: 12px; color: #94a3b8; margin-bottom: 14px; }
+  .pp-section { margin-top: 12px; }
+  .pp-section-title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: #64748b; margin-bottom: 8px; }
+  .pp-row { margin-bottom: 8px; }
+  .pp-row-top { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 3px; }
+  .pp-row-label { color: #cbd5e1; font-weight: 500; }
+  .pp-row-value { color: #94a3b8; font-weight: 600; }
+  .pp-bar { height: 8px; background: #0f172a; border-radius: 6px; overflow: hidden; }
+  .pp-bar-fill { height: 100%; border-radius: 6px; transition: width 0.6s ease, background-color 0.4s; min-width: 2px; }
+  .pp-foot { margin-top: 16px; font-size: 11px; color: #475569; border-top: 1px solid #1e293b; padding-top: 10px; display: flex; justify-content: space-between; }
+  @media (max-width: 900px) { .kiosk-layout { flex-direction: column; } .printer-panel { width: auto; } }
   .cam-box { width: 100%; aspect-ratio: 4/3; border-radius: 20px; overflow: hidden; background: #000; position: relative; border: 2px solid #3b82f6; transition: border-color 0.3s; }
   .cam-box video { width: 100%; height: 100%; object-fit: cover; display: block; transform: scaleX(-1); }
   .cam-box canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; transform: scaleX(-1); }
@@ -62,6 +77,7 @@
 </head>
 <body>
 
+<div class="kiosk-layout">
 <div id="kioskApp" class="kiosk">
   <div class="cam-box pulse-ring" id="camBox">
     <video id="kioskCam" autoplay muted playsinline></video>
@@ -83,7 +99,56 @@
   </div>
   <p id="pinFeedback" style="font-size:13px; color:#ef4444; margin-top:4px; display:none;"></p>
 
+  <button class="btn-kiosk btn-secondary-kiosk" style="width:100%; margin-top:14px;" id="guestBtn" onclick="startGuest()">
+    <span style="opacity:0.9;">I don't have an account — </span><strong>Scan as Guest</strong>
+  </button>
+
   <div class="bottom-links">Face recognition for kiosk auto-login</div>
+</div>
+
+<div class="printer-panel" id="printerPanel">
+  <div class="pp-header">
+    <span class="pp-title">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+      Printer Status
+    </span>
+    <span class="dot dot-yellow" id="ppDot"></span>
+  </div>
+  <div class="pp-status-line" id="ppStatusLine">Checking printer...</div>
+
+  <div class="pp-section">
+    <div class="pp-section-title">Paper</div>
+    <div class="pp-row">
+      <div class="pp-row-top"><span class="pp-row-label">Paper tray</span><span class="pp-row-value" id="ppPaperVal">--</span></div>
+      <div class="pp-bar"><div class="pp-bar-fill" id="ppPaperBar" style="width:0%; background:#64748b;"></div></div>
+    </div>
+  </div>
+
+  <div class="pp-section">
+    <div class="pp-section-title">Toner / Ink</div>
+    <div class="pp-row">
+      <div class="pp-row-top"><span class="pp-row-label">Black</span><span class="pp-row-value" id="ppTonerBlackVal">--</span></div>
+      <div class="pp-bar"><div class="pp-bar-fill" id="ppTonerBlackBar" style="width:0%; background:#64748b;"></div></div>
+    </div>
+    <div class="pp-row">
+      <div class="pp-row-top"><span class="pp-row-label">Cyan</span><span class="pp-row-value" id="ppTonerCyanVal">--</span></div>
+      <div class="pp-bar"><div class="pp-bar-fill" id="ppTonerCyanBar" style="width:0%; background:#64748b;"></div></div>
+    </div>
+    <div class="pp-row">
+      <div class="pp-row-top"><span class="pp-row-label">Magenta</span><span class="pp-row-value" id="ppTonerMagentaVal">--</span></div>
+      <div class="pp-bar"><div class="pp-bar-fill" id="ppTonerMagentaBar" style="width:0%; background:#64748b;"></div></div>
+    </div>
+    <div class="pp-row">
+      <div class="pp-row-top"><span class="pp-row-label">Yellow</span><span class="pp-row-value" id="ppTonerYellowVal">--</span></div>
+      <div class="pp-bar"><div class="pp-bar-fill" id="ppTonerYellowBar" style="width:0%; background:#64748b;"></div></div>
+    </div>
+  </div>
+
+  <div class="pp-foot">
+    <span>Last checked</span>
+    <span id="ppLastChecked">--</span>
+  </div>
+</div>
 </div>
 
 <div id="confirmOverlay" class="confirm-overlay hidden">
@@ -109,7 +174,26 @@
       <p style="font-size:14px; font-weight:600;">No pending jobs</p>
       <p style="font-size:13px; margin-top:4px;">Upload files from your phone first</p>
     </div>
-    <button class="btn-kiosk btn-secondary-kiosk" style="width:100%; margin-top:16px;" onclick="location.reload()">Back</button>
+    <div style="display:flex; gap:8px; margin-top:16px;">
+      <button class="btn-kiosk btn-primary-kiosk" style="flex:1;" onclick="showUploadQRFromJobs()">Scan QR to upload</button>
+      <button class="btn-kiosk btn-secondary-kiosk" style="flex:1;" onclick="location.reload()">Back</button>
+    </div>
+  </div>
+</div>
+
+<div id="qrOverlay" class="confirm-overlay hidden">
+  <div class="confirm-card">
+    <p style="color:#9ca3af; margin-bottom:4px; font-size:14px;" id="qrGreeting">Welcome,</p>
+    <p id="qrName" style="font-size:20px; font-weight:700; margin:4px 0;"></p>
+    <p style="color:#6b7280; font-size:13px; margin-bottom:12px;">Scan this QR with your phone camera to upload your files</p>
+    <div id="qrCanvasWrap" style="background:#fff; border-radius:16px; padding:14px; display:inline-block;">
+      <canvas id="qrCanvas" width="220" height="220"></canvas>
+    </div>
+    <p id="qrHint" style="font-size:12px; color:#eab308; margin-top:10px;"></p>
+    <div style="display:flex; gap:8px; margin-top:16px;">
+      <button class="btn-kiosk btn-secondary-kiosk" style="flex:1;" id="qrJobsBtn" onclick="qrMyJobs()">My Jobs</button>
+      <button class="btn-kiosk btn-primary-kiosk" style="flex:1;" onclick="location.reload()">Done</button>
+    </div>
   </div>
 </div>
 
@@ -159,6 +243,7 @@
   </div>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/dist/face-api.min.js"></script>
 <script>
 const SUPABASE_URL = CONFIG.SUPABASE_URL;
@@ -226,7 +311,80 @@ window.addEventListener('load', async () => {
     this.value = this.value.replace(/\D/g, '').slice(0, 6);
     if (this.value.length === 6) lookupPin();
   });
+
+  loadPrinterStatus();
+  setInterval(loadPrinterStatus, 30000);
 });
+
+function loadPrinterStatus() {
+  var fetchUrl;
+  try { fetchUrl = API('printer', 'status'); } catch(e) { return; }
+  fetch(fetchUrl)
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      var p = d && d.printer;
+      if (!p) { setPrinterStatusFallback(); return; }
+      var paper = clampLevel(p.paper_level);
+      var black = clampLevel(p.toner_black);
+      var cyan = clampLevel(p.toner_cyan);
+      var magenta = clampLevel(p.toner_magenta);
+      var yellow = clampLevel(p.toner_yellow);
+
+      setBar('ppPaperBar', 'ppPaperVal', paper);
+      setBar('ppTonerBlackBar', 'ppTonerBlackVal', black);
+      setBar('ppTonerCyanBar', 'ppTonerCyanVal', cyan);
+      setBar('ppTonerMagentaBar', 'ppTonerMagentaVal', magenta);
+      setBar('ppTonerYellowBar', 'ppTonerYellowVal', yellow);
+
+      var dot = document.getElementById('ppDot');
+      var line = document.getElementById('ppStatusLine');
+      var status = (p.status || 'online').toLowerCase();
+      if (status === 'online') {
+        dot.className = 'dot dot-green';
+        line.textContent = 'Online - ready to print';
+      } else if (status === 'offline') {
+        dot.className = 'dot dot-red';
+        line.textContent = 'Offline';
+      } else if (status.indexOf('jam') !== -1) {
+        dot.className = 'dot dot-red';
+        line.textContent = (p.jam_type === 'major' ? 'Major' : 'Minor') + ' paper jam - ' + (p.jam_type === 'major' ? 'refund issued' : 'auto reprint queued');
+      } else {
+        dot.className = 'dot dot-yellow';
+        line.textContent = 'Status: ' + status;
+      }
+
+      var checked = document.getElementById('ppLastChecked');
+      if (p.last_checked && checked) {
+        var t = new Date(p.last_checked);
+        if (!isNaN(t)) checked.textContent = t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        else checked.textContent = '--';
+      }
+    })
+    .catch(function() { setPrinterStatusFallback(); });
+}
+
+function clampLevel(v) {
+  var n = parseInt(v);
+  if (isNaN(n)) return 100;
+  return Math.max(0, Math.min(100, n));
+}
+
+function setBar(barId, valId, level) {
+  var bar = document.getElementById(barId);
+  var val = document.getElementById(valId);
+  if (bar) {
+    bar.style.width = Math.max(level, 2) + '%';
+    bar.style.background = level <= 20 ? '#ef4444' : level <= 50 ? '#eab308' : '#22c55e';
+  }
+  if (val) val.textContent = level + '%';
+}
+
+function setPrinterStatusFallback() {
+  var dot = document.getElementById('ppDot');
+  var line = document.getElementById('ppStatusLine');
+  if (dot) dot.className = 'dot dot-yellow';
+  if (line) line.textContent = 'Printer info unavailable';
+}
 
 async function startFaceDetection() {
   const video = document.getElementById('kioskCam');
@@ -331,9 +489,71 @@ function acceptFace() {
     if (data.success) {
       localStorage.setItem('session_token', data.session_token);
       localStorage.setItem('user', JSON.stringify(data.user));
-      showUserJobs(matchedUser);
+      showUploadQR(data.session_token, matchedUser);
+      var btn = document.getElementById('qrJobsBtn');
+      if (btn) btn.style.display = 'block';
     } else { window.location.href = '../website/login.html'; }
   }).catch(() => { window.location.href = '../website/login.html'; });
+}
+
+function startGuest() {
+  stopCamera();
+  matchedUser = null;
+  document.getElementById('camStatus').innerHTML = '<span class="dot dot-yellow"></span> Guest mode';
+  document.getElementById('faceStatusText').textContent = 'Scan the QR to upload as guest';
+  var btn = document.getElementById('qrJobsBtn');
+  if (btn) btn.style.display = 'none';
+  showUploadQR('', null);
+}
+
+function showUploadQR(sessionToken, user) {
+  var isGuest = !sessionToken && !user;
+  document.getElementById('qrGreeting').textContent = isGuest ? 'Guest upload' : 'Welcome,';
+  document.getElementById('qrName').textContent = isGuest ? 'Scan to upload from your phone' : (user ? user.name : '');
+  document.getElementById('qrHint').textContent = isGuest
+    ? 'As a guest you will not earn reward coins'
+    : 'You will earn reward coins for this order';
+
+  // QR must be scannable from the customer's phone: always target the live site.
+  var qrBase = IS_NETLIFY ? CONFIG.BASE_URL : 'https://printkioskfyp.netlify.app';
+  var url;
+  if (isGuest) {
+    url = qrBase + '/website/upload.html?guest=1';
+  } else {
+    url = qrBase + '/website/upload.html?session=' + encodeURIComponent(sessionToken);
+  }
+
+  var qr = document.getElementById('qrCanvas');
+  try {
+    if (window.qrcode) {
+      var q = qrcode(0, 'M');
+      q.addData(url);
+      q.make();
+      var cell = 220 / q.getModuleCount();
+      var ctx = qr.getContext('2d');
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, 220, 220);
+      ctx.fillStyle = '#000000';
+      for (var r = 0; r < q.getModuleCount(); r++) {
+        for (var c = 0; c < q.getModuleCount(); c++) {
+          if (q.isDark(r, c)) ctx.fillRect(Math.floor(c * cell), Math.floor(r * cell), Math.ceil(cell), Math.ceil(cell));
+        }
+      }
+    }
+  } catch(e) { console.warn('QR error', e); }
+
+  document.getElementById('qrOverlay').classList.remove('hidden');
+}
+
+function showUploadQRFromJobs() {
+  var token = localStorage.getItem('session_token') || '';
+  showUploadQR(token, matchedUser);
+}
+
+function qrMyJobs() {
+  if (!matchedUser) return;
+  document.getElementById('qrOverlay').classList.add('hidden');
+  showUserJobs(matchedUser);
 }
 
 function showUserJobs(userData) {

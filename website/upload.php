@@ -6,9 +6,11 @@
 <title>PrintKiosk - Quick Upload</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="../styles.css">
+<link href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.css" rel="stylesheet">
 <script src="../frontend_config.js"></script>
 <script src="pstore.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.js"></script>
 <script>pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
 <style>
   body { background: var(--gray-50); }
@@ -21,6 +23,8 @@
   .step-dot.done { background: var(--success); color: white; }
   .step-line { flex: 1; height: 2px; background: var(--gray-200); align-self: center; }
   .step-line.done { background: var(--success); }
+  .nav-back { background:none; border:none; cursor:pointer; display:flex; align-items:center; justify-content:center; width:36px; height:36px; margin-right:4px; color:var(--gray-700); border-radius:8px; flex-shrink:0; }
+  .nav-back:hover { background:var(--gray-100); }
   @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 </style>
 </head>
@@ -29,6 +33,9 @@
 <div class="nav">
   <div class="nav-inner">
     <div class="nav-left">
+      <button class="nav-back" onclick="window.location.href='login.html'" aria-label="Back">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+      </button>
       <span class="logo"><span class="logo-mark"><svg viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="ubg" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#4C7CFF"/><stop offset="100%" stop-color="#1C2740"/></linearGradient><linearGradient id="ufold" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#E4EBFA"/><stop offset="100%" stop-color="#C7D4EE"/></linearGradient></defs><rect width="512" height="512" rx="112" fill="url(#ubg)"/><g transform="rotate(-7 256 256)"><rect x="149" y="352" width="214" height="32" rx="16" fill="#22C7B8"/><path d="M179 136L305 136L351 182L351 358Q351 376 333 376L179 376Q161 376 161 358L161 154Q161 136 179 136Z" fill="#FFF"/><path d="M305 136L351 182L305 182Z" fill="url(#ufold)"/></g></svg></span>PrintKiosk</span>
       <span class="nav-title">Quick Upload</span>
     </div>
@@ -108,11 +115,22 @@
       </div>
       <p id="pImageSettingsNote" class="hidden text-sm text-muted">Image settings only available for image files.</p>
 
-      <div id="phoneLivePreview" style="background:var(--gray-50); border:1px solid var(--gray-200); border-radius:var(--radius); overflow:visible; margin-top:16px; text-align:center; min-height:160px; display:flex; align-items:center; justify-content:center; position:relative; padding:8px;">
-        <p class="text-sm text-muted" id="phonePreviewPlaceholder">Preview will appear here</p>
-        <div id="phonePreviewContent" style="display:none; width:100%;"></div>
-        <div class="crop-overlay" id="phoneCropOverlay"></div>
-      </div>
+<div id="phoneLivePreview" style="background:var(--gray-50); border:1px solid var(--gray-200); border-radius:var(--radius); overflow:visible; margin-top:16px; text-align:center; min-height:160px; display:flex; align-items:center; justify-content:center; position:relative; padding:8px;">
+          <p class="text-sm text-muted" id="phonePreviewPlaceholder">Preview will appear here</p>
+          <div id="phonePreviewContent" style="display:none; width:100%;"></div>
+        </div>
+        <div id="phoneCropToolbar" style="display:none; margin-top:10px; flex-wrap:wrap; gap:6px; align-items:center; justify-content:center;">
+          <select id="phoneCropRatioSel" class="input" style="width:auto; font-size:12px; padding:5px 8px;" onchange="setPhoneCropRatio()">
+            <option value="free" selected>Free</option>
+            <option value="a4">A4 (210:297)</option>
+            <option value="1:1">1:1</option>
+          </select>
+          <button class="btn btn-secondary" style="font-size:12px; padding:5px 10px;" onclick="phoneCropZoom(-0.1)">-</button>
+          <button class="btn btn-secondary" style="font-size:12px; padding:5px 10px;" onclick="phoneCropZoom(0.1)">+</button>
+          <button class="btn btn-secondary" style="font-size:12px; padding:5px 10px;" onclick="phoneCropRotate()">Rotate</button>
+          <button class="btn btn-secondary" style="font-size:12px; padding:5px 10px;" onclick="resetPhoneCrop()">Reset</button>
+          <button class="btn btn-primary" style="font-size:12px; padding:5px 14px;" onclick="applyPhoneCrop()">Apply Crop</button>
+        </div>
       <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-top:8px;">
         <div style="padding:6px 8px; background:var(--gray-50); border-radius:var(--radius); border:1px solid var(--gray-100); text-align:center;">
           <p class="text-xs text-muted">Color</p>
@@ -287,11 +305,6 @@ function updatePhoneSummary() {
   document.getElementById('pSummaryTotal').textContent = 'RM ' + phonePrice.toFixed(2);
 }
 
-function buildPhoneCropOverlay() {
-  var overlay = document.getElementById('phoneCropOverlay');
-  overlay.innerHTML = '<div class="crop-box" id="phoneCropBox"><div class="crop-handle tl" data-handle="tl"></div><div class="crop-handle tr" data-handle="tr"></div><div class="crop-handle bl" data-handle="bl"></div><div class="crop-handle br" data-handle="br"></div><div class="crop-dimensions" id="phoneCropDimensions">--</div></div>';
-}
-
 function initPhonePreview() {
   var placeholder = document.getElementById('phonePreviewPlaceholder');
   var content = document.getElementById('phonePreviewContent');
@@ -299,7 +312,8 @@ function initPhonePreview() {
   placeholder.style.display = 'none';
   content.style.display = 'block';
   content.innerHTML = '';
-  phoneCropData = { x: 0, y: 0, w: 1, h: 1 };
+  destroyPhoneCropper();
+  phoneCroppedFile = null;
 
   var ext = phoneFile.name.split('.').pop().toLowerCase();
   var isImg = ['jpg','jpeg','png'].includes(ext);
@@ -308,15 +322,14 @@ function initPhonePreview() {
   if (isImg) {
     var reader = new FileReader();
     reader.onload = function(e) {
-      content.innerHTML = '<div class="preview-wrap"><img id="phonePreviewImg" src="' + e.target.result + '" style="transition: filter 0.3s ease; max-height:260px;"></div>';
-      buildPhoneCropOverlay();
-      updatePhonePreview();
-      initPhoneCropEvents();
+      content.innerHTML = '<div class="preview-wrap"><img id="phonePreviewImg" src="" style="transition: filter 0.3s ease; max-height:260px;"></div>';
+      var img = document.getElementById('phonePreviewImg');
+      img.onload = function() { updatePhonePreview(); phoneSyncManualCrop(); };
+      img.src = e.target.result;
     };
     reader.readAsDataURL(phoneFile);
   } else if (isPdf && typeof pdfjsLib !== 'undefined') {
     content.innerHTML = '<canvas id="phonePreviewCanvas" style="display:block; max-width:100%; max-height:300px;"></canvas>';
-    buildPhoneCropOverlay();
     var reader = new FileReader();
     reader.onload = async function(e) {
       try {
@@ -382,89 +395,87 @@ function updatePhonePreview() {
   document.getElementById('phonePreviewBright').textContent = brightness;
   document.getElementById('phonePreviewContrast').textContent = contrast;
   document.getElementById('phonePreviewCrop').textContent = cropMode === 'none' ? 'None' : cropMode === 'auto' ? 'Auto' : 'Manual';
-  togglePhoneCropOverlay(cropMode === 'manual');
+  phoneSyncManualCrop();
 }
 
-/* ===== MANUAL CROP (PHONE) ===== */
-let phoneCropData = { x: 0, y: 0, w: 1, h: 1 };
-let phoneCropDrag = null;
-let phoneCropImgRect = null;
+/* ===== MANUAL CROP (PHONE - CROPPER.JS) ===== */
+let phoneCropper = null;
+let phoneCroppedFile = null;
 
-function togglePhoneCropOverlay(show) {
-  var overlay = document.getElementById('phoneCropOverlay');
-  if (!overlay) return;
-  if (show) { overlay.classList.add('active'); positionPhoneCropBox(); }
-  else { overlay.classList.remove('active'); phoneCropData = { x: 0, y: 0, w: 1, h: 1 }; }
-}
-
-function positionPhoneCropBox() {
+function phoneInitCropper() {
+  destroyPhoneCropper();
   var img = document.getElementById('phonePreviewImg');
-  var overlay = document.getElementById('phoneCropOverlay');
-  if (!img || !img.complete || !img.naturalWidth) { setTimeout(positionPhoneCropBox, 100); return; }
-  var container = document.getElementById('phoneLivePreview');
-  var cRect = container.getBoundingClientRect();
-  var iRect = img.getBoundingClientRect();
-  phoneCropImgRect = { left: iRect.left - cRect.left, top: iRect.top - cRect.top, width: iRect.width, height: iRect.height };
-  overlay.style.left = phoneCropImgRect.left + 'px';
-  overlay.style.top = phoneCropImgRect.top + 'px';
-  overlay.style.width = phoneCropImgRect.width + 'px';
-  overlay.style.height = phoneCropImgRect.height + 'px';
-  var a4 = 210 / 297;
-  var boxW = phoneCropImgRect.width * 0.8;
-  var boxH = boxW / a4;
-  if (boxH > phoneCropImgRect.height * 0.8) { boxH = phoneCropImgRect.height * 0.8; boxW = boxH * a4; }
-  setPhoneCropBox((phoneCropImgRect.width - boxW) / 2, (phoneCropImgRect.height - boxH) / 2, boxW, boxH);
-}
-
-function setPhoneCropBox(x, y, w, h) {
-  var box = document.getElementById('phoneCropBox');
-  if (!box || !phoneCropImgRect) return;
-  w = Math.max(20, Math.min(w, phoneCropImgRect.width));
-  h = Math.max(14, Math.min(h, phoneCropImgRect.height));
-  x = Math.max(0, Math.min(x, phoneCropImgRect.width - w));
-  y = Math.max(0, Math.min(y, phoneCropImgRect.height - h));
-  box.style.left = x + 'px'; box.style.top = y + 'px'; box.style.width = w + 'px'; box.style.height = h + 'px';
-  phoneCropData = { x: Math.round((x / phoneCropImgRect.width) * 1000) / 1000, y: Math.round((y / phoneCropImgRect.height) * 1000) / 1000, w: Math.round((w / phoneCropImgRect.width) * 1000) / 1000, h: Math.round((h / phoneCropImgRect.height) * 1000) / 1000 };
-  var dim = document.getElementById('phoneCropDimensions');
-  if (dim) dim.textContent = Math.round(phoneCropData.w * 100) + '% x ' + Math.round(phoneCropData.h * 100) + '%';
-}
-
-function initPhoneCropEvents() {
-  var overlay = document.getElementById('phoneCropOverlay');
-  var box = document.getElementById('phoneCropBox');
-  if (!overlay || !box) return;
-  box.addEventListener('mousedown', function(e) { if (!e.target.classList.contains('crop-handle')) { e.preventDefault(); var t = e.touches ? e.touches[0] : e; phoneCropDrag = { type: 'move', startX: t.clientX, startY: t.clientY, boxX: box.offsetLeft, boxY: box.offsetTop }; }});
-  box.addEventListener('touchstart', function(e) { if (!e.target.classList.contains('crop-handle')) { e.preventDefault(); var t = e.touches[0]; phoneCropDrag = { type: 'move', startX: t.clientX, startY: t.clientY, boxX: box.offsetLeft, boxY: box.offsetTop }; }}, { passive: false });
-  overlay.addEventListener('mousedown', function(e) { if (e.target === overlay) { e.preventDefault(); var t = e; phoneCropDrag = { type: 'move', startX: t.clientX, startY: t.clientY, boxX: box.offsetLeft, boxY: box.offsetTop }; }});
-  overlay.addEventListener('touchstart', function(e) { if (e.target === overlay) { e.preventDefault(); var t = e.touches[0]; phoneCropDrag = { type: 'move', startX: t.clientX, startY: t.clientY, boxX: box.offsetLeft, boxY: box.offsetTop }; }}, { passive: false });
-  document.querySelectorAll('#phoneCropOverlay .crop-handle').forEach(function(h) {
-    h.addEventListener('mousedown', function(e) { e.preventDefault(); e.stopPropagation(); var t = e; phoneCropDrag = { type: 'resize', handle: h.dataset.handle, startX: t.clientX, startY: t.clientY, boxX: box.offsetLeft, boxY: box.offsetTop, boxW: box.offsetWidth, boxH: box.offsetHeight }; });
-    h.addEventListener('touchstart', function(e) { e.preventDefault(); e.stopPropagation(); var t = e.touches[0]; phoneCropDrag = { type: 'resize', handle: h.dataset.handle, startX: t.clientX, startY: t.clientY, boxX: box.offsetLeft, boxY: box.offsetTop, boxW: box.offsetWidth, boxH: box.offsetHeight }; }, { passive: false });
+  if (!img || typeof Cropper === 'undefined') return false;
+  phoneCropper = new Cropper(img, {
+    viewMode: 1,
+    dragMode: 'move',
+    autoCropArea: 0.9,
+    background: false,
+    minContainerWidth: 200,
+    minContainerHeight: 120,
+    ready: function() { setPhoneCropRatio(); }
   });
-  document.addEventListener('mousemove', onPhoneCropMove);
-  document.addEventListener('touchmove', onPhoneCropMove, { passive: false });
-  document.addEventListener('mouseup', function() { phoneCropDrag = null; });
-  document.addEventListener('touchend', function() { phoneCropDrag = null; });
+  return true;
 }
 
-function onPhoneCropMove(e) {
-  if (!phoneCropDrag) return;
-  e.preventDefault();
-  var t = e.touches ? e.touches[0] : e;
-  var dx = t.clientX - phoneCropDrag.startX;
-  var dy = t.clientY - phoneCropDrag.startY;
-  if (phoneCropDrag.type === 'move') {
-    setPhoneCropBox(phoneCropDrag.boxX + dx, phoneCropDrag.boxY + dy, document.getElementById('phoneCropBox').offsetWidth, document.getElementById('phoneCropBox').offsetHeight);
+function destroyPhoneCropper() {
+  if (phoneCropper) { phoneCropper.destroy(); phoneCropper = null; }
+}
+
+function phoneSyncManualCrop() {
+  var toolbar = document.getElementById('phoneCropToolbar');
+  var isManual = document.getElementById('pCropMode').value === 'manual';
+  var img = document.getElementById('phonePreviewImg');
+  if (toolbar) toolbar.style.display = (isManual && img) ? 'flex' : 'none';
+  if (isManual && img) {
+    if (!phoneCropper) phoneInitCropper();
   } else {
-    var a4 = 210 / 297;
-    var nx = phoneCropDrag.boxX, ny = phoneCropDrag.boxY, nw = phoneCropDrag.boxW, nh = phoneCropDrag.boxH;
-    var h = phoneCropDrag.handle;
-    if (h === 'br') { nw = phoneCropDrag.boxW + dx; nh = nw / a4; }
-    else if (h === 'tl') { nw = phoneCropDrag.boxW - dx; nh = nw / a4; nx = phoneCropDrag.boxX + dx; ny = phoneCropDrag.boxY + (phoneCropDrag.boxH - nh); }
-    else if (h === 'tr') { nw = phoneCropDrag.boxW + dx; nh = nw / a4; ny = phoneCropDrag.boxY + (phoneCropDrag.boxH - nh); }
-    else if (h === 'bl') { nw = phoneCropDrag.boxW - dx; nh = nw / a4; nx = phoneCropDrag.boxX + dx; }
-    setPhoneCropBox(nx, ny, nw, nh);
+    destroyPhoneCropper();
   }
+}
+
+function setPhoneCropRatio() {
+  if (!phoneCropper) return;
+  var v = document.getElementById('phoneCropRatioSel').value;
+  var ratio = NaN;
+  if (v === 'a4') ratio = 210 / 297;
+  else if (v === '1:1') ratio = 1;
+  phoneCropper.setAspectRatio(ratio);
+}
+
+function phoneCropZoom(delta) {
+  if (phoneCropper) phoneCropper.zoom(delta);
+}
+
+function phoneCropRotate() {
+  if (phoneCropper) phoneCropper.rotate(90);
+}
+
+function resetPhoneCrop() {
+  if (phoneCropper) phoneCropper.reset();
+}
+
+function applyPhoneCrop() {
+  if (!phoneCropper || !phoneFile) return;
+  var ext = (phoneFile.name.split('.').pop() || '').toLowerCase();
+  var isPng = ext === 'png';
+  var type = isPng ? 'image/png' : 'image/jpeg';
+  var quality = isPng ? 1 : 0.92;
+  var canvas = phoneCropper.getCroppedCanvas({ imageSmoothingQuality: 'high', maxWidth: 4096, maxHeight: 4096 });
+  canvas.toBlob(function(blob) {
+    if (!blob) { alert('Failed to crop image'); return; }
+    phoneCroppedFile = new File([blob], phoneFile.name, { type: type });
+    toastMsg('Crop applied');
+  }, type, quality);
+}
+
+function toastMsg(msg) {
+  var t = document.getElementById('toastMsg');
+  if (!t) { alert(msg); return; }
+  t.textContent = msg;
+  t.style.opacity = '1';
+  t.style.display = 'block';
+  setTimeout(function() { t.style.display = 'none'; }, 2200);
 }
 
 async function submitPhoneUpload() {
@@ -474,8 +485,10 @@ async function submitPhoneUpload() {
   btn.textContent = 'Uploading...';
 
   var formData = new FormData();
-  var blob = await phoneFile.arrayBuffer().then(function(b) { return new Blob([b], { type: phoneFile.type || 'application/octet-stream' }); });
-  formData.append('file', blob, phoneFile.name || 'file');
+  var cropModeVal = document.getElementById('pCropMode').value;
+  var upFile = (cropModeVal === 'manual' && phoneCroppedFile) ? phoneCroppedFile : phoneFile;
+  var blob = await upFile.arrayBuffer().then(function(b) { return new Blob([b], { type: upFile.type || 'application/octet-stream' }); });
+  formData.append('file', blob, upFile.name || 'file');
   formData.append('color_mode', document.getElementById('pColorMode').value);
   formData.append('paper_size', 'a4');
   formData.append('sides', 'single');
@@ -483,11 +496,8 @@ async function submitPhoneUpload() {
   formData.append('pages', document.getElementById('pPages').value);
   formData.append('brightness', document.getElementById('pBrightness').value);
   formData.append('contrast', document.getElementById('pContrast').value);
-  formData.append('crop_mode', document.getElementById('pCropMode').value);
-  formData.append('crop_x', phoneCropData.x);
-  formData.append('crop_y', phoneCropData.y);
-  formData.append('crop_w', phoneCropData.w);
-  formData.append('crop_h', phoneCropData.h);
+  formData.append('crop_mode', cropModeVal);
+  formData.append('finish', 'none');
 
   function parseRes(res) {
     return res.text().then(function(raw) {
@@ -502,22 +512,22 @@ async function submitPhoneUpload() {
   }
 
   try {
-    var fileName = phoneFile.name || 'file';
+    var fileName = upFile.name || 'file';
     var data;
     if (IS_NETLIFY) {
       // Signed upload: bytes go directly to Supabase Storage (Netlify's 6MB cap never applies)
       var signRes = await fetch(API('upload', 'sign-upload'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Session-Token': qToken },
-        body: JSON.stringify({ file_name: fileName, file_size: phoneFile.size || 1 })
+        body: JSON.stringify({ file_name: fileName, file_size: upFile.size || 1 })
       });
       var signD = await parseRes(signRes);
       if (!signRes.ok && !signD.success) { uploadFail(signD.error || 'Upload failed'); return; }
 
       var upRes = await fetch(signD.upload_url, {
         method: 'PUT',
-        headers: { 'Content-Type': signD.content_type || phoneFile.type || 'application/octet-stream', 'x-upsert': 'true' },
-        body: phoneFile
+        headers: { 'Content-Type': signD.content_type || upFile.type || 'application/octet-stream', 'x-upsert': 'true' },
+        body: upFile
       });
       if (!upRes.ok) {
         var upMsg = 'Storage upload failed (HTTP ' + upRes.status + ')';
@@ -665,5 +675,6 @@ document.querySelector('.upload-zone').addEventListener('drop', function(e) {
   }
 });
 </script>
+<div id="toastMsg" style="display:none; position:fixed; bottom:60px; left:50%; transform:translateX(-50%); background:rgba(17,24,39,0.92); color:white; padding:10px 18px; border-radius:10px; font-size:13px; z-index:9999; max-width:90vw; text-align:center;"></div>
 </body>
 </html>
