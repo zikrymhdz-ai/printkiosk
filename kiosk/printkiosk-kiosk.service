@@ -1,0 +1,19 @@
+[Unit]
+Description=PrintKiosk kiosk (Chromium)
+After=graphical.target
+Requires=graphical.target
+
+[Service]
+Type=simple
+User=pi
+Environment=DISPLAY=:0
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+Environment=PRINTKIOSK_DIR=/home/pi/printkiosk
+ExecStart=/bin/bash /home/pi/printkiosk/kiosk/pi-kiosk.sh
+Restart=always
+RestartSec=5
+# Let the page reload itself without systemd killing it mid-request
+TimeoutStopSec=10
+
+[Install]
+WantedBy=graphical.target

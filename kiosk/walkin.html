@@ -14,6 +14,33 @@
 <title>PrintKiosk - Kiosk</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="../styles.css">
+<script>
+// Raspberry Pi kiosk bootstrap. Must run before frontend_config.js so API() can be
+// pointed at the live Netlify deployment - a Pi has no PHP and no local functions.
+(function () {
+  var ua = navigator.userAgent || '';
+  var params = new URLSearchParams(location.search);
+  var forced = params.get('pi');
+  // Raspberry Pi OS ships either 32-bit (armv7l/armhf) or 64-bit (aarch64) Chromium,
+  // so both have to be matched or a 64-bit install silently misses every Pi tweak.
+  var isPi = /Raspberry Pi/i.test(ua) || /armv7l|armhf|aarch64/i.test(ua);
+  if (forced === '1') isPi = true;
+  else if (forced === '0') isPi = false;
+
+  window.IS_RPI = isPi;
+
+  // Turn detection on for the Pi. On a Pi the WebGL backend is unreliable and
+  // SIMD is unsupported, so the WASM CPU path is the one that actually works.
+  if (isPi) {
+    window.PRINTKIOSK_API_BASE = 'https://printkioskfyp.netlify.app';
+    // Throttle face detection; a Pi 4 cannot run it every animation frame.
+    window.FACE_MIN_INTERVAL_MS = 250;
+    window.FACE_DETECT_WIDTH = 320;
+    // Keep the screen awake and allow a reload to recover from a wedged renderer.
+    window.KIOSK_ALLOW_RELOAD = true;
+  }
+})();
+</script>
 <script src="../frontend_config.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script>pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
@@ -73,6 +100,56 @@
   .action-row button { flex:1; }
   .pulse-ring { animation: pulseRing 1.5s infinite; }
   @keyframes pulseRing { 0% { box-shadow: 0 0 0 0 rgba(59,130,246,0.4); } 70% { box-shadow: 0 0 0 16px rgba(59,130,246,0); } 100% { box-shadow: 0 0 0 0 rgba(59,130,246,0); } }
+
+  /* ---- Raspberry Pi kiosk ---- */
+  /* Touch-driven display: no hover, no text selection, no rubber-band scrolling,
+     and no long-press callout menu that would leave the kiosk stuck. */
+  body.pi-kiosk {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+    -webkit-tap-highlight-color: transparent;
+    overscroll-behavior: none;
+    cursor: default;
+  }
+  body.pi-kiosk button { cursor: pointer; touch-action: manipulation; }
+  /* Generous tap targets: this is a standing user, not a phone user. */
+  body.pi-kiosk .btn-kiosk { padding: 16px 28px; font-size: 19px; min-height: 56px; }
+  body.pi-kiosk .pin-section input { font-size: 40px; padding: 18px; min-height: 72px; }
+  body.pi-kiosk .pin-section { gap: 12px; }
+  body.pi-kiosk .confirm-card button { min-height: 64px; font-size: 20px; }
+  body.pi-kiosk #qrCanvas { width: 320px; height: 320px; }
+  body.pi-kiosk .confirm-avatar { width: 92px; height: 92px; font-size: 40px; }
+  body.pi-kiosk .status-bar { font-size: 16px; }
+  /* Hide the manual restart hint in kiosk mode; the launcher handles recovery. */
+  body.pi-kiosk .bottom-links { display: none; }
+  /* Common Pi kiosk panels are 800x480 - keep everything on one screen. */
+  @media (max-height: 560px) {
+    .kiosk-layout { padding: 10px; gap: 10px; }
+    .kiosk-layout { max-width: 100%; }
+    .printer-panel { width: 210px; padding: 12px; }
+    .kiosk { max-width: none; }
+    .cam-box { aspect-ratio: 16/10; }
+    .pp-section { margin-top: 8px; }
+    .pp-row { margin-bottom: 5px; }
+    .pp-foot { margin-top: 10px; padding-top: 7px; }
+    .confirm-card { padding: 20px; }
+    .confirm-overlay { align-items: flex-start; overflow-y: auto; }
+  }
+  /* Portrait / stacked displays */
+  @media (max-width: 720px) {
+    body.pi-kiosk .kiosk-layout { flex-direction: column; }
+    body.pi-kiosk .printer-panel { width: auto; }
+  }
+  /* Minimal-chrome diagnostics overlay, toggled by the Pi flag */
+  #piDiag {
+    position: fixed; left: 8px; bottom: 8px; z-index: 999;
+    font: 11px/1.5 monospace; color: #94a3b8;
+    background: rgba(15,23,42,0.85); border: 1px solid #334155;
+    border-radius: 8px; padding: 6px 8px; max-width: 46vw;
+    white-space: pre-wrap; pointer-events: none; display: none;
+  }
+  body.pi-kiosk.show-diag #piDiag { display: block; }
 </style>
 </head>
 <body>
@@ -105,6 +182,8 @@
 
   <div class="bottom-links">Face recognition for kiosk auto-login</div>
 </div>
+
+<div id="piDiag"></div>
 
 <div class="printer-panel" id="printerPanel">
   <div class="pp-header">
@@ -257,8 +336,92 @@ let currentPinJobs = [];
 let modelsLoaded = false;
 let animFrameId = null;
 
+// --- Pi kiosk support -------------------------------------------------------
+// Surface backend/camera/model failures somewhere readable. On a Pi with no
+// keyboard these are otherwise invisible, and the shop just sees a dead screen.
+function piLog(msg) {
+  var el = document.getElementById('piDiag');
+  if (!el) return;
+  var line = msg + '\n';
+  if (el.textContent.indexOf(msg) === -1) el.textContent += line;
+  var t = document.getElementById('faceStatusText');
+  if (t && msg) t.textContent = msg;
+}
+
+function initPiKiosk() {
+  document.body.classList.add('pi-kiosk');
+
+  // `?diag=1` shows the overlay permanently; it can also be toggled by tapping
+  // the camera box five times, which needs no keyboard on a touch display.
+  if (new URLSearchParams(location.search).get('diag') === '1') {
+    document.body.classList.add('show-diag');
+  }
+  var taps = 0, tapTimer = null;
+  document.getElementById('camBox').addEventListener('click', function() {
+    taps++;
+    clearTimeout(tapTimer);
+    tapTimer = setTimeout(function() { taps = 0; }, 1200);
+    if (taps >= 5) {
+      taps = 0;
+      document.body.classList.toggle('show-diag');
+    }
+  });
+
+  piLog('rpi kiosk mode');
+
+  // Keep the screen awake for as long as this page is visible.
+  if ('wakeLock' in navigator) {
+    var keepAwake = function() {
+      navigator.wakeLock.request('screen').catch(function() {});
+    };
+    keepAwake();
+    document.addEventListener('visibilitychange', function() {
+      if (document.visibilityState === 'visible') keepAwake();
+    });
+  }
+
+  // Reloading periodically clears out GPU/WASM memory growth on long-running
+  // kiosk sessions. Only fires when idle, so a customer mid-flow is unaffected.
+  setInterval(function() {
+    if (window.KIOSK_ALLOW_RELOAD && !matchedUser && isIdleFor(PI_IDLE_MS)) {
+      location.reload();
+    }
+  }, 60000);
+
+  // Block the browser's own gestures so a customer cannot navigate away.
+  document.addEventListener('contextmenu', function(e) { e.preventDefault(); });
+  document.addEventListener('gesturestart', function(e) { e.preventDefault(); });
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'F5' || e.key === 'r' || e.key === 'R') e.preventDefault();
+  });
+}
+
+const PI_IDLE_MS = 180000;
+let lastInteraction = Date.now();
+['pointerdown', 'keydown', 'touchstart'].forEach(function(ev) {
+  document.addEventListener(ev, function() { lastInteraction = Date.now(); }, { passive: true });
+});
+function isIdleFor(ms) { return (Date.now() - lastInteraction) > ms; }
+
 window.addEventListener('load', async () => {
+  if (window.IS_RPI) initPiKiosk();
+
   async function initBackend() {
+    // Pi 4 runs ARMv7/A53 cores with no reliable WebGL in Chromium and no wasm SIMD,
+    // so force the single-threaded non-SIMD WASM backend and skip the GPU attempts.
+    if (window.IS_RPI) {
+      try {
+        if (faceapi.tf.setWasmPaths) faceapi.tf.setWasmPaths('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@4.22.0/dist/');
+        if (faceapi.tf.env && faceapi.tf.env().set) {
+          faceapi.tf.env().set('WASM_HAS_MULTITHREAD_SUPPORT', false);
+          faceapi.tf.env().set('WASM_HAS_SIMD_SUPPORT', false);
+        }
+        await faceapi.tf.setBackend('wasm');
+        await faceapi.tf.ready();
+        piLog('tf backend: wasm');
+        return true;
+      } catch(e) { piLog('wasm failed: ' + e.message); }
+    }
     try {
       if (faceapi.tf.setWasmPaths) faceapi.tf.setWasmPaths('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@4.22.0/dist/');
       if (faceapi.tf.env && faceapi.tf.env().set) {
@@ -278,33 +441,45 @@ window.addEventListener('load', async () => {
     await faceapi.nets.faceLandmark68Net.loadFromUri(url);
     await faceapi.nets.faceRecognitionNet.loadFromUri(url);
   }
-  const modelUrls = ['https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/model', '../models'];
+  // Prefer the vendored models on the Pi: no CDN round-trip, and the kiosk must
+  // still come up when the shop internet is down.
+  const modelUrls = window.IS_RPI
+    ? ['../models', 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/model']
+    : ['https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/model', '../models'];
   let loaded = false;
   await initBackend();
   for (const url of modelUrls) {
-    try { await loadModels(url); loaded = true; break; } catch(e) {}
+    try { await loadModels(url); loaded = true; piLog('models: ' + url); break; } catch(e) {}
   }
   if (!loaded) {
     document.getElementById('camStatus').innerHTML = '<span class="dot dot-yellow"></span> Face AI offline';
     document.getElementById('faceStatusText').textContent = 'Face recognition unavailable';
+    piLog('models FAILED');
     return;
   }
   modelsLoaded = true;
 
   try {
-    faceStream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480, facingMode: 'user' } });
+    // Ask for a smaller capture on the Pi - it cuts both detection time and memory.
+    const camW = window.IS_RPI ? 480 : 640;
+    faceStream = await navigator.mediaDevices.getUserMedia({
+      video: { width: { ideal: camW }, height: { ideal: 480 }, facingMode: 'user' },
+      audio: false
+    });
     const video = document.getElementById('kioskCam');
     video.srcObject = faceStream;
     await video.play();
     const canvas = document.getElementById('kioskCanvas');
-    canvas.width = video.videoWidth || 640;
+    canvas.width = video.videoWidth || camW;
     canvas.height = video.videoHeight || 480;
     document.getElementById('camStatus').innerHTML = '<span class="dot dot-green"></span> Face AI active';
     document.getElementById('faceStatusText').textContent = 'Looking for face...';
+    piLog('camera ' + canvas.width + 'x' + canvas.height);
     startFaceDetection();
   } catch(e) {
     document.getElementById('camStatus').innerHTML = '<span class="dot dot-yellow"></span> Camera blocked';
     document.getElementById('faceStatusText').textContent = 'Camera access denied';
+    piLog('camera FAILED: ' + e.name + ' ' + e.message);
   }
 
   document.getElementById('pinInput').addEventListener('input', function() {
@@ -393,6 +568,11 @@ async function startFaceDetection() {
   const frameCanvas = document.createElement('canvas');
   const frameCtx = frameCanvas.getContext('2d');
 
+  // On the Pi we downscale before detection. Running the detector on a full
+  // 480p frame saturates all four A53 cores and the UI stops responding.
+  const detectWidth = window.FACE_DETECT_WIDTH || 0;
+  const minInterval = window.FACE_MIN_INTERVAL_MS || 0;
+
   let labeledDescriptors = [];
   try {
     const r = await fetch(API('data', 'get-users-with-face'));
@@ -403,25 +583,43 @@ async function startFaceDetection() {
         labeledDescriptors.push(new faceapi.LabeledFaceDescriptors(u.id, [new Float32Array(u.face_descriptor)]));
       }
     }
-  } catch(e) {}
+    piLog('registered faces: ' + labeledDescriptors.length);
+  } catch(e) { piLog('face list failed: ' + e.message); }
 
   let matcher = labeledDescriptors.length > 0 ? new faceapi.FaceMatcher(labeledDescriptors, 0.6) : null;
   let matchCooldown = false;
+  let lastDetect = 0;
+  let detecting = false;
 
   async function detect() {
-    if (!modelsLoaded || !video.videoWidth) { animFrameId = requestAnimationFrame(detect); return; }
+    animFrameId = requestAnimationFrame(detect);
+    if (!modelsLoaded || !video.videoWidth) return;
+
+    // Pi: cap the detection rate and never overlap two inference passes.
+    const now = performance.now ? performance.now() : Date.now();
+    if (detecting) return;
+    if (minInterval && now - lastDetect < minInterval) return;
+    lastDetect = now;
+    detecting = true;
 
     try {
-      frameCanvas.width = video.videoWidth;
-      frameCanvas.height = video.videoHeight;
-      frameCtx.drawImage(video, 0, 0);
-      const det = await faceapi.detectSingleFace(frameCanvas).withFaceLandmarks().withFaceDescriptor();
+      let srcW = video.videoWidth;
+      let srcH = video.videoHeight;
+      if (detectWidth && srcW > detectWidth) {
+        const scale = detectWidth / srcW;
+        srcW = detectWidth;
+        srcH = Math.round(video.videoHeight * scale);
+      }
+      frameCanvas.width = srcW;
+      frameCanvas.height = srcH;
+      frameCtx.drawImage(video, 0, 0, srcW, srcH);
+      const det = await faceapi.detectSingleFace(frameCanvas, { inputSize: 160 }).withFaceLandmarks().withFaceDescriptor();
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
       if (det) {
         const box = det.detection.box;
-        const w = canvas.width / video.videoWidth;
-        const h = canvas.height / video.videoHeight;
+        const w = canvas.width / srcW;
+        const h = canvas.height / srcH;
 
         ctx.strokeStyle = '#22c55e';
         ctx.lineWidth = 4;
@@ -473,8 +671,11 @@ async function startFaceDetection() {
       console.warn('face detect error', e);
       document.getElementById('faceDot').className = 'dot dot-red';
       document.getElementById('faceStatusText').textContent = 'Face scanning error';
+      piLog('detect error: ' + e.message);
+    } finally {
+      // Must clear here, otherwise the early return above would wedge the loop.
+      detecting = false;
     }
-    animFrameId = requestAnimationFrame(detect);
   }
   detect();
 }
@@ -515,7 +716,7 @@ function showUploadQR(sessionToken, user) {
     : 'You will earn reward coins for this order';
 
   // QR must be scannable from the customer's phone: always target the live site.
-  var qrBase = IS_NETLIFY ? CONFIG.BASE_URL : 'https://printkioskfyp.netlify.app';
+  var qrBase = QR_SITE_BASE;
   var url;
   if (isGuest) {
     url = qrBase + '/website/upload.html?guest=1';
