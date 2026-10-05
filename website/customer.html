@@ -22,6 +22,18 @@
 <script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/dist/face-api.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.js"></script>
 <style>
+  /* ===== STEP 2 LAYOUT (settings left, preview right on desktop; stacked on phone) ===== */
+  .step2-grid { display:grid; grid-template-columns:1fr 1.6fr; gap:16px; align-items:start; }
+
+  @media (max-width: 768px) {
+    .step2-grid { grid-template-columns: 1fr; }
+    #livePreviewContainer { min-height: 240px; }
+    #livePreviewContainer img,
+    #livePreviewContainer canvas { max-width: 100%; height: auto; }
+    #cropToolbar button, #cropToolbar select { font-size: 13px !important; padding: 8px 12px !important; }
+    #livePreviewInfo { grid-template-columns: 1fr 1fr; }
+  }
+
   /* ===== LIQUID BOTTOM NAVIGATION (mobile/app only) ===== */
   .liquid-nav { display: none; }
 
@@ -193,7 +205,7 @@
       <!-- STEP 2: Print Settings -->
       <div id="step2" class="slide-section">
         <div id="fileSelector" style="display:flex; gap:8px; overflow-x:auto; padding-bottom:8px; margin-bottom:16px;"></div>
-        <div style="display:grid; grid-template-columns:1fr 1.6fr; gap:16px; align-items:start;">
+        <div class="step2-grid">
           <div class="card">
             <div class="card-header"><span class="card-title">Print Settings</span><span class="text-xs text-muted" id="settingsFileName"></span></div>
             <div class="form-group">
@@ -234,7 +246,7 @@
             <div style="margin-top:12px; padding-top:12px; border-top:1px solid var(--gray-100);">
               <button class="btn btn-secondary btn-block" style="font-size:12px; padding:6px 12px;" onclick="applyToAllFiles()">Apply Settings to All Files</button>
             </div>
-    </div>
+          </div>
 
           <div class="card">
             <div class="card-header"><span class="card-title">Live Preview</span></div>
@@ -253,6 +265,10 @@
               <button class="btn btn-secondary" style="font-size:12px; padding:5px 10px;" onclick="cropRotate()">Rotate</button>
               <button class="btn btn-secondary" style="font-size:12px; padding:5px 10px;" onclick="resetManualCrop()">Reset</button>
               <button class="btn btn-primary" style="font-size:12px; padding:5px 14px;" onclick="applyManualCrop()">Apply Crop</button>
+            </div>
+            <div id="cropAppliedBar" style="display:none; margin-top:10px; flex-wrap:wrap; justify-content:center; gap:8px; align-items:center;">
+              <span class="text-sm" style="color:#16a34a; font-weight:600;">&#10003; Crop applied</span>
+              <button class="btn btn-secondary" style="font-size:12px; padding:5px 10px;" onclick="redoCrop()">Redo Crop</button>
             </div>
             <div id="livePreviewInfo" style="margin-top:12px; display:grid; grid-template-columns:1fr 1fr; gap:8px;">
               <div style="padding:8px 12px; background:var(--gray-50); border-radius:var(--radius); border:1px solid var(--gray-100);">
@@ -734,9 +750,12 @@ function loadSettingsToUI() {
 }
 
 function onSettingChange() {
+  var item = bulkFiles[selectedFileIndex];
+  var hadCrop = !!(item && item._cropApplied);
   saveCurrentSettings();
   updateSummary();
-  updateLivePreview();
+  if (hadCrop && item && !item._cropApplied) initLivePreview();
+  else updateLivePreview();
 }
 
 function applyToAllFiles() {
@@ -783,7 +802,7 @@ function renderFileList() {
     } else {
       thumb = '<div style="width:40px;height:40px;background:var(--gray-100);border-radius:6px;display:flex;align-items:center;justify-content:center;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--gray-500)" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></div>';
     }
-      var size = (f.size / 1024 / 1024).toFixed(2);
+    var size = (f.size / 1024 / 1024).toFixed(2);
     var pagesLabel = isPdf && item.settings.pages > 1 ? ' &middot; ' + item.settings.pages + ' pages' : '';
     return '<div style="display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--gray-50);border:1px solid var(--gray-200);border-radius:var(--radius);cursor:pointer;transition:border-color 0.2s;" onmouseover="this.style.borderColor=\'var(--primary)\'" onmouseout="this.style.borderColor=\'var(--gray-200)\'" onclick="previewFile(' + i + ')">' +
       thumb +
@@ -879,6 +898,8 @@ function updateSummary() {
 function initLivePreview() {
   var placeholder = document.getElementById('livePreviewPlaceholder');
   var content = document.getElementById('livePreviewContent');
+  var oldNav = document.getElementById('pdfNavBar');
+  if (oldNav) oldNav.remove();
   if (selectedFileIndex < 0 || selectedFileIndex >= bulkFiles.length) {
     placeholder.style.display = 'block';
     content.style.display = 'none';
@@ -893,15 +914,16 @@ function initLivePreview() {
   currentPreviewPage = 1;
 
   var item = bulkFiles[selectedFileIndex];
-  var f = item.file;
-  var ext = f.name.split('.').pop().toLowerCase();
+  // show the cropped image if a crop was applied, otherwise the original
+  var f = (item._cropApplied && item.croppedFile) ? item.croppedFile : item.file;
+  var ext = item.file.name.split('.').pop().toLowerCase();
   var isImage = ['jpg','jpeg','png'].includes(ext);
   var isPdf = ext === 'pdf';
 
   if (isImage) {
     var reader = new FileReader();
     reader.onload = function(e) {
-      content.innerHTML = '<div class="preview-wrap"><img id="livePreviewImg" src="" style="transition: filter 0.3s ease;"></div>';
+      content.innerHTML = '<div class="preview-wrap"><img id="livePreviewImg" src="" style="transition: filter 0.3s ease; max-width:100%;"></div>';
       var img = document.getElementById('livePreviewImg');
       img.onload = function() { updateLivePreview(); syncManualCropMode(); };
       img.src = e.target.result;
@@ -909,14 +931,17 @@ function initLivePreview() {
     reader.readAsDataURL(f);
   } else if (isPdf && typeof pdfjsLib !== 'undefined') {
     content.innerHTML = '<canvas id="livePreviewCanvas" style="display:block; max-width:100%; max-height:480px;"></canvas>';
-    var reader = new FileReader();
-    reader.onload = async function(e) {
+    var reader2 = new FileReader();
+    reader2.onload = async function(e) {
       try {
         pdfDoc = await pdfjsLib.getDocument({ data: e.target.result }).promise;
         pdfTotalPages = pdfDoc.numPages;
         currentPreviewPage = 1;
+        var staleNav = document.getElementById('pdfNavBar');
+        if (staleNav) staleNav.remove();
         if (pdfTotalPages > 1) {
           var nav = document.createElement('div');
+          nav.id = 'pdfNavBar';
           nav.style.cssText = 'position:absolute;bottom:16px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.75);padding:6px 16px;border-radius:20px;font-size:13px;color:white;display:flex;align-items:center;gap:12px;z-index:5;';
           nav.innerHTML = '<button onclick="changePdfPreviewPage(-1)" id="pdfPrevBtn" style="background:none;border:none;color:white;cursor:pointer;font-size:18px;padding:2px 8px;">&#8592;</button>' +
             '<span id="pdfPageInfo" style="font-weight:600;min-width:60px;text-align:center;"></span>' +
@@ -926,7 +951,7 @@ function initLivePreview() {
         renderPdfPreviewPage();
       } catch(err) { content.innerHTML = '<p class="text-sm text-muted">Cannot preview PDF</p>'; }
     };
-    reader.readAsArrayBuffer(f);
+    reader2.readAsArrayBuffer(f);
   } else {
     content.innerHTML = '<div style="padding:30px;text-align:center;"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--gray-400)" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg><p style="font-weight:600;color:var(--gray-700);margin-top:8px;">' + f.name + '</p><p class="text-xs text-muted">' + (f.size/1024/1024).toFixed(2) + ' MB</p></div>';
   }
@@ -1008,11 +1033,17 @@ function destroyManualCropper() {
 }
 
 function syncManualCropMode() {
+  var item = bulkFiles[selectedFileIndex];
   var toolbar = document.getElementById('cropToolbar');
-  var isManual = document.getElementById('cropMode').value === 'manual';
+  var bar = document.getElementById('cropAppliedBar');
   var img = document.getElementById('livePreviewImg');
-  if (toolbar) toolbar.style.display = (isManual && img) ? 'flex' : 'none';
-  if (isManual && img) {
+  var isManual = document.getElementById('cropMode').value === 'manual';
+  var applied = !!(item && item._cropApplied);
+
+  if (toolbar) toolbar.style.display = (isManual && img && !applied) ? 'flex' : 'none';
+  if (bar) bar.style.display = (isManual && img && applied) ? 'flex' : 'none';
+
+  if (isManual && img && !applied) {
     if (!cropperInstance) initManualCropper();
   } else {
     destroyManualCropper();
@@ -1049,11 +1080,29 @@ function applyManualCrop() {
   var type = isPng ? 'image/png' : 'image/jpeg';
   var quality = isPng ? 1 : 0.92;
   var canvas = cropperInstance.getCroppedCanvas({ imageSmoothingQuality: 'high', maxWidth: 4096, maxHeight: 4096 });
+  if (!canvas) { alert('Failed to crop image'); return; }
   canvas.toBlob(function(blob) {
     if (!blob) { alert('Failed to crop image'); return; }
     item.croppedFile = new File([blob], item.file.name, { type: type });
+    item._cropApplied = true;
+    destroyManualCropper();
+    var img = document.getElementById('livePreviewImg');
+    if (item._cropUrl) URL.revokeObjectURL(item._cropUrl);
+    item._cropUrl = URL.createObjectURL(item.croppedFile);
+    if (img) {
+      img.onload = function() { updateLivePreview(); syncManualCropMode(); };
+      img.src = item._cropUrl; // preview now shows the real cut
+    }
     toastMsg('Crop applied to ' + item.file.name);
   }, type, quality);
+}
+
+function redoCrop() {
+  var item = bulkFiles[selectedFileIndex];
+  if (!item) return;
+  item.croppedFile = undefined;
+  item._cropApplied = false;
+  initLivePreview();
 }
 
 function toastMsg(msg) {
