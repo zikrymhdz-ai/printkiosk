@@ -1,4 +1,4 @@
-const { json, err, supabaseRequest, supabaseStorageDelete } = require('./_shared');
+const { json, err, supabaseRequest, supabaseStorageDelete, APP_VERSION } = require('./_shared');
 
 exports.handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') return json({});
@@ -47,7 +47,7 @@ exports.handler = async (event) => {
 
     case 'kiosk-settings': {
       const s = await getKioskSettings();
-      return json({ success: true, settings: s });
+      return json({ success: true, settings: s, app_version: APP_VERSION });
     }
 
     case 'get-face-users': {

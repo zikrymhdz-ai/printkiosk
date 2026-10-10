@@ -5,6 +5,10 @@
 # Serving from localhost matters: getUserMedia is a secure-context API and
 # Chromium will refuse the USB webcam on a plain http:// LAN address.
 #
+# Because the kiosk runs from a LOCAL copy, deploying to Netlify does not update
+# the screen by itself. Before launching we pull the current kiosk front-end from
+# the live site, so an unattended screen never runs a stale walkin.html.
+#
 # Usage:  ./kiosk/pi-kiosk.sh
 set -uo pipefail
 
@@ -12,8 +16,34 @@ APP_DIR="${PRINTKIOSK_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 PORT="${PRINTKIOSK_PORT:-8080}"
 URL="http://localhost:${PORT}/kiosk/walkin.html"
 CHROMIUM="${PRINTKIOSK_CHROMIUM:-}"
+LIVE_BASE="${PRINTKIOSK_LIVE:-https://printkioskfyp.netlify.app}"
 
 log() { printf '[printkiosk] %s\n' "$*"; }
+
+# --- refresh the kiosk front-end from the deployed site ------------------------
+# Only the files the kiosk actually loads. If the fetch fails we keep the local
+# copy so the kiosk still starts (offline-tolerant).
+sync_from_live() {
+  command -v curl >/dev/null 2>&1 || { log "curl not found; using local files"; return 0; }
+  local tmp
+  tmp="$(mktemp)"
+  local ok=0
+  for f in kiosk/walkin.html kiosk/README-PI.md frontend_config.js; do
+    if curl -fsS --max-time 20 "${LIVE_BASE}/${f}" -o "$tmp" 2>/dev/null && [ -s "$tmp" ]; then
+      if ! cmp -s "$tmp" "${APP_DIR}/${f}" 2>/dev/null; then
+        if cp "$tmp" "${APP_DIR}/${f}" 2>/dev/null; then
+          log "updated ${f} from live site"
+        fi
+      fi
+      ok=1
+    fi
+  done
+  rm -f "$tmp"
+  [ "$ok" = 1 ] || log "live sync unavailable; using local copy"
+}
+
+log "syncing kiosk files from ${LIVE_BASE}"
+sync_from_live
 
 # --- locate Chromium ---------------------------------------------------------
 if [ -z "$CHROMIUM" ]; then
@@ -60,6 +90,9 @@ exec "$CHROMIUM" \
   --touch-events=enabled \
   --autoplay-policy=no-user-gesture-required \
   --use-fake-ui-for-media-stream \
+  --disable-application-cache \
+  --disk-cache-size=1 \
+  --media-cache-size=1 \
   --window-position=0,0 \
   --window-size=1280,800 \
   --user-data-dir=/tmp/printkiosk-chrome \

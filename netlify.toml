@@ -14,6 +14,25 @@
     Access-Control-Allow-Methods = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
     Access-Control-Allow-Headers = "Content-Type, Authorization, X-Session-Token"
 
+# ── Kiosk + pages: never cache HTML, so a redeploy is picked up at once ──
+[[headers]]
+  for = "/kiosk/*"
+  [headers.values]
+    Cache-Control = "no-cache, no-store, must-revalidate"
+    Pragma = "no-cache"
+
+[[headers]]
+  for = "/admin/*"
+  [headers.values]
+    Cache-Control = "no-cache, no-store, must-revalidate"
+    Pragma = "no-cache"
+
+[[headers]]
+  for = "/website/*.html"
+  [headers.values]
+    Cache-Control = "no-cache, no-store, must-revalidate"
+    Pragma = "no-cache"
+
 # ── PWA: never cache the service worker so updates apply ─────
 [[headers]]
   for = "/sw.js"

@@ -15,6 +15,11 @@ const PRICE_COLOR_PER_PAGE = 1.10;
 const PRICE_A3_MULTIPLIER = 2.0;
 const PRICE_DOUBLE_SIDED_MULTIPLIER = 0.7;
 
+// Bumped whenever the kiosk front-end changes. The kiosk compares this against
+// the version it was loaded with and reloads itself, so an unattended screen
+// never keeps running a stale copy of walkin.html.
+const APP_VERSION = '2026.10.10-3';
+
 const ALLOWED_EXTENSIONS = ['pdf', 'doc', 'docx', 'jpg', 'jpeg', 'png'];
 
 const SMTP_HOST = process.env.SMTP_HOST || 'smtp.gmail.com';
@@ -426,7 +431,7 @@ module.exports = {
   SUPABASE_URL, SUPABASE_KEY, SUPABASE_REST_URL,
   SESSION_DURATION, PRICE_BW_PER_PAGE, PRICE_COLOR_PER_PAGE,
   PRICE_A3_MULTIPLIER, PRICE_DOUBLE_SIDED_MULTIPLIER, ALLOWED_EXTENSIONS,
-  NOTIFICATION_SECRET,
+  NOTIFICATION_SECRET, APP_VERSION,
   SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM_NAME,
   VERIFICATION_CODE_LENGTH, VERIFICATION_CODE_TTL,
   corsHeaders, json, err, supabaseRequest, generateJobId,

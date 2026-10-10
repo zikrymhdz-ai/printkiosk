@@ -393,6 +393,9 @@ function throttledUnknownLog(distance) {
 }
 
 /* ===== REMOTE KIOSK CONTROL (admin) ===== */
+// Must match APP_VERSION in netlify/functions/_shared.js. If the deployed
+// version differs, the kiosk reloads itself so it never runs a stale page.
+var KIOSK_APP_VERSION = '2026.10.10-3';
 var kioskState = { face_login_enabled: true, maintenance_mode: false, maintenance_message: '' };
 var kioskSettingsTimer = null;
 var cameraStoppedForMaint = false;
@@ -436,10 +439,26 @@ function applyKioskSettings(s) {
 }
 
 function startKioskSettingsPolling() {
+  var reloading = false;
   var poll = function() {
     fetch(API('data', 'kiosk-settings'), { cache: 'no-store' })
       .then(function(r) { return r.json(); })
-      .then(function(d) { if (d && d.success && d.settings) applyKioskSettings(d.settings); })
+      .then(function(d) {
+        if (!d || !d.success) return;
+
+        // Self-heal: a newer build is deployed -> pick it up automatically.
+        if (d.app_version && d.app_version !== KIOSK_APP_VERSION) {
+          if (!reloading) {
+            reloading = true;
+            piLog('new kiosk version ' + d.app_version + ' - reloading');
+            try { localStorage.setItem('kiosk_reload_at', String(Date.now())); } catch (e) {}
+            location.reload();
+          }
+          return;
+        }
+
+        if (d.settings) applyKioskSettings(d.settings);
+      })
       .catch(function() {});
   };
   poll();
