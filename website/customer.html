@@ -101,6 +101,7 @@
   .rsx-item.rsx-fab svg { stroke: #fff; width: 24px; height: 24px; }
   .rsx-item.rsx-fab.active svg { transform: none; }
   .rsx-item.rsx-fab .label { display: none; }
+  @keyframes spin { to { transform: rotate(360deg); } }
 </style>
 </head>
 <body>
@@ -355,8 +356,14 @@
                   <p class="text-xs text-muted" style="margin-top:4px;">10 coins = RM 0.10 discount</p>
                 </div>
               </div>
-              <button class="btn btn-primary btn-block" style="margin-top:16px;" onclick="confirmPayment()" id="confirmPayBtn">Confirm Payment</button>
-              <button class="btn btn-block" style="margin-top:8px; background:var(--gray-100); color:var(--primary-dark);" onclick="simulatePayment()">Simulate Payment (test)</button>
+              <div id="confirmingBox" style="display:none; margin-top:16px; padding:16px; background:var(--primary-light); border:1px solid var(--primary); border-radius:var(--radius); text-align:center;">
+                <div class="flex-center" style="gap:10px; justify-content:center;">
+                  <span class="spinner" style="width:20px; height:20px; border:3px solid var(--primary); border-top-color:transparent; border-radius:50%; display:inline-block; animation:spin 0.8s linear infinite;"></span>
+                  <span style="font-weight:600; color:var(--primary-dark);">Confirming payment…</span>
+                </div>
+                <p class="text-sm text-muted" style="margin-top:8px;" id="confirmingHint">Please wait while we verify your payment. This can take a few seconds.</p>
+              </div>
+              <button class="btn btn-primary btn-block" style="margin-top:16px;" onclick="checkPaymentStatus()" id="checkPayBtn">I&apos;ve Paid — Check Status</button>
               <div style="margin-top:12px;">
                 <button class="btn btn-secondary btn-block" onclick="cancelPayment()">Cancel</button>
               </div>
@@ -1213,7 +1220,8 @@ async function redeemCoins() {
   document.getElementById('coinBalance').textContent = '-';
   document.getElementById('useCoins').checked = false;
   document.getElementById('redeemSection').style.display = 'none';
-  document.getElementById('confirmPayBtn').disabled = false;
+  var cpb = document.getElementById('checkPayBtn'); if (cpb) cpb.disabled = false;
+  var cbx = document.getElementById('confirmingBox'); if (cbx) cbx.style.display = 'none';
   btn.disabled = false;
   btn.textContent = 'Apply';
   loadCoinBalance();
@@ -1382,7 +1390,8 @@ async function placeOrder() {
   document.getElementById('payTotal').textContent = 'RM ' + totalPrice.toFixed(2);
   document.getElementById('payEarnCoins').textContent = pendingUploadJobs.length;
   document.getElementById('payAmountPost').textContent = 'RM ' + totalPrice.toFixed(2);
-  document.getElementById('confirmPayBtn').disabled = false;
+  var cpb = document.getElementById('checkPayBtn'); if (cpb) cpb.disabled = false;
+  var cbx = document.getElementById('confirmingBox'); if (cbx) cbx.style.display = 'none';
   loadJobs();
   btn.disabled = false;
   btn.textContent = 'Upload & Get PIN';
@@ -1412,45 +1421,6 @@ function resetUpload() {
   loadJobs();
 }
 
-async function simulatePayment() {
-  if (!currentJobId) { alert('No order to pay'); return; }
-  const btn = document.getElementById('confirmPayBtn');
-  btn.disabled = true;
-  btn.textContent = 'Processing...';
-
-  const job = uploadedJobs.find(j => j.job_id === currentJobId);
-  const ids = String(currentJobId).split(',').map(function(s) { return s.trim(); }).filter(Boolean);
-  let paidAll = true;
-
-  for (let i = 0; i < ids.length; i++) {
-    try {
-      const r = await fetch(API('payment', 'simulate'), {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ job_id: ids[i] })
-      });
-      const d = await r.json();
-      if (!(d && d.success)) paidAll = false;
-    } catch (e) { paidAll = false; }
-  }
-
-  let serverJobs = [];
-  ids.forEach(function(id) {
-    const lj = uploadedJobs.find(function(l) { return l.job_id === id; });
-    serverJobs.push(lj || (job ? { job_id: id, print_pin: job.print_pin, total_price: job.total_price, pages: job.pages, copies: job.copies, file_name: job.file_name } : { job_id: id }));
-  });
-
-  if (job) {
-    job.paid = paidAll;
-    job.status = paidAll ? 'ready_to_print' : 'pending';
-    localStorage.setItem('uploadedJobs', JSON.stringify(uploadedJobs));
-  }
-
-  showReceipt(serverJobs, job);
-  loadJobs();
-  btn.disabled = false;
-  btn.textContent = 'Confirm Payment';
-}
-
 function showReceipt(serverJobs, job) {
   document.getElementById('step3Pay').style.display = 'none';
   document.getElementById('step3Post').style.display = 'block';
@@ -1475,64 +1445,141 @@ function showReceipt(serverJobs, job) {
   document.getElementById('paymentMsg').textContent = 'Your print job is ready! Use the PIN at the kiosk.';
 }
 
-async function confirmPayment() {
-  if (!currentJobId) { alert('No order to pay'); return; }
-  const btn = document.getElementById('confirmPayBtn');
-  btn.disabled = true;
-  btn.textContent = 'Processing...';
+// Wait for the shop's Payment Watcher to detect the real DuitNow/TnG payment.
+// The watcher signs a notification and posts it to the backend, which flips the
+// matching pending job to ready_to_print. We simply poll until that happens - we
+// never mark the job paid from the browser.
+var payPollTimer = null;
 
-  const job = uploadedJobs.find(j => j.job_id === currentJobId);
-  let serverJobs = pendingUploadJobs.length ? pendingUploadJobs : (job ? (job.server_jobs || []) : []);
+function setConfirming(on, hint) {
+  var box = document.getElementById('confirmingBox');
+  var btn = document.getElementById('checkPayBtn');
+  if (box) box.style.display = on ? 'block' : 'none';
+  if (btn) { btn.disabled = !!on; btn.style.opacity = on ? '0.6' : '1'; }
+  var h = document.getElementById('confirmingHint');
+  if (h && hint) h.textContent = hint;
+}
+
+function stopPayPolling() {
+  if (payPollTimer) { clearInterval(payPollTimer); payPollTimer = null; }
+  setConfirming(false);
+}
+
+function getPayTargetIds() {
+  var job = uploadedJobs.find(function(j) { return j.job_id === currentJobId; });
+  var serverJobs = pendingUploadJobs.length ? pendingUploadJobs
+    : (job ? (job.server_jobs || []) : []);
   if (!serverJobs.length && job) {
     var ids = String(job.job_id || '').split(',').map(function(s) { return s.trim(); }).filter(Boolean);
     serverJobs = ids.map(function(id) {
-      return uploadedJobs.find(function(l) { return l.job_id === id; }) || { job_id: id, print_pin: job.print_pin, total_price: job.total_price, pages: job.pages, copies: job.copies, file_name: job.file_name };
+      return uploadedJobs.find(function(l) { return l.job_id === id; })
+        || { job_id: id, print_pin: job.print_pin, total_price: job.total_price,
+             pages: job.pages, copies: job.copies, color_mode: job.color_mode, file_name: job.file_name };
     });
   }
   if (!serverJobs.length && currentJobId) {
-    serverJobs = [{ job_id: currentJobId, print_pin: job ? job.print_pin : '', total_price: job ? job.total_price : 0 }];
+    serverJobs = [{ job_id: currentJobId, print_pin: job ? job.print_pin : '',
+                    total_price: job ? job.total_price : 0,
+                    pages: job ? job.pages : 0, copies: job ? job.copies : 1,
+                    color_mode: job ? job.color_mode : 'bw', file_name: job ? job.file_name : '' }];
   }
-  let paidAll = true;
+  return serverJobs;
+}
 
-  for (let i = 0; i < serverJobs.length; i++) {
-    let ok = false;
-    try {
-      const r = await fetch(API('payment', 'confirm'), {
-        method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Session-Token': token || '' },
-        body: JSON.stringify({ job_id: serverJobs[i].job_id })
-      });
-      const d = await r.json();
-      ok = !!(d && d.success);
-    } catch (e) { ok = false; }
-    if (!ok) {
-      try {
-        const r2 = await fetch(API('payment', 'simulate'), {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ job_id: serverJobs[i].job_id })
-        });
-        const d2 = await r2.json();
-        ok = !!(d2 && d2.success);
-      } catch (e) { ok = false; }
+function isPaidStatus(s) {
+  return s === 'ready_to_print' || s === 'printing' || s === 'completed' ||
+         s === 'partially_completed' || s === 'refund_issued';
+}
+
+function checkPaymentStatus() {
+  if (!currentJobId) { alert('No order to pay'); return; }
+  var targets = getPayTargetIds();
+  if (!targets.length) { alert('No order to pay'); return; }
+  var wantIds = targets.map(function(t) { return t.job_id; });
+
+  if (payPollTimer) return;
+  setConfirming(true);
+  var waited = 0;
+  var POLL_MS = 3000;
+  var TIMEOUT_MS = 180000;
+
+  var hint = document.getElementById('confirmingHint');
+  var tick = setInterval(function() {
+    waited += POLL_MS;
+    if (hint) {
+      hint.textContent = 'Waiting for your payment to be confirmed… ' +
+        Math.ceil((TIMEOUT_MS - waited) / 1000) + 's remaining. Keep this page open.';
     }
-    if (!ok) paidAll = false;
+    pollOnce(wantIds, targets);
+  }, POLL_MS);
+
+  payPollTimer = tick;
+
+  // stop if the user navigates away
+  pollOnce(wantIds, targets);
+
+  function finishPaid() {
+    if (!payPollTimer) return;
+    clearInterval(payPollTimer);
+    payPollTimer = null;
+    setConfirming(false);
+    var job = uploadedJobs.find(function(j) { return j.job_id === currentJobId; });
+    if (job) {
+      job.paid = true;
+      job.status = 'ready_to_print';
+      localStorage.setItem('uploadedJobs', JSON.stringify(uploadedJobs));
+    }
+    document.getElementById('step3Pay').style.display = 'none';
+    document.getElementById('step3Post').style.display = 'block';
+    showReceipt(targets, job);
+    loadJobs();
   }
 
-  if (job) {
-    job.paid = paidAll;
-    job.status = paidAll ? 'ready_to_print' : 'pending';
-    localStorage.setItem('uploadedJobs', JSON.stringify(uploadedJobs));
-  }
+  function pollOnce(ids, tg) {
+    fetch(API('data', 'get-all-jobs&user_id=' + (user ? user.id : '')))
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        if (!payPollTimer) return;
+        var dbJobs = d.data || [];
+        var allPaid = ids.every(function(id) {
+          var dj = dbJobs.find(function(x) { return x.job_id === id; });
+          return dj && (dj.paid === true || isPaidStatus(dj.status));
+        });
+        if (allPaid) { finishPaid(); return; }
 
-  document.getElementById('step3Pay').style.display = 'none';
-  document.getElementById('step3Post').style.display = 'block';
-  showReceipt(serverJobs, job);
-  loadJobs();
-  btn.disabled = false;
-  btn.textContent = 'Confirm Payment';
+        // merge fresh server data (print_pin etc.)
+        ids.forEach(function(id) {
+          var dj = dbJobs.find(function(x) { return x.job_id === id; });
+          var t = tg.find(function(x) { return x.job_id === id; });
+          if (dj && t) {
+            t.print_pin = dj.print_pin || t.print_pin;
+            t.total_price = dj.total_price != null ? dj.total_price : t.total_price;
+            t.pages = dj.pages != null ? dj.pages : t.pages;
+            t.copies = dj.copies != null ? dj.copies : t.copies;
+            t.color_mode = dj.color_mode || t.color_mode;
+            t.file_name = dj.file_name || t.file_name;
+          }
+        });
+
+        if (waited >= TIMEOUT_MS) {
+          clearInterval(payPollTimer);
+          payPollTimer = null;
+          setConfirming(false, 'We could not confirm the payment yet. If you already paid, make sure you used the correct QR and try again, or contact the shop.');
+        }
+      })
+      .catch(function() {
+        if (waited >= TIMEOUT_MS) {
+          clearInterval(payPollTimer);
+          payPollTimer = null;
+          setConfirming(false, 'Network problem while confirming. Please check your connection and try again.');
+        }
+      });
+  }
 }
 
 function cancelPayment() {
   if (!currentJobId) return;
+  stopPayPolling();
   document.getElementById('step3Pay').style.display = 'none';
   document.getElementById('step3Pre').style.display = 'block';
   document.getElementById('step3Back').style.display = 'flex';
@@ -1674,7 +1721,8 @@ function returnToPayment(jobId, price) {
   document.getElementById('step3Post').style.display = 'none';
   document.getElementById('step3Back').style.display = 'none';
   document.getElementById('payAmountPost').textContent = 'RM ' + price;
-  document.getElementById('confirmPayBtn').disabled = false;
+  var cpb = document.getElementById('checkPayBtn'); if (cpb) cpb.disabled = false;
+  var cbx = document.getElementById('confirmingBox'); if (cbx) cbx.style.display = 'none';
   var job = uploadedJobs.find(j => j.job_id === jobId);
   if (job) {
     document.getElementById('payJobId').textContent = job.job_id;
