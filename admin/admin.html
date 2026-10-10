@@ -58,6 +58,10 @@
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v12"/><path d="M15.5 9.5c0-1.38-1.57-2.5-3.5-2.5S8.5 8.12 8.5 9.5 10.07 12 12 12s3.5 1.12 3.5 2.5-1.57 2.5-3.5 2.5-3.5-1.12-3.5-2.5"/></svg>
       Coin Transactions
     </div>
+    <div class="sidebar-item" onclick="showSection('security', this)">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+      Security &amp; Kiosk
+    </div>
     <div class="sidebar-item" onclick="showSection('users', this)">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
       Users
@@ -178,6 +182,65 @@
       </div>
     </div>
 
+    <!-- Security & Kiosk -->
+    <div id="section-security" style="display:none;">
+      <div class="card animate-fade-in">
+        <div class="card-header">
+          <span class="card-title">Kiosk Control</span>
+          <span class="badge badge-success" id="kioskStateBadge">Operational</span>
+        </div>
+        <p class="text-sm text-muted" style="margin-bottom:16px;">Remotely pause the kiosk screen for maintenance, or switch off face login. The kiosk picks up changes within 15 seconds.</p>
+
+        <div id="kioskMigrationWarn" style="display:none; margin-bottom:16px; padding:12px; background:var(--warning-light); border:1px solid #fde68a; border-radius:var(--radius);">
+          <p class="text-sm" style="color:#92400e;"><strong>Database not migrated yet.</strong> Run <code>migrations/20261010_face_log_kiosk_control.sql</code> in the Supabase SQL editor to enable the audit log and these controls.</p>
+        </div>
+
+        <div class="grid-2">
+          <div>
+            <div class="flex-between" style="padding:12px 0; border-bottom:1px solid var(--gray-100);">
+              <div>
+                <p style="font-weight:600; font-size:14px;">Maintenance Mode</p>
+                <p class="text-xs text-muted">Shows a "Kiosk under maintenance" screen and stops the camera.</p>
+              </div>
+              <label class="toggle"><input type="checkbox" id="kioskMaintenance" onchange="saveKioskSettings()"><span class="toggle-slider"></span></label>
+            </div>
+            <div class="flex-between" style="padding:12px 0;">
+              <div>
+                <p style="font-weight:600; font-size:14px;">Face Login</p>
+                <p class="text-xs text-muted">When off, customers must use QR or PIN instead of their face.</p>
+              </div>
+              <label class="toggle"><input type="checkbox" id="kioskFaceLogin" onchange="saveKioskSettings()"><span class="toggle-slider"></span></label>
+            </div>
+          </div>
+          <div>
+            <div class="form-group">
+              <label>Maintenance Message</label>
+              <textarea id="kioskMessage" class="input" rows="3" placeholder="Kiosk temporarily unavailable for maintenance. Please see staff."></textarea>
+            </div>
+            <button class="btn btn-primary" onclick="saveKioskSettings()">Save Kiosk Settings</button>
+            <p class="text-xs text-muted" id="kioskSavedAt" style="margin-top:8px;"></p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card animate-fade-in" style="margin-top:20px;">
+        <div class="card-header" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+          <span class="card-title">Face Detection Log</span>
+          <input type="date" id="faceLogDate" class="input" style="width:auto;padding:6px 10px;font-size:13px;" onchange="loadFaceDetections()">
+          <button class="btn btn-secondary btn-sm" onclick="document.getElementById('faceLogDate').value=todayStr();loadFaceDetections();">Today</button>
+          <button class="btn btn-secondary btn-sm" onclick="loadFaceDetections()">Refresh</button>
+          <span class="text-xs text-muted" id="faceLogStats"></span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Time</th><th>Result</th><th>Customer</th><th>Distance</th><th>Kiosk</th></tr></thead>
+            <tbody id="faceLogBody"><tr><td colspan="5" style="text-align:center;color:var(--gray-400);padding:24px;">Loading...</td></tr></tbody>
+          </table>
+        </div>
+        <p class="text-xs text-muted" style="margin-top:12px;">Lower face-match distance means a closer match (threshold is 0.600). Unknown faces are recorded at most once every 15 seconds.</p>
+      </div>
+    </div>
+
     <!-- Users -->
     <div id="section-users" style="display:none;">
       <div class="card animate-fade-in">
@@ -212,6 +275,7 @@ async function init() {
     document.getElementById('txDate').value = todayStr();
     document.getElementById('alertDate').value = todayStr();
     document.getElementById('coinDate').value = todayStr();
+    document.getElementById('faceLogDate').value = todayStr();
     loadAll();
     setInterval(loadAll, 30000);
   } catch(e) { window.location.href = '../website/login.html'; }
@@ -248,6 +312,7 @@ function showSection(name, el) {
   if (name === 'coins') loadCoinTransactions();
   if (name === 'users') loadUsers();
   if (name === 'printer') { loadReadyJobs(); }
+  if (name === 'security') { loadKioskSettings(); loadFaceDetections(); }
 }
 
 function loadAll() {
@@ -459,6 +524,113 @@ async function markAllAlertsRead() {
 function statusCls(s) {
   const m = { pending: 'badge-warning', ready_to_print: 'badge-info', printing: 'badge-info', completed: 'badge-success', refund_issued: 'badge-danger' };
   return m[s] || 'badge-gray';
+}
+
+/* ===== SECURITY & KIOSK ===== */
+function loadKioskSettings() {
+  fetch(API('admin', 'kiosk-settings'), { headers: { 'X-Session-Token': token } })
+    .then(r => r.json())
+    .then(d => {
+      if (!d.success || !d.settings) return;
+      const s = d.settings;
+      document.getElementById('kioskMaintenance').checked = !!s.maintenance_mode;
+      document.getElementById('kioskFaceLogin').checked = s.face_login_enabled !== false;
+      document.getElementById('kioskMessage').value = s.maintenance_message || '';
+      document.getElementById('kioskMigrationWarn').style.display = d.unavailable ? 'block' : 'none';
+
+      const badge = document.getElementById('kioskStateBadge');
+      if (s.maintenance_mode) {
+        badge.textContent = 'Maintenance';
+        badge.className = 'badge badge-warning';
+      } else if (s.face_login_enabled === false) {
+        badge.textContent = 'Face Login Off';
+        badge.className = 'badge badge-info';
+      } else {
+        badge.textContent = 'Operational';
+        badge.className = 'badge badge-success';
+      }
+
+      const at = document.getElementById('kioskSavedAt');
+      at.textContent = s.updated_at ? ('Last updated ' + new Date(s.updated_at).toLocaleString() + (s.updated_by ? ' by ' + s.updated_by : '')) : '';
+    })
+    .catch(() => {});
+}
+
+function saveKioskSettings() {
+  const payload = {
+    maintenance_mode: document.getElementById('kioskMaintenance').checked,
+    face_login_enabled: document.getElementById('kioskFaceLogin').checked,
+    maintenance_message: document.getElementById('kioskMessage').value
+  };
+  if (payload.maintenance_mode && !payload.maintenance_message.trim()) {
+    payload.maintenance_message = 'Kiosk temporarily unavailable for maintenance. Please see staff.';
+  }
+
+  fetch(API('admin', 'set-kiosk-settings'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Session-Token': token },
+    body: JSON.stringify(payload)
+  })
+    .then(r => r.json())
+    .then(d => {
+      if (d.success) {
+        loadKioskSettings();
+        alert('Kiosk settings saved. The screen updates within 15 seconds.');
+      } else {
+        alert(d.error || 'Failed to save kiosk settings');
+      }
+    })
+    .catch(() => alert('Failed to save kiosk settings'));
+}
+
+function loadFaceDetections() {
+  const date = document.getElementById('faceLogDate').value;
+  const body = document.getElementById('faceLogBody');
+  fetch(API('admin', 'face-detections&limit=150&date=' + date), { headers: { 'X-Session-Token': token } })
+    .then(r => r.json())
+    .then(d => {
+      if (!d.success) { body.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--gray-400);padding:24px;">Failed to load</td></tr>'; return; }
+
+      if (d.unavailable) {
+        document.getElementById('kioskMigrationWarn').style.display = 'block';
+        body.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--gray-400);padding:24px;">Audit log not available - run the migration SQL</td></tr>';
+        document.getElementById('faceLogStats').textContent = '';
+        return;
+      }
+
+      const rows = d.detections || [];
+      const st = d.stats || {};
+      document.getElementById('faceLogStats').textContent =
+        rows.length ? (st.matched + ' matched / ' + st.unknown + ' unknown') : '';
+
+      if (!rows.length) {
+        body.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--gray-400);padding:24px;">No face detections recorded</td></tr>';
+        return;
+      }
+
+      body.innerHTML = rows.map(function (r) {
+        const matched = !!r.matched;
+        const badge = matched
+          ? '<span class="badge badge-success">Matched</span>'
+          : '<span class="badge badge-warning">Unknown</span>';
+        const who = matched
+          ? (r.user_name || (r.user_id ? r.user_id.slice(0, 8) + '…' : 'Unknown user'))
+          : '<span style="color:var(--gray-400);">Not registered</span>';
+        const dist = (r.confidence != null) ? Number(r.confidence).toFixed(3) : '-';
+        const distCls = (r.confidence != null && matched && Number(r.confidence) < 0.45) ? ' style="color:var(--warning);font-weight:600;"' : '';
+        const when = r.created_at ? new Date(r.created_at).toLocaleString() : '-';
+        return '<tr>'
+          + '<td>' + when + '</td>'
+          + '<td>' + badge + '</td>'
+          + '<td>' + who + '</td>'
+          + '<td' + distCls + '>' + dist + '</td>'
+          + '<td>' + (r.kiosk_id || '-') + '</td>'
+          + '</tr>';
+      }).join('');
+    })
+    .catch(() => {
+      body.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--gray-400);padding:24px;">Failed to load</td></tr>';
+    });
 }
 
 init();

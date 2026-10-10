@@ -85,6 +85,9 @@
   .dot-yellow { background: #eab308; }
   .dot-red { background: #ef4444; }
   .confirm-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.85); display: flex; align-items: center; justify-content: center; z-index: 200; }
+  /* Admin disabled face login at the kiosk. */
+  .cam-box.face-login-off, #camBox.face-login-off { opacity: 0.4; filter: grayscale(1); }
+  body.maintenance-active #camBox, body.maintenance-active .kiosk-actions { pointer-events: none; }
   .confirm-card { background: #1e293b; border-radius: 24px; padding: 32px; text-align: center; max-width: 360px; width: 90%; border: 1px solid #334155; }
   .confirm-avatar { width: 72px; height: 72px; border-radius: 50%; background: linear-gradient(135deg, #3b82f6, #7c3aed); display: flex; align-items: center; justify-content: center; font-size: 32px; font-weight: 700; margin: 0 auto 12px; color: white; box-shadow: 0 4px 16px rgba(59,130,246,0.3); }
   .job-card { background: #1e293b; border-radius: 16px; padding: 20px; margin-top: 12px; border: 1px solid #334155; text-align:left; }
@@ -243,6 +246,17 @@
   </div>
 </div>
 
+<div id="maintOverlay" class="confirm-overlay hidden" style="background:#0f172a;">
+  <div class="confirm-card" style="text-align:center; max-width:420px;">
+    <div style="width:56px; height:56px; border-radius:50%; background:var(--warning); display:flex; align-items:center; justify-content:center; margin:0 auto 16px;">
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5"><path d="M12 9v4M12 17h.01"/><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg>
+    </div>
+    <h2 style="font-size:22px; font-weight:700; margin-bottom:8px; color:#fff;">Kiosk Under Maintenance</h2>
+    <p id="maintMsg" style="font-size:15px; color:#cbd5e1; line-height:1.6;">Kiosk temporarily unavailable for maintenance. Please see staff.</p>
+    <p style="font-size:12px; color:#64748b; margin-top:16px;">This screen is controlled from the admin dashboard.</p>
+  </div>
+</div>
+
 <div id="jobsOverlay" class="confirm-overlay hidden">
   <div class="confirm-card" style="text-align:left; max-height:80vh; overflow-y:auto;">
     <p style="color:#9ca3af; margin-bottom:4px; font-size:14px;">Welcome back,</p>
@@ -348,6 +362,80 @@ function piLog(msg) {
   if (t && msg) t.textContent = msg;
 }
 
+/* ===== SECURITY AUDIT LOG =====
+ * Every face scan the kiosk performs is posted to the backend so the admin
+ * can review who used face login at the kiosk. Unknown faces are throttled
+ * so a person standing in front of the camera cannot flood the table. */
+var KIOSK_ID = 'kiosk-1';
+var lastUnknownLog = 0;
+var UNKNOWN_LOG_INTERVAL_MS = 15000;
+
+function logFaceDetection(userId, distance, matched) {
+  try {
+    fetch(API('data', 'log-face-detection'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        user_id: userId || null,
+        confidence: (typeof distance === 'number' && isFinite(distance)) ? distance : null,
+        matched: !!matched,
+        kiosk_id: KIOSK_ID
+      })
+    }).catch(function() {});
+  } catch (e) { /* never let audit logging break the kiosk */ }
+}
+
+function throttledUnknownLog(distance) {
+  var now = Date.now();
+  if (now - lastUnknownLog < UNKNOWN_LOG_INTERVAL_MS) return;
+  lastUnknownLog = now;
+  logFaceDetection(null, distance, false);
+}
+
+/* ===== REMOTE KIOSK CONTROL (admin) ===== */
+var kioskState = { face_login_enabled: true, maintenance_mode: false, maintenance_message: '' };
+var kioskSettingsTimer = null;
+
+function applyKioskSettings(s) {
+  kioskState = s || kioskState;
+  var overlay = document.getElementById('maintOverlay');
+  if (!overlay) return;
+
+  if (kioskState.maintenance_mode) {
+    var msg = document.getElementById('maintMsg');
+    if (msg) msg.textContent = kioskState.maintenance_message || 'Kiosk temporarily unavailable.';
+    overlay.classList.remove('hidden');
+    document.body.classList.add('maintenance-active');
+    // Freeze the camera so nothing happens behind the maintenance screen.
+    if (typeof stopCamera === 'function') { try { stopCamera(); } catch (e) {} }
+  } else {
+    overlay.classList.add('hidden');
+    document.body.classList.remove('maintenance-active');
+  }
+
+  // Face login can be disabled independently of maintenance mode.
+  var box = document.getElementById('camBox');
+  var status = document.getElementById('faceStatusText');
+  if (!kioskState.face_login_enabled) {
+    if (box) box.classList.add('face-login-off');
+    if (status && !kioskState.maintenance_mode) status.textContent = 'Face login disabled by admin - use QR or PIN';
+  } else if (box) {
+    box.classList.remove('face-login-off');
+  }
+}
+
+function startKioskSettingsPolling() {
+  var poll = function() {
+    fetch(API('data', 'kiosk-settings'))
+      .then(function(r) { return r.json(); })
+      .then(function(d) { if (d && d.success && d.settings) applyKioskSettings(d.settings); })
+      .catch(function() {});
+  };
+  poll();
+  if (kioskSettingsTimer) clearInterval(kioskSettingsTimer);
+  kioskSettingsTimer = setInterval(poll, 15000);
+}
+
 function initPiKiosk() {
   document.body.classList.add('pi-kiosk');
 
@@ -405,6 +493,8 @@ function isIdleFor(ms) { return (Date.now() - lastInteraction) > ms; }
 
 window.addEventListener('load', async () => {
   if (window.IS_RPI) initPiKiosk();
+  // Let the admin pause the kiosk / disable face login remotely.
+  startKioskSettingsPolling();
 
   async function initBackend() {
     // Pi 4 runs ARMv7/A53 cores with no reliable WebGL in Chromium and no wasm SIMD,
@@ -655,10 +745,14 @@ async function startFaceDetection() {
               document.getElementById('confirmName').textContent = matchedUser.name;
               document.getElementById('confirmCoins').textContent = matchedUser.coins + ' coins';
               document.getElementById('confirmOverlay').classList.remove('hidden');
+              // Audit: record the successful match for the admin security log.
+              logFaceDetection(matchedUser.id, match.distance, true);
             }
             animFrameId = requestAnimationFrame(detect);
             return;
           }
+          // A face is present but nobody registered - record it (throttled).
+          throttledUnknownLog(match.distance);
           document.getElementById('faceStatusText').textContent = 'Scanning for registered face...';
         } else {
           document.getElementById('faceStatusText').textContent = matcher ? 'Scanning...' : 'Face detected (no registered users)';

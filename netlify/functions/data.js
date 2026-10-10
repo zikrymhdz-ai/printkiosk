@@ -17,6 +17,9 @@ exports.handler = async (event) => {
   if (event.httpMethod === 'POST' && action === 'submit-report') {
     return await handleSubmitReport(event);
   }
+  if (event.httpMethod === 'POST' && action === 'log-face-detection') {
+    return await handleLogFaceDetection(event);
+  }
 
   switch (action) {
     case 'get-jobs': {
@@ -40,6 +43,11 @@ exports.handler = async (event) => {
         'order': 'created_at.desc'
       });
       return json({ success: true, data: result.error ? [] : result.data });
+    }
+
+    case 'kiosk-settings': {
+      const s = await getKioskSettings();
+      return json({ success: true, settings: s });
     }
 
     case 'get-face-users': {
@@ -73,6 +81,74 @@ exports.handler = async (event) => {
       return err('Invalid action');
   }
 };
+
+// Default kiosk behaviour if the settings table has not been migrated yet.
+const DEFAULT_KIOSK_SETTINGS = {
+  face_login_enabled: true,
+  maintenance_mode: false,
+  maintenance_message: 'Kiosk temporarily unavailable for maintenance. Please see staff.'
+};
+
+async function getKioskSettings() {
+  const result = await supabaseRequest('GET', '/kiosk_settings', null, {
+    'id': 'eq.default', 'select': '*', 'limit': '1'
+  });
+  if (!result.error && result.data && result.data.length > 0) {
+    const row = result.data[0];
+    return {
+      face_login_enabled: row.face_login_enabled !== false,
+      maintenance_mode: !!row.maintenance_mode,
+      maintenance_message: row.maintenance_message || DEFAULT_KIOSK_SETTINGS.maintenance_message,
+      updated_at: row.updated_at || null
+    };
+  }
+  return Object.assign({}, DEFAULT_KIOSK_SETTINGS);
+}
+
+// The kiosk posts every face scan so the admin can audit who used face login.
+async function handleLogFaceDetection(event) {
+  let body;
+  try { body = JSON.parse(event.body || '{}'); } catch (e) { return err('Bad JSON body'); }
+
+  const matched = !!body.matched;
+  const userId = body.user_id || null;
+  const confidence = Number.isFinite(parseFloat(body.confidence)) ? parseFloat(body.confidence) : null;
+
+  // Resolve the display name server-side so the kiosk cannot spoof it.
+  let userName = '';
+  if (matched && userId) {
+    const u = await supabaseRequest('GET', '/users', null, {
+      'id': 'eq.' + userId, 'select': 'name', 'limit': '1'
+    });
+    if (!u.error && u.data && u.data.length > 0) userName = u.data[0].name;
+  }
+
+  const result = await supabaseRequest('POST', '/face_detections', {
+    user_id: userId,
+    user_name: userName,
+    matched: matched,
+    confidence: confidence,
+    kiosk_id: String(body.kiosk_id || 'kiosk-1').slice(0, 40),
+    source: 'kiosk'
+  });
+
+  if (result.error) {
+    // Table not migrated yet - never break the kiosk over an audit log.
+    return json({ success: false, logged: false, error: 'Audit log unavailable' });
+  }
+
+  // Successful face matches also raise an alert so they stand out on the dashboard.
+  if (matched && userName) {
+    await supabaseRequest('POST', '/alerts', {
+      type: 'face_login',
+      message: 'Face login detected for ' + userName + (confidence != null ? ' (distance ' + confidence.toFixed(3) + ')' : ''),
+      severity: 'info',
+      is_read: false
+    });
+  }
+
+  return json({ success: true, logged: true });
+}
 
 async function handleCompleteJob(event) {
   const body = JSON.parse(event.body || '{}');

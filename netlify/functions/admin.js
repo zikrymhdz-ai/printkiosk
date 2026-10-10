@@ -19,6 +19,8 @@ exports.handler = async (event) => {
       case 'coin-transactions': return getCoinTransactions(url);
       case 'all-users': return getAllUsers();
       case 'viewer-data': return getViewerData();
+      case 'face-detections': return getFaceDetections(url);
+      case 'kiosk-settings': return getKioskSettingsAdmin();
       default: return err('Invalid action');
     }
   } else if (event.httpMethod === 'POST') {
@@ -26,6 +28,7 @@ exports.handler = async (event) => {
       case 'mark-alert-read': return markAlertRead(event);
       case 'mark-all-alerts-read': return markAllAlertsRead();
       case 'delete-user': return deleteUser(event);
+      case 'set-kiosk-settings': return setKioskSettingsAdmin(event, session);
       default: return err('Invalid action');
     }
   }
@@ -263,4 +266,114 @@ async function markAllAlertsRead() {
   }
 
   return json({ success: true, count: (result.data || []).length });
+}
+
+/* ===== FACE DETECTION AUDIT LOG ===== */
+async function getFaceDetections(url) {
+  const limit = Math.min(200, Math.max(1, parseInt(url.searchParams.get('limit') || '100', 10)));
+  const dateStr = url.searchParams.get('date') || '';
+
+  const params = {
+    'select': 'id,user_id,user_name,matched,confidence,kiosk_id,created_at',
+    'order': 'created_at.desc',
+    'limit': String(limit)
+  };
+  if (dateStr) params['created_at'] = 'gte.' + dateStr + 'T00:00:00Z';
+
+  const result = await supabaseRequest('GET', '/face_detections', null, params);
+
+  // Table not migrated yet - show an empty log instead of an error.
+  if (result.error) {
+    return json({ success: true, detections: [], unavailable: true });
+  }
+
+  const detections = result.data || [];
+  return json({
+    success: true,
+    detections: detections,
+    stats: {
+      total: detections.length,
+      matched: detections.filter(d => d.matched).length,
+      unknown: detections.filter(d => !d.matched).length
+    }
+  });
+}
+
+/* ===== REMOTE KIOSK CONTROL ===== */
+async function getKioskSettingsAdmin() {
+  const result = await supabaseRequest('GET', '/kiosk_settings', null, {
+    'id': 'eq.default', 'select': '*', 'limit': '1'
+  });
+
+  if (result.error) {
+    return json({
+      success: true,
+      unavailable: true,
+      settings: {
+        face_login_enabled: true,
+        maintenance_mode: false,
+        maintenance_message: 'Kiosk temporarily unavailable for maintenance. Please see staff.'
+      }
+    });
+  }
+
+  const row = (result.data && result.data[0]) || null;
+  return json({
+    success: true,
+    unavailable: false,
+    settings: {
+      face_login_enabled: row ? row.face_login_enabled !== false : true,
+      maintenance_mode: row ? !!row.maintenance_mode : false,
+      maintenance_message: row && row.maintenance_message
+        ? row.maintenance_message
+        : 'Kiosk temporarily unavailable for maintenance. Please see staff.',
+      updated_at: row ? row.updated_at : null,
+      updated_by: row ? row.updated_by : null
+    }
+  });
+}
+
+async function setKioskSettingsAdmin(event, session) {
+  let body;
+  try { body = JSON.parse(event.body || '{}'); } catch (e) { return err('Bad JSON body'); }
+
+  const update = { id: 'default', updated_at: new Date().toISOString(), updated_by: session.users.name || 'admin' };
+
+  if (body.face_login_enabled !== undefined) {
+    update.face_login_enabled = !!body.face_login_enabled;
+  }
+  if (body.maintenance_mode !== undefined) {
+    update.maintenance_mode = !!body.maintenance_mode;
+  }
+  if (body.maintenance_message !== undefined) {
+    const msg = String(body.maintenance_message || '').slice(0, 300);
+    update.maintenance_message = msg;
+  }
+
+  if (Object.keys(update).length <= 3) return err('No settings supplied');
+
+  let result = await supabaseRequest('PATCH', '/kiosk_settings?id=eq.default', update);
+  if (result.error) {
+    // Default row may not exist yet.
+    result = await supabaseRequest('POST', '/kiosk_settings', Object.assign({
+      face_login_enabled: true,
+      maintenance_mode: false,
+      maintenance_message: 'Kiosk temporarily unavailable for maintenance. Please see staff.'
+    }, update));
+    if (result.error) return err('Failed to save kiosk settings: ' + (result.message || ''), 500);
+  }
+
+  // Maintenance changes are audit-worthy.
+  if (update.maintenance_mode !== undefined || update.face_login_enabled !== undefined) {
+    await supabaseRequest('POST', '/alerts', {
+      type: 'kiosk_control',
+      message: 'Kiosk settings updated by ' + update.updated_by +
+        (update.maintenance_mode !== undefined ? ' - maintenance mode ' + (update.maintenance_mode ? 'ON' : 'OFF') : '') +
+        (update.face_login_enabled !== undefined ? ' - face login ' + (update.face_login_enabled ? 'ON' : 'OFF') : ''),
+      severity: update.maintenance_mode ? 'warning' : 'info',
+      is_read: false
+    });
+  }
+
+  return json({ success: true, message: 'Kiosk settings saved' });
 }
