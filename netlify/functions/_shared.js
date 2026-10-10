@@ -8,7 +8,7 @@ const SESSION_DURATION = 86400 * 7;
 
 // Shared secret between the PrintKiosk Payment Watcher APK and this backend,
 // used to sign server-side "payment detected" events (HMAC-SHA256).
-const NOTIFICATION_SECRET = process.env.NOTIFICATION_SECRET || 'pk_notif_v1_9f8b2c7e';
+const NOTIFICATION_SECRET = process.env.NOTIFICATION_SECRET || 'pk_notif_v2_cedae2612263aeb4a55db926e0c2ee3007579c50b21ccc56';
 
 const PRICE_BW_PER_PAGE = 0.20;
 const PRICE_COLOR_PER_PAGE = 1.10;

@@ -137,6 +137,13 @@
   status = 404
   force = true
 
+# ── Block APK downloads (contain the signing secret) ─────────
+[[redirects]]
+  from = "/apk/*.apk"
+  to = "/.netlify/functions/"
+  status = 404
+  force = true
+
 # ── Block uploads directory (user documents) ──────────────────
 [[redirects]]
   from = "/uploads/*"
