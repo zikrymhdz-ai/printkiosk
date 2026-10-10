@@ -121,15 +121,6 @@
     <div id="section-printer" style="display:none;">
       <div class="grid-2">
         <div class="card animate-fade-in">
-          <div class="card-header"><span class="card-title">Simulate Paper Jam</span></div>
-          <div style="display:flex; gap:8px;">
-            <button class="btn btn-sm" onclick="simulateJam('minor')" style="background:var(--warning); color:white;">Jam (Minor)</button>
-            <button class="btn btn-danger btn-sm" onclick="simulateJam('major')">Jam (Major)</button>
-            <button class="btn btn-secondary btn-sm" onclick="clearJam()">Clear Jam</button>
-          </div>
-          <p class="text-xs text-muted" style="margin-top:12px;">Minor jam = auto reprint. Major jam = refund all printing jobs.</p>
-        </div>
-        <div class="card animate-fade-in">
           <div class="card-header"><span class="card-title">Set Supply Levels</span></div>
           <div class="grid-2">
             <div class="form-group"><label>Paper %</label><input type="number" id="setPaper" class="input" value="100" min="0" max="100"></div>
@@ -202,20 +193,20 @@
                 <p style="font-weight:600; font-size:14px;">Maintenance Mode</p>
                 <p class="text-xs text-muted">Shows a "Kiosk under maintenance" screen and stops the camera.</p>
               </div>
-              <label class="toggle"><input type="checkbox" id="kioskMaintenance" onchange="saveKioskSettings()"><span class="toggle-slider"></span></label>
+              <label class="toggle"><input type="checkbox" id="kioskMaintenance" disabled onchange="saveKioskSettings()"><span class="toggle-slider"></span></label>
             </div>
             <div class="flex-between" style="padding:12px 0;">
               <div>
                 <p style="font-weight:600; font-size:14px;">Face Login</p>
                 <p class="text-xs text-muted">When off, customers must use QR or PIN instead of their face.</p>
               </div>
-              <label class="toggle"><input type="checkbox" id="kioskFaceLogin" onchange="saveKioskSettings()"><span class="toggle-slider"></span></label>
+              <label class="toggle"><input type="checkbox" id="kioskFaceLogin" checked disabled onchange="saveKioskSettings()"><span class="toggle-slider"></span></label>
             </div>
           </div>
           <div>
             <div class="form-group">
               <label>Maintenance Message</label>
-              <textarea id="kioskMessage" class="input" rows="3" placeholder="Kiosk temporarily unavailable for maintenance. Please see staff."></textarea>
+              <textarea id="kioskMessage" class="input" rows="3" disabled placeholder="Kiosk temporarily unavailable for maintenance. Please see staff."></textarea>
             </div>
             <button class="btn btn-primary" onclick="saveKioskSettings()">Save Kiosk Settings</button>
             <p class="text-xs text-muted" id="kioskSavedAt" style="margin-top:8px;"></p>
@@ -458,28 +449,6 @@ async function updateJobStatus(jobId, status) {
   } catch(e) { alert('Error'); }
 }
 
-async function simulateJam(type) {
-  try {
-    const res = await fetch(API('printer', 'simulate-jam'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Session-Token': token },
-      body: JSON.stringify({ jam_type: type })
-    });
-    const data = await res.json();
-    if (data.success) { alert(data.message); loadAll(); } else alert(data.error || 'Failed');
-  } catch(e) { alert('Error'); }
-}
-
-async function clearJam() {
-  try {
-    const res = await fetch(API('printer', 'clear-jam'), {
-      method: 'POST', headers: { 'X-Session-Token': token }
-    });
-    const data = await res.json();
-    if (data.success) { alert('Jam cleared'); loadAll(); } else alert(data.error || 'Failed');
-  } catch(e) { alert('Error'); }
-}
-
 async function setSupplyLevels() {
   const data = {
     paper_level: parseInt(document.getElementById('setPaper').value),
@@ -527,8 +496,12 @@ function statusCls(s) {
 }
 
 /* ===== SECURITY & KIOSK ===== */
+// Guard against saving before the current values have been loaded: the
+// checkboxes start unchecked, so an early save would silently disable face login.
+let kioskSettingsLoaded = false;
+
 function loadKioskSettings() {
-  fetch(API('admin', 'kiosk-settings'), { headers: { 'X-Session-Token': token } })
+  return fetch(API('admin', 'kiosk-settings'), { headers: { 'X-Session-Token': token } })
     .then(r => r.json())
     .then(d => {
       if (!d.success || !d.settings) return;
@@ -537,6 +510,10 @@ function loadKioskSettings() {
       document.getElementById('kioskFaceLogin').checked = s.face_login_enabled !== false;
       document.getElementById('kioskMessage').value = s.maintenance_message || '';
       document.getElementById('kioskMigrationWarn').style.display = d.unavailable ? 'block' : 'none';
+      kioskSettingsLoaded = true;
+      document.getElementById('kioskMaintenance').disabled = false;
+      document.getElementById('kioskFaceLogin').disabled = false;
+      document.getElementById('kioskMessage').disabled = false;
 
       const badge = document.getElementById('kioskStateBadge');
       if (s.maintenance_mode) {
@@ -557,6 +534,10 @@ function loadKioskSettings() {
 }
 
 function saveKioskSettings() {
+  if (!kioskSettingsLoaded) {
+    alert('Still loading the current kiosk settings. Please try again in a moment.');
+    return;
+  }
   const payload = {
     maintenance_mode: document.getElementById('kioskMaintenance').checked,
     face_login_enabled: document.getElementById('kioskFaceLogin').checked,

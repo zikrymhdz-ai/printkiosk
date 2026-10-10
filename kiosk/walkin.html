@@ -395,6 +395,7 @@ function throttledUnknownLog(distance) {
 /* ===== REMOTE KIOSK CONTROL (admin) ===== */
 var kioskState = { face_login_enabled: true, maintenance_mode: false, maintenance_message: '' };
 var kioskSettingsTimer = null;
+var cameraStoppedForMaint = false;
 
 function applyKioskSettings(s) {
   kioskState = s || kioskState;
@@ -407,10 +408,20 @@ function applyKioskSettings(s) {
     overlay.classList.remove('hidden');
     document.body.classList.add('maintenance-active');
     // Freeze the camera so nothing happens behind the maintenance screen.
-    if (typeof stopCamera === 'function') { try { stopCamera(); } catch (e) {} }
+    if (!cameraStoppedForMaint && typeof stopCamera === 'function') {
+      try { stopCamera(); cameraStoppedForMaint = true; piLog('maintenance ON: camera stopped'); } catch (e) {}
+    }
   } else {
+    var wasStopped = cameraStoppedForMaint;
     overlay.classList.add('hidden');
     document.body.classList.remove('maintenance-active');
+    // Critical: maintenance stopped the camera, so bring it back when it ends,
+    // otherwise face recognition stays dead until a manual page reload.
+    if (wasStopped) {
+      cameraStoppedForMaint = false;
+      piLog('maintenance OFF: restarting camera');
+      if (typeof restartCamera === 'function') { try { restartCamera(); } catch (e) { piLog('restart failed: ' + e.message); } }
+    }
   }
 
   // Face login can be disabled independently of maintenance mode.
@@ -426,14 +437,22 @@ function applyKioskSettings(s) {
 
 function startKioskSettingsPolling() {
   var poll = function() {
-    fetch(API('data', 'kiosk-settings'))
+    fetch(API('data', 'kiosk-settings'), { cache: 'no-store' })
       .then(function(r) { return r.json(); })
       .then(function(d) { if (d && d.success && d.settings) applyKioskSettings(d.settings); })
       .catch(function() {});
   };
   poll();
   if (kioskSettingsTimer) clearInterval(kioskSettingsTimer);
-  kioskSettingsTimer = setInterval(poll, 15000);
+  kioskSettingsTimer = setInterval(poll, 10000);
+
+  // A kiosk tab can sit in the background or wake from sleep; re-check whenever
+  // it becomes visible again so admin changes are never missed.
+  document.addEventListener('visibilitychange', function() {
+    if (!document.hidden) poll();
+  });
+  window.addEventListener('focus', poll);
+  window.addEventListener('pageshow', poll);
 }
 
 function initPiKiosk() {
@@ -940,6 +959,40 @@ function rejectFace() {
 function stopCamera() {
   if (animFrameId) cancelAnimationFrame(animFrameId);
   if (faceStream) faceStream.getTracks().forEach(t => t.stop());
+  faceStream = null;
+}
+
+// Re-acquire the camera after maintenance mode released it. The original stream
+// tracks were stopped, so this must call getUserMedia again.
+async function restartCamera() {
+  if (kioskState && kioskState.maintenance_mode) return;
+  if (!modelsLoaded) return;
+
+  try {
+    const camW = window.IS_RPI ? 480 : 640;
+    faceStream = await navigator.mediaDevices.getUserMedia({
+      video: { width: { ideal: camW }, height: { ideal: 480 }, facingMode: 'user' },
+      audio: false
+    });
+    const video = document.getElementById('kioskCam');
+    if (!video) return;
+    video.srcObject = faceStream;
+    await video.play();
+    const canvas = document.getElementById('kioskCanvas');
+    if (canvas) {
+      canvas.width = video.videoWidth || camW;
+      canvas.height = video.videoHeight || 480;
+    }
+    var st = document.getElementById('camStatus');
+    if (st) st.innerHTML = '<span class="dot dot-green"></span> Face AI active';
+    var fs = document.getElementById('faceStatusText');
+    if (fs) fs.textContent = 'Looking for face...';
+    startFaceDetection();
+  } catch (e) {
+    var st2 = document.getElementById('camStatus');
+    if (st2) st2.innerHTML = '<span class="dot dot-yellow"></span> Camera blocked';
+    piLog('restart camera FAILED: ' + e.name + ' ' + e.message);
+  }
 }
 
 async function lookupPin() {
