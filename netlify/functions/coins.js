@@ -115,14 +115,35 @@ async function redeemCoins(userId, event) {
     return err('Print job not found', 404);
   }
 
-  const job = jobResult.data[0];
-  const newPrice = Math.max(0, job.total_price - redeemAmount);
+const job = jobResult.data[0];
+
+  // The match fee (a few sen that makes this job's amount unique) must survive a
+  // coin discount - otherwise two jobs could collapse back onto the same amount.
+  const storedBase = parseFloat(job.base_price);
+  const storedFee = parseFloat(job.match_fee);
+  const basePrice = Number.isFinite(storedBase) ? storedBase : parseFloat(job.total_price);
+  const matchFee = Number.isFinite(storedFee) ? storedFee : 0;
+
+  const newBase = Math.max(0, basePrice - redeemAmount);
   const newCoins = currentCoins - coinsNeeded;
 
-  await supabaseRequest('PATCH', '/print_jobs?id=eq.' + job.id, {
-    total_price: newPrice,
-    updated_at: new Date().toISOString()
-  });
+  // Fully covered by coins -> total is RM0.00, so drop the fee and confirm straight away.
+  const fullyCovered = newBase <= 0;
+  const newFee = fullyCovered ? 0 : matchFee;
+  const newPrice = Math.round((newBase + newFee) * 100) / 100;
+
+  const patch = { total_price: newPrice, updated_at: new Date().toISOString() };
+  const extendedPatch = Object.assign({}, patch, { base_price: newBase, match_fee: newFee });
+
+  let patchResult = await supabaseRequest('PATCH', '/print_jobs?id=eq.' + job.id, extendedPatch);
+  if (patchResult.error) {
+    patchResult = await supabaseRequest('PATCH', '/print_jobs?id=eq.' + job.id, patch);
+    if (patchResult.error) return err('Failed to update job price', 500);
+  }
+
+  if (fullyCovered) {
+    await autoConfirmFreeJob(job);
+  }
 
   await supabaseRequest('PATCH', '/users?id=eq.' + userId, { coins: newCoins });
 
@@ -137,9 +158,43 @@ async function redeemCoins(userId, event) {
 
   return json({
     success: true,
-    message: 'Discount applied successfully',
+    message: fullyCovered ? 'Fully covered by coins - no payment needed' : 'Discount applied successfully',
     new_price: newPrice,
+    base_price: newBase,
+    match_fee: newFee,
+    fully_covered: fullyCovered,
     coins_remaining: newCoins,
     coins_spent: coinsNeeded
+  });
+}
+
+// Zero-value job: no QR scan required.
+async function autoConfirmFreeJob(job) {
+  if (job.paid) return;
+
+  const reference = 'FREE-' + job.job_id;
+
+  await supabaseRequest('POST', '/payments', {
+    print_job_id: job.id,
+    user_id: job.user_id,
+    amount: 0,
+    method: 'coins_full',
+    reference,
+    status: 'confirmed',
+    notified_at: new Date().toISOString()
+  });
+
+  await supabaseRequest('PATCH', '/print_jobs?id=eq.' + job.id, {
+    status: 'ready_to_print',
+    paid: true,
+    payment_ref: reference,
+    updated_at: new Date().toISOString()
+  });
+
+  await supabaseRequest('POST', '/alerts', {
+    type: 'payment_received',
+    message: 'Print job ' + job.job_id + ' fully covered by coins - no payment required',
+    severity: 'info',
+    is_read: false
   });
 }

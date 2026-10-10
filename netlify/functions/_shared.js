@@ -282,6 +282,40 @@ function calculatePrice(pages, colorMode, paperSize, sides, copies) {
   return Math.round(total * 100) / 100;
 }
 
+// Payment-watch matching only sees the amount (DuitNow QR carries no job reference).
+// If two unpaid jobs have the identical amount, one paying customer's money could
+// mark the *other* job paid (free print). We therefore nudge every concurrent
+// same-priced job by one cent so each payment maps to exactly one job.
+async function assignUniqueMatchAmount(basePrice) {
+  const baseCents = Math.round(basePrice * 100);
+  if (baseCents <= 0) return { total: 0, fee: 0, base: 0 };
+
+  const result = await supabaseRequest('GET', '/print_jobs', null, {
+    'paid': 'eq.false',
+    'status': 'eq.pending',
+    'select': 'total_price',
+    'limit': '500'
+  });
+
+  const used = new Set();
+  if (!result.error && Array.isArray(result.data)) {
+    for (const j of result.data) {
+      const v = parseFloat(j.total_price);
+      if (!Number.isNaN(v)) used.add(Math.round(v * 100));
+    }
+  }
+
+  for (let k = 0; k <= 9; k++) {
+    const cents = baseCents + k;
+    if (!used.has(cents)) {
+      return { total: cents / 100, fee: k / 100, base: baseCents / 100 };
+    }
+  }
+
+  // Extremely unlikely: all 10 slots taken. Use the top slot.
+  return { total: (baseCents + 9) / 100, fee: 0.09, base: baseCents / 100 };
+}
+
 async function supabaseStorageUpload(bucket, path, fileBuffer, contentType) {
   const url = SUPABASE_URL + '/storage/v1/object/' + bucket + '/' + path;
   const headers = {
@@ -396,7 +430,7 @@ module.exports = {
   SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM_NAME,
   VERIFICATION_CODE_LENGTH, VERIFICATION_CODE_TTL,
   corsHeaders, json, err, supabaseRequest, generateJobId,
-  generateSessionToken, validateSession, calculatePrice,
+  generateSessionToken, validateSession, calculatePrice, assignUniqueMatchAmount,
   generateVerificationCode, isValidGmail, isValidMalaysianPhone,
   normalizePhone, sendVerificationEmail, smtpSend,
   supabaseStorageUpload, supabaseStorageSignedUrl, supabaseStorageDelete, parseMultipartFormData, EXT_MIME_MAP

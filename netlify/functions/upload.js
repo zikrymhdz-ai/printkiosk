@@ -1,4 +1,4 @@
-const { json, err, supabaseRequest, validateSession, generateJobId, calculatePrice, ALLOWED_EXTENSIONS, SUPABASE_URL, supabaseStorageSignedUrl, parseMultipartFormData, EXT_MIME_MAP } = require('./_shared');
+const { json, err, supabaseRequest, validateSession, generateJobId, calculatePrice, assignUniqueMatchAmount, ALLOWED_EXTENSIONS, SUPABASE_URL, supabaseStorageSignedUrl, parseMultipartFormData, EXT_MIME_MAP } = require('./_shared');
 
 exports.handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') return json({});
@@ -159,6 +159,12 @@ async function handleUpload(event) {
     fileType = isImage(ext) ? 'image' : 'document';
 
     if (!printPin) printPin = String(Math.floor(100000 + Math.random() * 900000));
+
+    const pageSpec = String(fields.page_spec || '').trim() || 'all';
+    const selectionMode = pageSpec === 'all' ? 'all' : 'custom';
+    const basePrice = calculatePrice(pages, colorMode, paperSize, sides, copies);
+    const pricing = await assignUniqueMatchAmount(basePrice);
+
     const jobData = {
       job_id: jobId,
       user_id: userId,
@@ -168,20 +174,50 @@ async function handleUpload(event) {
       file_type: fileType,
       pages, color_mode: colorMode, paper_size: paperSize, sides, copies,
       brightness, contrast, crop_mode: cropMode, finish,
-      total_price: calculatePrice(pages, colorMode, paperSize, sides, copies),
+      total_price: pricing.total,
       status: 'pending',
       paid: false,
       print_pin: printPin
     };
 
-    const result = await supabaseRequest('POST', '/print_jobs', jobData);
+    // New columns are optional so the site keeps working before the migration runs.
+    const extended = Object.assign({}, jobData, {
+      page_spec: pageSpec,
+      base_price: pricing.base,
+      match_fee: pricing.fee,
+      selection_mode: selectionMode
+    });
+
+    let result = await supabaseRequest('POST', '/print_jobs', extended);
     if (result.error) {
-      return err('Failed to create print job: ' + (result.message || ''), 500);
+      result = await supabaseRequest('POST', '/print_jobs', jobData);
+      if (result.error) {
+        return err('Failed to create print job: ' + (result.message || ''), 500);
+      }
+    }
+
+    const createdJob = result.data[0];
+
+    // Fully covered by coins (or zero-value) -> no payment needed at all.
+    if (Number(createdJob.total_price) === 0) {
+      await autoConfirmFreeJob(createdJob);
+      const refreshed = await supabaseRequest('GET', '/print_jobs', null, {
+        'job_id': 'eq.' + jobId, 'select': '*', 'limit': '1'
+      });
+      const finalJob = (!refreshed.error && refreshed.data && refreshed.data[0]) ? refreshed.data[0] : createdJob;
+
+      return json({
+        success: true,
+        job: finalJob,
+        print_pin: printPin,
+        auto_paid: true,
+        message: 'Fully covered by coins - no payment needed'
+      });
     }
 
     return json({
       success: true,
-      job: result.data[0],
+      job: finalSafeJob(createdJob, pricing),
       print_pin: printPin,
       message: 'File uploaded successfully'
     });
@@ -217,6 +253,11 @@ async function handleUpload(event) {
 
     const jobId = body.job_id || generateJobId();
 
+    const pageSpec = String(body.page_spec || '').trim() || 'all';
+    const selectionMode = pageSpec === 'all' ? 'all' : 'custom';
+    const basePrice = calculatePrice(pages, colorMode, paperSize, sides, copies);
+    const pricing = await assignUniqueMatchAmount(basePrice);
+
     const jobData = {
       job_id: jobId,
       user_id: userId,
@@ -226,22 +267,110 @@ async function handleUpload(event) {
       file_type: fileType,
       pages, color_mode: colorMode, paper_size: paperSize, sides, copies,
       brightness, contrast, crop_mode: cropMode, finish,
-      total_price: calculatePrice(pages, colorMode, paperSize, sides, copies),
+      total_price: pricing.total,
       status: 'pending',
       paid: false,
       print_pin: printPin
     };
 
-    const result = await supabaseRequest('POST', '/print_jobs', jobData);
+    const extended = Object.assign({}, jobData, {
+      page_spec: pageSpec,
+      base_price: pricing.base,
+      match_fee: pricing.fee,
+      selection_mode: selectionMode
+    });
+
+    let result = await supabaseRequest('POST', '/print_jobs', extended);
     if (result.error) {
-      return err('Failed to create print job: ' + (result.message || ''), 500);
+      result = await supabaseRequest('POST', '/print_jobs', jobData);
+      if (result.error) {
+        return err('Failed to create print job: ' + (result.message || ''), 500);
+      }
+    }
+
+    const createdJob = result.data[0];
+
+    if (Number(createdJob.total_price) === 0) {
+      await autoConfirmFreeJob(createdJob);
+      const refreshed = await supabaseRequest('GET', '/print_jobs', null, {
+        'job_id': 'eq.' + jobId, 'select': '*', 'limit': '1'
+      });
+      const finalJob = (!refreshed.error && refreshed.data && refreshed.data[0]) ? refreshed.data[0] : createdJob;
+
+      return json({
+        success: true,
+        job: finalJob,
+        print_pin: printPin,
+        auto_paid: true,
+        message: 'Fully covered by coins - no payment needed'
+      });
     }
 
     return json({
       success: true,
-      job: result.data[0],
+      job: finalSafeJob(createdJob, pricing),
       print_pin: printPin,
       message: 'File uploaded successfully'
     });
   }
+}
+
+// Attach the pricing breakdown so the client can show "RM0.20 + RM0.01 match fee".
+function finalSafeJob(job, pricing) {
+  return Object.assign({}, job, {
+    base_price: job.base_price != null ? job.base_price : pricing.base,
+    match_fee: job.match_fee != null ? job.match_fee : pricing.fee
+  });
+}
+
+// A job whose total is RM0.00 needs no QR scan - mark it ready immediately.
+async function autoConfirmFreeJob(job) {
+  const reference = 'FREE-' + job.job_id;
+
+  await supabaseRequest('POST', '/payments', {
+    print_job_id: job.id,
+    user_id: job.user_id,
+    amount: 0,
+    method: 'coins_full',
+    reference,
+    status: 'confirmed',
+    notified_at: new Date().toISOString()
+  });
+
+  const updateResult = await supabaseRequest('PATCH', '/print_jobs?id=eq.' + job.id, {
+    status: 'ready_to_print',
+    paid: true,
+    payment_ref: reference,
+    updated_at: new Date().toISOString()
+  });
+
+  if (updateResult.error) return;
+
+  let coinsEarned = 0;
+  if (job.user_id) {
+    coinsEarned = 1;
+    const userResult = await supabaseRequest('GET', '/users', null, {
+      'id': 'eq.' + job.user_id, 'select': 'coins'
+    });
+    if (!userResult.error && userResult.data && userResult.data.length > 0) {
+      const currentCoins = userResult.data[0].coins;
+      const newBalance = currentCoins + coinsEarned;
+      await supabaseRequest('PATCH', '/users?id=eq.' + job.user_id, { coins: newBalance });
+      await supabaseRequest('POST', '/coin_transactions', {
+        user_id: job.user_id,
+        print_job_id: job.id,
+        type: 'earned',
+        amount: coinsEarned,
+        description: 'Print job ' + job.job_id,
+        balance_after: newBalance
+      });
+    }
+  }
+
+  await supabaseRequest('POST', '/alerts', {
+    type: 'payment_received',
+    message: 'Print job ' + job.job_id + ' fully covered by coins - no payment required',
+    severity: 'info',
+    is_read: false
+  });
 }

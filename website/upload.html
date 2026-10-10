@@ -18,6 +18,8 @@
 <script src="../frontend_config.js"></script>
 <script src="pstore.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+<script src="pagerange.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.js"></script>
 <script>pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
 <style>
@@ -110,7 +112,8 @@
         </div>
         <div class="form-group">
           <label>Pages</label>
-          <input type="number" id="pPages" class="input" value="1" min="1" onchange="onSettingChanged()">
+          <input type="text" id="pPages" class="input" value="all" placeholder="all, or 1,3,5 or 1-4" oninput="onPhonePagesInput()" autocomplete="off">
+          <p class="text-xs text-muted" style="margin-top:4px;" id="pPagesHint">Leave blank or type <strong>all</strong> to print every page.</p>
         </div>
       </div>
 
@@ -294,7 +297,7 @@ function addFiles(files) {
     var ext = (file.name.split('.').pop() || '').toLowerCase();
     if (!['pdf','doc','docx','jpg','jpeg','png'].includes(ext)) { errs += (errs ? '\n' : '') + file.name + ': unsupported type'; return; }
     if (file.size > 20 * 1024 * 1024) { errs += (errs ? '\n' : '') + file.name + ': exceeds 20MB'; return; }
-    bulkFiles.push({ file: file, thumb: null, croppedFile: null, settings: { color: 'bw', copies: 1, pages: 1, brightness: 0, contrast: 0, crop_mode: 'none' } });
+    bulkFiles.push({ file: file, thumb: null, croppedFile: null, pdfPages: 0, settings: { color: 'bw', copies: 1, pages: 1, page_spec: 'all', brightness: 0, contrast: 0, crop_mode: 'none' } });
     added++;
   });
   if (errs) alert('Some files were skipped:\n' + errs);
@@ -416,12 +419,55 @@ function removeFromStep2(i) {
   updatePhoneSummary();
 }
 
+function currentPhonePageSelection() {
+  var item = getSelectedItem();
+  var total = item ? (item.pdfPages || phonePdfPages || 0) : 0;
+  var raw = (document.getElementById('pPages') || {}).value || '';
+  var isImage = item ? /\.(jpe?g|png)$/i.test(item.file.name) : false;
+  var r = PKPageRange.parse(raw, total);
+  if (isImage && !r.isAll && r.ok) {
+    r = { ok: true, isAll: true, pages: [], count: 1, label: 'Single image', error: '' };
+  }
+  return r;
+}
+
+function onPhonePagesInput() {
+  updatePhonePagesHint();
+  onSettingChanged();
+}
+
+function updatePhonePagesHint() {
+  var r = currentPhonePageSelection();
+  var hint = document.getElementById('pPagesHint');
+  if (!hint) return;
+  var item = getSelectedItem();
+  var isImage = item ? /\.(jpe?g|png)$/i.test(item.file.name) : false;
+
+  if (isImage) {
+    hint.innerHTML = 'This is an image, so it prints as 1 page.';
+    hint.style.color = '';
+  } else if (!r.ok) {
+    hint.textContent = r.error;
+    hint.style.color = '#dc2626';
+  } else if (r.isAll) {
+    hint.innerHTML = (item && item.pdfPages)
+      ? 'Printing all <strong>' + item.pdfPages + '</strong> pages.'
+      : 'Leave blank or type <strong>all</strong> to print every page.';
+    hint.style.color = '';
+  } else {
+    hint.innerHTML = 'Will print <strong>' + r.count + '</strong> page' + (r.count === 1 ? '' : 's') + ': <strong>' + r.label + '</strong>';
+    hint.style.color = '';
+  }
+}
+
 function saveCurrentSettings() {
   var item = getSelectedItem();
   if (!item) return;
+  var sel = currentPhonePageSelection();
   item.settings.color = document.getElementById('pColorMode').value;
   item.settings.copies = parseInt(document.getElementById('pCopies').value) || 1;
-  item.settings.pages = parseInt(document.getElementById('pPages').value) || 1;
+  item.settings.pages = sel.ok ? (sel.isAll ? (item.pdfPages || 1) : sel.count) : (item.pdfPages || 1);
+  item.settings.page_spec = (sel.ok && !sel.isAll) ? sel.pages.join(',') : 'all';
   item.settings.brightness = parseInt(document.getElementById('pBrightness').value) || 0;
   item.settings.contrast = parseInt(document.getElementById('pContrast').value) || 0;
   item.settings.crop_mode = document.getElementById('pCropMode').value;
@@ -434,13 +480,14 @@ function loadSettingsToUI() {
   var s = item.settings;
   document.getElementById('pColorMode').value = s.color;
   document.getElementById('pCopies').value = s.copies || 1;
-  document.getElementById('pPages').value = s.pages || 1;
+  document.getElementById('pPages').value = (s.page_spec && s.page_spec !== 'all') ? PKPageRange.compress(s.page_spec.split(',').map(Number)) : 'all';
   document.getElementById('pBrightness').value = s.brightness || 0;
   document.getElementById('pBrightnessVal').textContent = s.brightness || 0;
   document.getElementById('pContrast').value = s.contrast || 0;
   document.getElementById('pContrastVal').textContent = s.contrast || 0;
   document.getElementById('pCropMode').value = s.crop_mode || 'none';
   phoneCroppedFile = item.croppedFile || null;
+  updatePhonePagesHint();
   var f = item.file;
   var ext = (f.name.split('.').pop() || '').toLowerCase();
   var isImg = ['jpg','jpeg','png'].includes(ext);
@@ -525,8 +572,10 @@ function initPhonePreview() {
       try {
         phonePdfDoc = await pdfjsLib.getDocument({ data: e.target.result }).promise;
         phonePdfPages = phonePdfDoc.numPages;
-        var pdfPagesVal = parseInt(document.getElementById('pPages').value) || 1;
-        if (pdfPagesVal <= 1 && phonePdfPages > 1) document.getElementById('pPages').value = phonePdfPages;
+        var sel = getSelectedItem();
+        if (sel) { sel.pdfPages = phonePdfPages; sel.settings.page_spec = 'all'; }
+        var pv = (document.getElementById('pPages') || {}).value || '';
+        if (pv.trim() === '' || pv === '1') document.getElementById('pPages').value = 'all';
         phoneCurrentPreviewPage = 1;
         if (phonePdfPages > 1) {
           var nav = document.createElement('div');
@@ -698,12 +747,32 @@ async function submitPhoneUpload() {
 
   try {
     phoneUploadedJobs = [];
+    var phoneAutoPaid = false;
     for (let i = 0; i < bulkFiles.length; i++) {
       btn.textContent = 'Uploading file ' + (i + 1) + ' of ' + bulkFiles.length + '...';
       var item = bulkFiles[i];
       var s = item.settings;
       var upFile = (s.crop_mode === 'manual' && item.croppedFile) ? item.croppedFile : item.file;
       var fileName = upFile.name || 'file';
+
+      // Custom page selection ("1,3,5" / "1-4"): rebuild the PDF with only those pages.
+      var pageSpec = (s.page_spec && s.page_spec !== 'all') ? String(s.page_spec) : 'all';
+      if (pageSpec !== 'all') {
+        var nums = pageSpec.split(',').map(function(n) { return parseInt(n, 10); }).filter(function(n) { return n > 0; });
+        if (nums.length && /\.(pdf)$/i.test(upFile.name)) {
+          try {
+            upFile = await PKPageRange.extractPdfPages(upFile, nums);
+            fileName = upFile.name;
+          } catch (e) {
+            alert('Could not select pages for ' + (item.file.name || 'file') + ': ' + e.message + '\n\nThe full document will be uploaded instead.');
+            pageSpec = 'all';
+          }
+        } else {
+          pageSpec = 'all';
+        }
+      }
+      var pagesCount = (pageSpec !== 'all') ? pageSpec.split(',').filter(Boolean).length : (s.pages || 1);
+
       var data;
       if (IS_NETLIFY) {
         // Signed upload: bytes go directly to Supabase Storage (Netlify's 6MB cap never applies)
@@ -739,7 +808,8 @@ async function submitPhoneUpload() {
             paper_size: 'a4',
             sides: 'single',
             copies: s.copies || 1,
-            pages: s.pages || 1,
+            pages: pagesCount,
+            page_spec: pageSpec,
             brightness: s.brightness || 0,
             contrast: s.contrast || 0,
             crop_mode: s.crop_mode || 'none',
@@ -757,7 +827,8 @@ async function submitPhoneUpload() {
         formData.append('paper_size', 'a4');
         formData.append('sides', 'single');
         formData.append('copies', s.copies || 1);
-        formData.append('pages', s.pages || 1);
+        formData.append('pages', pagesCount);
+        formData.append('page_spec', pageSpec);
         formData.append('brightness', s.brightness || 0);
         formData.append('contrast', s.contrast || 0);
         formData.append('crop_mode', s.crop_mode || 'none');
@@ -771,6 +842,7 @@ async function submitPhoneUpload() {
       }
       if (data.success && data.job) {
         phoneUploadedJobs.push(data.job);
+        if (data.auto_paid) phoneAutoPaid = true;
       } else {
         throw new Error(data.error || 'Upload failed');
       }
@@ -789,6 +861,9 @@ async function submitPhoneUpload() {
   phoneUploadedJobs.forEach(function(j) { totalPages += j.pages; totalCopies += j.copies || 1; totalPrice += parseFloat(j.total_price) || 0; if ((j.color_mode || 'bw') === 'color') hasColor = true; });
   var allJobIds = phoneUploadedJobs.map(function(j) { return j.job_id; });
   phoneCurrentJobId = allJobIds.join(',');
+
+  // Fully covered by coins -> already paid, go straight to the receipt.
+  if (phoneAutoPaid) { showPhoneFreeReceipt(); return; }
   var pinEl = document.getElementById('phonePrintPin');
   var firstPin = phoneUploadedJobs[0].print_pin || orderPin;
   if (firstPin) pinEl.textContent = firstPin;
@@ -877,6 +952,18 @@ async function confirmPhonePayment() {
 
   document.getElementById('phonePaySection').style.display = 'none';
   document.getElementById('phoneReceiptSection').style.display = 'block';
+}
+
+// A job fully covered by coins is already paid - no QR scan needed.
+function showPhoneFreeReceipt() {
+  var totalPrice = 0;
+  phoneUploadedJobs.forEach(function(j) { totalPrice += parseFloat(j.total_price) || 0; });
+  document.getElementById('phoneReceiptJobId').textContent = phoneCurrentJobId || '-';
+  document.getElementById('phoneReceiptFile2').textContent = bulkFiles.length === 1 ? bulkFiles[0].file.name : bulkFiles.length + ' files';
+  document.getElementById('phoneReceiptTotal').textContent = 'RM ' + totalPrice.toFixed(2);
+  document.getElementById('phonePaySection').style.display = 'none';
+  document.getElementById('phoneReceiptSection').style.display = 'block';
+  goStep3();
 }
 
 function cancelPhonePayment() {

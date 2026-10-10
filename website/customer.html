@@ -19,6 +19,8 @@
 <script src="pstore.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script>pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
+<script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+<script src="pagerange.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/dist/face-api.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.js"></script>
 <style>
@@ -222,7 +224,8 @@
             </div>
             <div class="form-group">
               <label>Pages</label>
-              <input type="number" id="pages" class="input" value="1" min="1" max="999" onchange="onSettingChange()">
+              <input type="text" id="pages" class="input" value="all" placeholder="all, or 1,3,5 or 1-4" oninput="onPagesInput()" autocomplete="off">
+              <p class="text-xs text-muted" style="margin-top:4px;" id="pagesHint">Leave blank or type <strong>all</strong> to print every page.</p>
             </div>
             <div id="imageSettings">
               <p class="text-sm text-muted" style="margin-bottom:12px; padding-top:12px; border-top:1px solid var(--gray-100);">Image adjustments (JPG/PNG)</p>
@@ -334,7 +337,9 @@
                 <div class="row"><span>Color</span><span id="payColor" style="font-weight:600;">-</span></div>
                 <div class="row"><span>Copies</span><span id="payCopies" style="font-weight:600;">-</span></div>
                 <div class="row total"><span>Total</span><span id="payTotal" style="color:var(--primary);">RM 0.00</span></div>
+                <div class="row" id="payMatchFeeRow" style="display:none;"><span style="font-size:12px; color:var(--gray-500);">Payment-match fee</span><span id="payMatchFee" style="font-size:12px; color:var(--gray-500);">RM 0.00</span></div>
               </div>
+              <p class="text-xs text-muted" id="payMatchNote" style="display:none; margin-top:6px; text-align:center;">A few sen is added so your payment is linked to your own job, even if others are paying the same amount at the same time.</p>
               <p class="text-sm text-muted" style="margin-top:12px; text-align:center;">You will earn <strong id="payEarnCoins">0</strong> coins</p>
             </div>
             <div class="card" style="text-align:center;">
@@ -663,7 +668,7 @@ function addFiles(files) {
     var ext = f.name.split('.').pop().toLowerCase();
     if (!allowedExts.includes(ext)) { alert(f.name + ': File type not allowed'); continue; }
     if (f.size > maxSize) { alert(f.name + ': File too large (max 20MB)'); continue; }
-    bulkFiles.push({ file: f, thumb: null, settings: { color:'bw', copies:1, pages:1, brightness:0, contrast:0, crop_mode:'none' } });
+    bulkFiles.push({ file: f, thumb: null, croppedFile: undefined, pdfPages: 0, settings: { color:'bw', copies:1, pages:1, page_spec:'all', brightness:0, contrast:0, crop_mode:'none' } });
   }
   renderFileList();
   detectPdfPages();
@@ -679,6 +684,8 @@ function detectPdfPages() {
     reader.onload = async function(e) {
       try {
         var pdf = await pdfjsLib.getDocument({ data: e.target.result }).promise;
+        item.pdfPages = pdf.numPages;
+        item.settings.page_spec = 'all';
         item.settings.pages = pdf.numPages;
         updateSummary();
         if (bulkPreviewIndex === bulkFiles.indexOf(item)) renderFileList();
@@ -686,6 +693,50 @@ function detectPdfPages() {
     };
     reader.readAsArrayBuffer(item.file);
   });
+}
+
+/* Returns the page selection for the currently selected file. */
+function currentPageSelection() {
+  var item = (selectedFileIndex >= 0 && selectedFileIndex < bulkFiles.length) ? bulkFiles[selectedFileIndex] : null;
+  var total = item ? (item.pdfPages || 0) : 0;
+  var raw = (document.getElementById('pages') || {}).value || '';
+  var isImage = item ? /\.(jpe?g|png)$/i.test(item.file.name) : false;
+  var r = PKPageRange.parse(raw, total);
+  if (isImage && !r.isAll && r.ok) {
+    // Images are a single page - a range is meaningless.
+    r = { ok: true, isAll: true, pages: [], count: 1, label: 'Single image', error: '' };
+  }
+  return r;
+}
+
+function onPagesInput() {
+  updatePagesHint();
+  onSettingChange();
+}
+
+function updatePagesHint() {
+  var r = currentPageSelection();
+  var hint = document.getElementById('pagesHint');
+  if (!hint) return;
+
+  var item = (selectedFileIndex >= 0 && selectedFileIndex < bulkFiles.length) ? bulkFiles[selectedFileIndex] : null;
+  var isImage = item ? /\.(jpe?g|png)$/i.test(item.file.name) : false;
+
+  if (isImage) {
+    hint.innerHTML = 'This is an image, so it prints as 1 page.';
+    hint.style.color = '';
+  } else if (!r.ok) {
+    hint.textContent = r.error;
+    hint.style.color = '#dc2626';
+  } else if (r.isAll) {
+    hint.innerHTML = (item && item.pdfPages)
+      ? 'Printing all <strong>' + item.pdfPages + '</strong> pages.'
+      : 'Leave blank or type <strong>all</strong> to print every page.';
+    hint.style.color = '';
+  } else {
+    hint.innerHTML = 'Will print <strong>' + r.count + '</strong> page' + (r.count === 1 ? '' : 's') + ': <strong>' + r.label + '</strong>';
+    hint.style.color = '';
+  }
 }
 
 /* ===== FILE SELECTOR (STEP 2) ===== */
@@ -722,10 +773,12 @@ function selectFile(idx) {
 function saveCurrentSettings() {
   if (selectedFileIndex < 0 || selectedFileIndex >= bulkFiles.length) return;
   var item = bulkFiles[selectedFileIndex];
+  var sel = currentPageSelection();
   item.settings = {
     color: document.getElementById('colorMode').value,
     copies: parseInt(document.getElementById('copies').value) || 1,
-    pages: parseInt(document.getElementById('pages').value) || 1,
+    pages: sel.ok ? (sel.isAll ? (item.pdfPages || 1) : sel.count) : (item.pdfPages || 1),
+    page_spec: (sel.ok && !sel.isAll) ? sel.pages.join(',') : 'all',
     brightness: parseInt(document.getElementById('brightness').value) || 0,
     contrast: parseInt(document.getElementById('contrast').value) || 0,
     crop_mode: document.getElementById('cropMode').value
@@ -742,13 +795,14 @@ function loadSettingsToUI() {
   var f = bulkFiles[selectedFileIndex].file;
   document.getElementById('colorMode').value = s.color;
   document.getElementById('copies').value = s.copies;
-  document.getElementById('pages').value = s.pages;
+  document.getElementById('pages').value = (s.page_spec && s.page_spec !== 'all') ? PKPageRange.compress(s.page_spec.split(',').map(Number)) : 'all';
   document.getElementById('brightness').value = s.brightness;
   document.getElementById('brightnessVal').textContent = s.brightness;
   document.getElementById('contrast').value = s.contrast;
   document.getElementById('contrastVal').textContent = s.contrast;
   document.getElementById('cropMode').value = s.crop_mode;
   document.getElementById('settingsFileName').textContent = f.name;
+  updatePagesHint();
 
   var ext = f.name.split('.').pop().toLowerCase();
   var isImage = ['jpg','jpeg','png'].includes(ext);
@@ -1254,7 +1308,7 @@ async function placeOrder() {
 
   // Bytes go straight to Supabase Storage via a signed URL, so Netlify's 6MB
   // request-body limit never applies. Steps: 1) sign 2) PUT to storage 3) create job row.
-  async function uploadJobNetlify(file, s, orderPin, sessionToken) {
+  async function uploadJobNetlify(file, s, orderPin, sessionToken, pageSpec, pagesCount) {
     var fileName = file.name || 'file';
     var signRes = await fetch(API('upload', 'sign-upload'), {
       method: 'POST',
@@ -1288,7 +1342,8 @@ async function placeOrder() {
         paper_size: 'a4',
         sides: 'single',
         copies: s.copies || 1,
-        pages: s.pages || 1,
+        pages: pagesCount || s.pages || 1,
+        page_spec: pageSpec || 'all',
         brightness: s.brightness || 0,
         contrast: s.contrast || 0,
         crop_mode: s.crop_mode || 'none',
@@ -1301,15 +1356,38 @@ async function placeOrder() {
     return jobD;
   }
 
+  var autoPaidAll = false;
   try {
     for (let i = 0; i < bulkFiles.length; i++) {
       btn.textContent = 'Uploading file ' + (i + 1) + ' of ' + bulkFiles.length + '...';
       const item = bulkFiles[i];
       const s = item.settings;
       var upFile = item.croppedFile || item.file;
+
+      // Custom page selection ("1,3,5" / "1-4"): rebuild the PDF with just those
+      // pages so the shop prints - and we bill for - exactly what was chosen.
+      var pageSpec = (s.page_spec && s.page_spec !== 'all') ? String(s.page_spec) : 'all';
+      if (pageSpec !== 'all') {
+        var nums = pageSpec.split(',').map(function(n) { return parseInt(n, 10); }).filter(function(n) { return n > 0; });
+        if (nums.length && /\.(pdf)$/i.test(upFile.name)) {
+          try {
+            upFile = await PKPageRange.extractPdfPages(upFile, nums);
+          } catch (e) {
+            alert('Could not select pages for ' + (item.file.name || 'file') + ': ' + e.message + '\n\nThe full document will be uploaded instead.');
+            pageSpec = 'all';
+          }
+        } else {
+          pageSpec = 'all';
+        }
+      }
+
+      var pagesCount = (pageSpec !== 'all')
+        ? pageSpec.split(',').filter(Boolean).length
+        : (s.pages || 1);
+
       var d;
       if (IS_NETLIFY) {
-        d = await uploadJobNetlify(upFile, s, orderPin, token);
+        d = await uploadJobNetlify(upFile, s, orderPin, token, pageSpec, pagesCount);
       } else {
         const fd = new FormData();
         var blob = await fileToBlob(upFile);
@@ -1319,7 +1397,8 @@ async function placeOrder() {
         fd.append('paper_size', 'a4');
         fd.append('sides', 'single');
         fd.append('copies', s.copies || 1);
-        fd.append('pages', s.pages || 1);
+        fd.append('pages', pagesCount);
+        fd.append('page_spec', pageSpec);
         fd.append('brightness', s.brightness || 0);
         fd.append('contrast', s.contrast || 0);
         fd.append('crop_mode', s.crop_mode || 'none');
@@ -1335,6 +1414,7 @@ async function placeOrder() {
       }
       if (d.success && d.job) {
         pendingUploadJobs.push(d.job);
+        if (d.auto_paid) autoPaidAll = true;
       } else {
         throw new Error(d.error || 'Upload failed');
       }
@@ -1379,6 +1459,21 @@ async function placeOrder() {
   localStorage.setItem('uploadedJobs', JSON.stringify(uploadedJobs));
   currentJobId = entry.job_id;
 
+  // Fully covered by coins -> nothing to pay, go straight to the PIN screen.
+  if (autoPaidAll) {
+    entry.paid = true;
+    entry.status = 'ready_to_print';
+    localStorage.setItem('uploadedJobs', JSON.stringify(uploadedJobs));
+    document.getElementById('step3Pre').style.display = 'none';
+    document.getElementById('step3Pay').style.display = 'none';
+    document.getElementById('step3Post').style.display = 'block';
+    showReceipt(pendingUploadJobs, entry);
+    var fmsg = document.getElementById('paymentMsg');
+    if (fmsg) fmsg.textContent = 'Fully covered by your coins - no payment needed. Use the PIN at the kiosk.';
+    loadJobs();
+    return;
+  }
+
   document.getElementById('step3Pre').style.display = 'none';
   document.getElementById('step3Pay').style.display = 'block';
   document.getElementById('step3Back').style.display = 'none';
@@ -1390,6 +1485,18 @@ async function placeOrder() {
   document.getElementById('payTotal').textContent = 'RM ' + totalPrice.toFixed(2);
   document.getElementById('payEarnCoins').textContent = pendingUploadJobs.length;
   document.getElementById('payAmountPost').textContent = 'RM ' + totalPrice.toFixed(2);
+
+  // Show the payment-match fee breakdown when the server added one.
+  var totalFee = pendingUploadJobs.reduce(function(a, j) { return a + (parseFloat(j.match_fee) || 0); }, 0);
+  var feeRow = document.getElementById('payMatchFeeRow');
+  var feeNote = document.getElementById('payMatchNote');
+  if (totalFee > 0) {
+    if (feeRow) { feeRow.style.display = 'flex'; document.getElementById('payMatchFee').textContent = '+RM ' + totalFee.toFixed(2); }
+    if (feeNote) feeNote.style.display = 'block';
+  } else {
+    if (feeRow) feeRow.style.display = 'none';
+    if (feeNote) feeNote.style.display = 'none';
+  }
   var cpb = document.getElementById('checkPayBtn'); if (cpb) cpb.disabled = false;
   var cbx = document.getElementById('confirmingBox'); if (cbx) cbx.style.display = 'none';
   loadJobs();
