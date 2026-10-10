@@ -56,7 +56,7 @@ CREATE TABLE payments (
   print_job_id UUID REFERENCES print_jobs(id),
   user_id UUID REFERENCES users(id),
   amount DECIMAL(10,2) NOT NULL,
-  method TEXT NOT NULL DEFAULT 'maybank_qr',
+  method TEXT NOT NULL DEFAULT 'tng_qr',
   reference TEXT,
   status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','confirmed','failed')),
   notified_at TIMESTAMPTZ,

@@ -94,7 +94,7 @@ async function handlePaymentConfirm(event) {
   const job = jobResult.data[0];
   if (job.paid) return json({ success: true, message: 'Print job already paid', job });
 
-  const res = await confirmJobPaid(job, 'maybank_qr', reference);
+  const res = await confirmJobPaid(job, 'tng_qr', reference);
   if (!res.ok) return err(res.error, 500);
 
   return json({
@@ -157,7 +157,7 @@ async function handleNlsReceived(event) {
     return json({ success: true, matched: true, job_id: job.job_id, amount, already: true });
   }
 
-  const res = await confirmJobPaid(job, 'maybank2u_detected', ref || ('DET-' + job.job_id));
+  const res = await confirmJobPaid(job, 'tng_detected', ref || ('DET-' + job.job_id));
   if (!res.ok) return err(res.error, 500);
 
   if (matches.length > 1) {

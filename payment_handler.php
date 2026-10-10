@@ -57,7 +57,7 @@ function handlePaymentConfirm() {
         'print_job_id' => $job['id'],
         'user_id' => $job['user_id'],
         'amount' => $job['total_price'],
-        'method' => 'maybank_qr',
+        'method' => 'tng_qr',
         'reference' => $reference,
         'status' => 'confirmed',
         'notified_at' => date('c')

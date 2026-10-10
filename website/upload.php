@@ -180,7 +180,7 @@
           <div style="display:flex; justify-content:space-between; padding:8px 0 4px; border-top:1px solid var(--gray-200); margin-top:4px;"><span style="font-size:14px; font-weight:600;">Total</span><span style="font-size:16px; font-weight:700; color:var(--primary);" id="phoneAmount">RM 0.00</span></div>
         </div>
 
-        <img src="../maybank_qr.jpeg" alt="Pay" style="width:180px; border-radius:var(--radius); margin-bottom:12px; border:1px solid var(--gray-200);">
+        <img src="../payment_qr.jpeg" alt="DuitNow QR - Touch &apos;n Go eWallet" style="width:180px; border-radius:var(--radius); margin-bottom:12px; border:1px solid var(--gray-200);">
 
         <button class="btn btn-primary btn-block" style="margin-bottom:8px;" onclick="confirmPhonePayment()" id="phoneConfirmPayBtn">Confirm Payment</button>
         <button class="btn btn-secondary btn-block" onclick="cancelPhonePayment()">Cancel</button>
