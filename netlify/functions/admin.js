@@ -42,6 +42,8 @@ exports.handler = async (event) => {
       // page visit or prefetch would otherwise confirm or reverse a payment.
       case 'payment-manual-confirm': return manualConfirmPayment(event, session);
       case 'set-job-paid': return setJobPaidStatus(event, session);
+      case 'delete-print-jobs': return deletePrintJobs(event, session);
+      case 'delete-coin-transactions': return deleteCoinTransactions(event, session);
       default: return err('Invalid action');
     }
   }
@@ -183,7 +185,9 @@ async function getAlerts(url) {
 }
 
 async function getCoinTransactions(url) {
-  const limit = Math.min(parseInt(url.searchParams.get('limit')) || 20, 100);
+  // Raised so the admin can select and clear a meaningful chunk of history in one
+  // pass rather than only the first 100 rows.
+  const limit = Math.min(parseInt(url.searchParams.get('limit')) || 20, 500);
   const date = url.searchParams.get('date') || '';
 
   const params = {
@@ -635,6 +639,120 @@ async function setJobPaidStatus(event, session) {
   });
 
   return json({ success: true, job_id: job.job_id, paid: false });
+}
+
+/* ===== DELETING JOBS AND TRANSACTION HISTORY ===== */
+// Resolve the bucket/path out of a stored file_path. Copied from the customer-side
+// delete so both remove uploads from the bucket rather than orphaning them.
+function storageTarget(filePath) {
+  if (!filePath || filePath.indexOf('/storage/v1/object/') === -1) return null;
+  const storageUrl = filePath.split('/storage/v1/object/')[1];
+  const parts = storageUrl.split('/');
+  if (parts[0] === 'public') return { bucket: parts[1], path: parts.slice(2).join('/') };
+  return { bucket: parts[0], path: parts.slice(1).join('/') };
+}
+
+/**
+ * Delete print jobs, cascading to the rows that point at them.
+ *
+ * payments and coin_transactions both carry print_job_id. Removing the job first
+ * would leave those rows referencing a job that no longer exists, so they go in
+ * the same operation. The uploaded file is removed from storage too - otherwise
+ * every deleted job keeps costing bucket space forever.
+ */
+async function deletePrintJobs(event, session) {
+  let body;
+  try { body = JSON.parse(event.body || '{}'); } catch (e) { return err('Bad JSON body'); }
+
+  let ids = Array.isArray(body.ids) ? body.ids.filter(id => typeof id === 'string' && id.length > 0) : [];
+  if (ids.length > 300) return err('Too many jobs selected', 400);
+
+  let jobs = [];
+  if (!ids.length) {
+    if (!body.all) return err('No jobs selected');
+    const all = await supabaseRequest('GET', '/print_jobs', null, { 'select': 'id', 'limit': '1000' });
+    if (all.error) return err('Could not read jobs', 500);
+    ids = (all.data || []).map(r => r.id);
+    if (!ids.length) return json({ success: true, deleted: 0, message: 'No jobs to delete' });
+  }
+
+  const found = await supabaseRequest('GET', '/print_jobs', null, {
+    'id': 'in.(' + ids.join(',') + ')',
+    'select': 'id,job_id,file_path',
+    'limit': String(ids.length)
+  });
+  if (!found.error) jobs = found.data || [];
+
+  // Cascade first, so nothing is left pointing at a job that is about to vanish.
+  await supabaseRequest('DELETE', '/payments?print_job_id=in.(' + ids.join(',') + ')', null);
+  await supabaseRequest('DELETE', '/coin_transactions?print_job_id=in.(' + ids.join(',') + ')', null);
+
+  const del = await supabaseRequest('DELETE', '/print_jobs?id=in.(' + ids.join(',') + ')', null);
+  if (del.error) return err('Failed to delete jobs', 500);
+
+  let filesRemoved = 0;
+  for (const j of jobs) {
+    const t = storageTarget(j.file_path);
+    if (!t) continue;
+    try { await supabaseStorageDelete(t.bucket, t.path); filesRemoved++; } catch (e) {}
+  }
+
+  const actor = (session.users && (session.users.email || session.users.name)) || 'admin';
+  await supabaseRequest('POST', '/alerts', {
+    type: 'kiosk_control',
+    message: actor + ' deleted ' + ids.length + ' print job(s)' + (filesRemoved ? ' and ' + filesRemoved + ' uploaded file(s)' : ''),
+    severity: 'warning',
+    is_read: false
+  });
+
+  return json({
+    success: true,
+    deleted: ids.length,
+    files_removed: filesRemoved,
+    message: 'Deleted ' + ids.length + ' job' + (ids.length === 1 ? '' : 's')
+  });
+}
+
+/**
+ * Clear coin/transaction history.
+ *
+ * Only the ledger rows are removed - the customer's balance lives on users.coins
+ * and is left untouched, so this tidies the history without changing what anyone
+ * has actually earned.
+ */
+async function deleteCoinTransactions(event, session) {
+  let body;
+  try { body = JSON.parse(event.body || '{}'); } catch (e) { return err('Bad JSON body'); }
+
+  let ids = Array.isArray(body.ids) ? body.ids.filter(id => typeof id === 'string' && id.length > 0) : [];
+  if (ids.length > 500) return err('Too many rows selected', 400);
+
+  if (!ids.length) {
+    if (!body.all) return err('No rows selected');
+    const all = await supabaseRequest('GET', '/coin_transactions', null, { 'select': 'id', 'limit': '2000' });
+    if (all.error) return err('Could not read history', 500);
+    ids = (all.data || []).map(r => r.id);
+    if (!ids.length) return json({ success: true, deleted: 0 });
+  }
+
+  // Batch so a large clear does not build one oversized PostgREST URL.
+  let deleted = 0;
+  for (let i = 0; i < ids.length; i += 200) {
+    const chunk = ids.slice(i, i + 200);
+    const r = await supabaseRequest('DELETE', '/coin_transactions?id=in.(' + chunk.join(',') + ')', null);
+    if (r.error) return err('Failed to delete history', 500);
+    deleted += chunk.length;
+  }
+
+  const actor = (session.users && (session.users.email || session.users.name)) || 'admin';
+  await supabaseRequest('POST', '/alerts', {
+    type: 'kiosk_control',
+    message: actor + ' cleared ' + deleted + ' transaction history entr' + (deleted === 1 ? 'y' : 'ies'),
+    severity: 'warning',
+    is_read: false
+  });
+
+  return json({ success: true, deleted });
 }
 
 async function manualConfirmPayment(event, session) {

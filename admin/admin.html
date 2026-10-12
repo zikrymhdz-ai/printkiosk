@@ -179,12 +179,14 @@
             <option value="unpaid">Unpaid only</option>
             <option value="paid">Paid only</option>
           </select>
+          <button class="btn btn-secondary btn-sm" id="txSelectAllBtn" onclick="toggleTxSelectAll()">Select all</button>
+          <button class="btn btn-danger btn-sm" id="txDeleteBtn" disabled onclick="deleteSelectedJobs()">Delete Selected</button>
           <span class="text-xs text-muted" id="txCount"></span>
         </div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Job ID</th><th>Customer</th><th>File</th><th>Pages</th><th>Amount</th><th>Status</th><th>Paid</th><th>Date</th></tr></thead>
-            <tbody id="transactionsBody"><tr><td colspan="8" style="text-align:center;color:var(--gray-400);padding:24px;">Loading...</td></tr></tbody>
+            <thead><tr><th style="width:36px;"></th><th>Job ID</th><th>Customer</th><th>File</th><th>Pages</th><th>Amount</th><th>Status</th><th>Paid</th><th>Date</th></tr></thead>
+            <tbody id="transactionsBody"><tr><td colspan="9" style="text-align:center;color:var(--gray-400);padding:24px;">Loading...</td></tr></tbody>
           </table>
         </div>
       </div>
@@ -236,11 +238,15 @@
           <span class="card-title">Coin Transactions</span>
           <input type="date" id="coinDate" class="input" style="width:auto;padding:6px 10px;font-size:13px;" onchange="loadCoinTransactions()">
           <button class="btn btn-secondary btn-sm" onclick="document.getElementById('coinDate').value=todayStr();loadCoinTransactions();">Today</button>
+          <button class="btn btn-secondary btn-sm" onclick="document.getElementById('coinDate').value='';loadCoinTransactions();">All dates</button>
+          <button class="btn btn-secondary btn-sm" id="coinSelectAllBtn" onclick="toggleCoinSelectAll()">Select all</button>
+          <button class="btn btn-danger btn-sm" id="coinDeleteBtn" disabled onclick="deleteSelectedCoinTx()">Delete Selected</button>
+          <span class="text-xs text-muted" id="coinCount"></span>
         </div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>User</th><th>Type</th><th>Amount</th><th>Description</th><th>Balance</th><th>Date</th></tr></thead>
-            <tbody id="coinTransactionsBody"><tr><td colspan="6" style="text-align:center;color:var(--gray-400);padding:24px;">Loading...</td></tr></tbody>
+            <thead><tr><th style="width:36px;"></th><th>User</th><th>Type</th><th>Amount</th><th>Description</th><th>Balance</th><th>Date</th></tr></thead>
+            <tbody id="coinTransactionsBody"><tr><td colspan="7" style="text-align:center;color:var(--gray-400);padding:24px;">Loading...</td></tr></tbody>
           </table>
         </div>
       </div>
@@ -470,15 +476,17 @@ function loadTransactions() {
     .then(r => r.json()).then(data => {
       const tbody = document.getElementById('transactionsBody');
       const counter = document.getElementById('txCount');
+      txRows = []; txSelected.clear(); updateTxSelectionUI();
       if (!data.success || !data.transactions.length) {
-        tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--gray-400);padding:24px;">No transactions</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--gray-400);padding:24px;">No transactions</td></tr>';
         if (counter) counter.textContent = '';
         return;
       }
       if (counter) {
         const unpaid = data.transactions.filter(t => !t.paid).length;
-        counter.textContent = data.transactions.length + ' shown Â· ' + unpaid + ' unpaid';
+        counter.textContent = data.transactions.length + ' shown · ' + unpaid + ' unpaid';
       }
+      txRows = data.transactions;
       tbody.innerHTML = data.transactions.map(t => {
         const statusClass = statusCls(t.status);
         // Paid is editable, but a job already printed or refunded must not be
@@ -489,9 +497,55 @@ function loadTransactions() {
             + (locked ? '' : '<button class="btn btn-sm btn-secondary" style="margin-left:4px;" onclick="setJobPaid(\'' + t.job_id + '\',false)">Undo</button>')
           : '<span class="badge badge-danger">No</span> '
             + (locked ? '' : '<button class="btn btn-sm btn-primary" style="margin-left:4px;" onclick="setJobPaid(\'' + t.job_id + '\',true)">Mark Paid</button>');
-        return '<tr><td><strong>' + t.job_id + '</strong></td><td>' + t.customer_name + '</td><td>' + t.file_name + '</td><td>' + t.pages + '</td><td>RM ' + parseFloat(t.total_price).toFixed(2) + '</td><td><span class="badge ' + statusClass + '">' + t.status.replace(/_/g, ' ') + '</span></td><td>' + paidCell + '</td><td class="text-xs" style="white-space:nowrap;">' + fmtDateTime(t.created_at) + '</td></tr>';
+        return '<tr>'
+          + '<td><input type="checkbox" onchange="toggleTxRow(this, \'' + t.id + '\')"></td>'
+          + '<td><strong>' + t.job_id + '</strong></td><td>' + t.customer_name + '</td><td>' + t.file_name + '</td><td>' + t.pages + '</td><td>RM ' + parseFloat(t.total_price).toFixed(2) + '</td><td><span class="badge ' + statusClass + '">' + t.status.replace(/_/g, ' ') + '</span></td><td>' + paidCell + '</td><td class="text-xs" style="white-space:nowrap;">' + fmtDateTime(t.created_at) + '</td></tr>';
       }).join('');
     }).catch(() => {});
+}
+
+let txRows = [];
+let txSelected = new Set();
+
+function toggleTxRow(cb, id) {
+  if (cb.checked) txSelected.add(id); else txSelected.delete(id);
+  updateTxSelectionUI();
+}
+
+function toggleTxSelectAll() {
+  const all = txSelected.size === txRows.length && txRows.length > 0;
+  txSelected.clear();
+  if (!all) txRows.forEach(r => txSelected.add(r.id));
+  document.querySelectorAll('#transactionsBody input[type=checkbox]').forEach(c => { c.checked = !all; });
+  updateTxSelectionUI();
+}
+
+function updateTxSelectionUI() {
+  const n = txSelected.size;
+  const del = document.getElementById('txDeleteBtn');
+  if (del) { del.disabled = !n; del.textContent = n ? ('Delete Selected (' + n + ')') : 'Delete Selected'; }
+  const allBtn = document.getElementById('txSelectAllBtn');
+  if (allBtn) allBtn.textContent = (txSelected.size === txRows.length && n) ? 'Clear selection' : 'Select all';
+}
+
+function deleteSelectedJobs() {
+  const ids = Array.from(txSelected);
+  if (!ids.length) return;
+  if (!confirm('Delete ' + ids.length + ' print job' + (ids.length === 1 ? '' : 's') + '?\n\n'
+    + 'This permanently removes the job, its payment record, its coin history and '
+    + 'the uploaded file. It cannot be undone.')) return;
+
+  fetch(API('admin', 'delete-print-jobs'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Session-Token': token },
+    body: JSON.stringify({ ids: ids })
+  })
+    .then(r => r.json())
+    .then(d => {
+      if (d.success) { alert(d.message || ('Deleted ' + d.deleted)); loadTransactions(); loadStats(); }
+      else alert(d.error || 'Delete failed');
+    })
+    .catch(() => alert('Delete failed'));
 }
 
 // Toggle paid status on any transaction, including old ones the watcher missed.
@@ -538,20 +592,72 @@ function loadAlerts() {
 
 function loadCoinTransactions() {
   const d = document.getElementById('coinDate').value;
-  let action = 'coin-transactions&limit=50';
+  coinRows = []; coinSelected.clear(); updateCoinSelectionUI();
+  let action = 'coin-transactions&limit=200';
   if (d) action += '&date=' + d;
   fetch(API('admin', action), { headers: { 'X-Session-Token': token } })
     .then(r => r.json()).then(data => {
       const tbody = document.getElementById('coinTransactionsBody');
+      const counter = document.getElementById('coinCount');
       if (!data.success || !data.transactions.length) {
-        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--gray-400);padding:24px;">No transactions</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--gray-400);padding:24px;">No transactions</td></tr>';
+        if (counter) counter.textContent = '';
         return;
       }
+      coinRows = data.transactions;
+      if (counter) counter.textContent = data.transactions.length + ' entries';
       tbody.innerHTML = data.transactions.map(t => {
         const userName = t.users ? t.users.name : 'Deleted';
-        return '<tr><td>' + userName + '</td><td><span class="badge ' + (t.type === 'earned' ? 'badge-success' : t.type === 'spent' ? 'badge-warning' : 'badge-info') + '">' + t.type + '</span></td><td>' + t.amount + '</td><td>' + (t.description || '-') + '</td><td>' + t.balance_after + '</td><td>' + fmtDateTime(t.created_at) + '</td></tr>';
+        return '<tr>'
+          + '<td><input type="checkbox" onchange="toggleCoinRow(this, \'' + t.id + '\')"></td>'
+          + '<td>' + userName + '</td><td><span class="badge ' + (t.type === 'earned' ? 'badge-success' : t.type === 'spent' ? 'badge-warning' : 'badge-info') + '">' + t.type + '</span></td><td>' + t.amount + '</td><td>' + (t.description || '-') + '</td><td>' + t.balance_after + '</td><td>' + fmtDateTime(t.created_at) + '</td></tr>';
       }).join('');
     }).catch(() => {});
+}
+
+let coinRows = [];
+let coinSelected = new Set();
+
+function toggleCoinRow(cb, id) {
+  if (cb.checked) coinSelected.add(id); else coinSelected.delete(id);
+  updateCoinSelectionUI();
+}
+
+function toggleCoinSelectAll() {
+  const all = coinSelected.size === coinRows.length && coinRows.length > 0;
+  coinSelected.clear();
+  if (!all) coinRows.forEach(r => coinSelected.add(r.id));
+  document.querySelectorAll('#coinTransactionsBody input[type=checkbox]').forEach(c => { c.checked = !all; });
+  updateCoinSelectionUI();
+}
+
+function updateCoinSelectionUI() {
+  const n = coinSelected.size;
+  const del = document.getElementById('coinDeleteBtn');
+  if (del) { del.disabled = !n; del.textContent = n ? ('Delete Selected (' + n + ')') : 'Delete Selected'; }
+  const allBtn = document.getElementById('coinSelectAllBtn');
+  if (allBtn) allBtn.textContent = (coinSelected.size === coinRows.length && n) ? 'Clear selection' : 'Select all';
+}
+
+// Clears ledger rows only. The coin balance itself lives on users.coins and is
+// untouched, so tidying history never changes what a customer has actually earned.
+function deleteSelectedCoinTx() {
+  const ids = Array.from(coinSelected);
+  if (!ids.length) return;
+  if (!confirm('Delete ' + ids.length + ' transaction history entr' + (ids.length === 1 ? 'y' : 'ies') + '?\n\n'
+    + 'Coin balances are not changed - only the history is cleared. This cannot be undone.')) return;
+
+  fetch(API('admin', 'delete-coin-transactions'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Session-Token': token },
+    body: JSON.stringify({ ids: ids })
+  })
+    .then(r => r.json())
+    .then(d => {
+      if (d.success) { alert('Deleted ' + d.deleted); loadCoinTransactions(); loadStats(); }
+      else alert(d.error || 'Delete failed');
+    })
+    .catch(() => alert('Delete failed'));
 }
 
 function loadUsers() {
@@ -751,7 +857,7 @@ function loadPaymentReview() {
         return '<div style="border:1px solid var(--gray-200);border-radius:var(--radius);padding:14px;margin-bottom:14px;">'
           + '<p style="font-size:16px;font-weight:700;margin-bottom:4px;">RM ' + Number(it.amount || 0).toFixed(2) + ' received</p>'
           + '<p class="text-xs text-muted" style="margin-bottom:10px;">'
-          + (it.payer_name ? 'Payer: <strong>' + it.payer_name + '</strong> Â· ' : 'Payer name not in the notification Â· ')
+          + (it.payer_name ? 'Payer: <strong>' + it.payer_name + '</strong> · ' : 'Payer name not in the notification · ')
           + 'Received ' + fmtDateTime(it.created_at) + '</p>'
           + '<p class="text-sm" style="margin-bottom:10px;color:#92400e;">' + (it.reason || 'Ambiguous match') + '</p>'
           + '<table><thead><tr><th>Job</th><th>Total</th><th>Pages</th><th>Type</th><th>File</th><th></th></tr></thead>'
