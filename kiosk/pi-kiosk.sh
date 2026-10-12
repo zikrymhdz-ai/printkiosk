@@ -14,7 +14,7 @@ set -uo pipefail
 
 APP_DIR="${PRINTKIOSK_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 PORT="${PRINTKIOSK_PORT:-8080}"
-URL="http://localhost:${PORT}/kiosk/walkin.html"
+URL="http://localhost:${PORT}/kiosk/walkin.html?pi=1"
 CHROMIUM="${PRINTKIOSK_CHROMIUM:-}"
 LIVE_BASE="${PRINTKIOSK_LIVE:-https://printkioskfyp.netlify.app}"
 SCREEN="${PRINTKIOSK_SCREEN:-800,480}"

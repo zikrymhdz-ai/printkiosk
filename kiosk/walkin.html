@@ -18,16 +18,27 @@
 // Raspberry Pi kiosk bootstrap. Must run before frontend_config.js so API() can be
 // pointed at the live Netlify deployment - a Pi has no PHP and no local functions.
 (function () {
-  var ua = navigator.userAgent || '';
+var ua = navigator.userAgent || '';
   var params = new URLSearchParams(location.search);
   var forced = params.get('pi');
   // Raspberry Pi OS ships either 32-bit (armv7l/armhf) or 64-bit (aarch64) Chromium,
   // so both have to be matched or a 64-bit install silently misses every Pi tweak.
   var isPi = /Raspberry Pi/i.test(ua) || /armv7l|armhf|aarch64/i.test(ua);
+
+  // Observed in the field: kiosk-mode Chromium on this Pi does NOT always expose
+  // "aarch64" in the user agent, so UA matching alone is unreliable. The page is
+  // served from localhost by the Pi launcher (no phone, no laptop) and it always
+  // carries ?pi= or #pi markers - treat those as authoritative too.
+  var marker = (params.get('pi') !== null) || (location.hash === '#pi');
+  if (marker) isPi = true;
+
   if (forced === '1') isPi = true;
   else if (forced === '0') isPi = false;
 
   window.IS_RPI = isPi;
+  // Keep the raw UA visible for diagnosis without opening devtools.
+  window.__pkUA = ua;
+  window.__pkPiMarker = marker;
 
   // Everything the kiosk needs is served from its own origin (vendor/ + models/),
   // never a CDN. The Pi is on shop wifi that goes down, and face login / the guest
@@ -627,7 +638,7 @@ function throttledUnknownLog(distance) {
 /* ===== REMOTE KIOSK CONTROL (admin) ===== */
 // Must match APP_VERSION in netlify/functions/_shared.js. If the deployed
 // version differs, the kiosk reloads itself so it never runs a stale page.
-var KIOSK_APP_VERSION = '2026.10.12-10';
+var KIOSK_APP_VERSION = '2026.10.12-11';
 var kioskState = { face_login_enabled: true, maintenance_mode: false, maintenance_message: '' };
 var kioskSettingsTimer = null;
 var cameraStoppedForMaint = false;
@@ -929,7 +940,14 @@ async function openCamera() {
   var lastErr = null;
   for (var i = 0; i < attempts.length; i++) {
     try {
-      faceStream = await navigator.mediaDevices.getUserMedia(attempts[i]);
+      // getUserMedia can hang forever if the permission prompt is never
+      // answered (kiosk mode has nobody to click "Allow"). Time-bound it so the
+      // kiosk reports the truth instead of sitting on "Starting..." forever.
+      faceStream = await withTimeout(
+        navigator.mediaDevices.getUserMedia(attempts[i]),
+        15000,
+        'getUserMedia'
+      );
       var video = document.getElementById('kioskCam');
       video.srcObject = faceStream;
       await video.play();
