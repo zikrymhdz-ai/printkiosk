@@ -113,6 +113,14 @@ fi
 # Keeps the Pi from painting its own desktop or panel over the kiosk.
 if command -v xdg-screensaver >/dev/null 2>&1; then xdg-screensaver suspend >/dev/null 2>&1 || true; fi
 
+# --- clear any stored camera permission decision ------------------------------
+# Chromium persists the per-origin camera choice in the profile. If an earlier
+# attempt was ever denied (or the prompt could not be answered in kiosk mode),
+# getUserMedia keeps failing forever after. A fresh profile each launch means the
+# --use-fake-ui-for-media-stream flag always decides.
+PROFILE_DIR="${PRINTKIOSK_PROFILE:-/tmp/printkiosk-chrome}"
+rm -rf "$PROFILE_DIR" 2>/dev/null || true
+
 log "launching kiosk -> $URL"
 exec "$CHROMIUM" \
   --kiosk \
@@ -125,6 +133,9 @@ exec "$CHROMIUM" \
   --autoplay-policy=no-user-gesture-required \
   --use-fake-ui-for-media-stream \
   --allow-file-access-from-files \
+  --no-sandbox \
+  --disable-dev-shm-usage \
+  --disable-gpu \
   --enable-logging=stderr \
   --v=0 \
   --disable-application-cache \
@@ -132,5 +143,15 @@ exec "$CHROMIUM" \
   --media-cache-size=1 \
   --window-position=0,0 \
   --window-size="$SCREEN" \
-  --user-data-dir=/tmp/printkiosk-chrome \
+  --user-data-dir="$PROFILE_DIR" \
   "$URL"
+
+# NOTE ON THE FLAGS BELOW (added because getUserMedia and enumerateDevices both
+# *hung* instead of erroring on this Pi):
+#   --no-sandbox            the setuid sandbox is unreliable on Raspberry Pi OS and
+#                           a sandboxed renderer cannot reach /dev/video0, so the
+#                           video capture service stalls instead of failing fast.
+#   --disable-dev-shm-usage /dev/shm is only 64MB on a Pi by default; Chromium
+#                           runs out of shared memory and hangs while opening media.
+#   --disable-gpu           there is no usable GPU on a Pi 4 and the GPU process can
+#                           stall the compositor that owns the camera preview.
