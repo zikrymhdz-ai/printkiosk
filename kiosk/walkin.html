@@ -50,9 +50,11 @@ var ua = navigator.userAgent || '';
   // SIMD is unsupported, so the WASM CPU path is the one that actually works.
   if (isPi) {
     window.PRINTKIOSK_API_BASE = 'https://printkioskfyp.netlify.app';
-    // Throttle face detection; a Pi 4 cannot run it every animation frame.
-    window.FACE_MIN_INTERVAL_MS = 250;
-    window.FACE_DETECT_WIDTH = 320;
+    // Detection runs on the CPU (single-threaded WASM), so every pass stalls
+    // the video preview. Detect less often and on a smaller frame: the picture
+    // stays smooth and recognition is still fast enough to log someone in.
+    window.FACE_MIN_INTERVAL_MS = 400;
+    window.FACE_DETECT_WIDTH = 256;
     // Keep the screen awake and allow a reload to recover from a wedged renderer.
     window.KIOSK_ALLOW_RELOAD = true;
   }
@@ -491,12 +493,12 @@ function piLog(msg) {
 
   var el = document.getElementById('piDiag');
   if (el) {
-    // Keep only the most recent lines on screen so the overlay stays readable.
-    el.textContent = piLogHistory.slice(-12).join('\n');
+    // Only populate the overlay when it has been explicitly opened with a
+    // 5-tap, so debug text never leaks onto the customer screen.
+    if (document.body.classList.contains('show-diag')) {
+      el.textContent = piLogHistory.slice(-12).join('\n');
+    }
   }
-
-  var t = document.getElementById('faceStatusText');
-  if (t && msg) t.textContent = msg;
 
   reportKioskStatus(msg);
 }
@@ -519,12 +521,14 @@ window.addEventListener('unhandledrejection', function (e) {
 
 // One-line status strip, always visible on the Pi (no keyboard needed).
 function updateStatusStrip() {
+  // Nothing on the customer-facing screen: the kiosk shows only the camera,
+  // PIN entry and the guest QR. All diagnostics live in the admin dashboard
+  // (Security & Kiosk -> Shop Screen Status). The on-screen overlay is still
+  // available on a 5-tap for emergency debugging, but it is hidden by default.
   var el = document.getElementById('piDiag');
   if (!el) return;
-  if (document.body.classList.contains('show-diag')) return; // full overlay already showing
-  el.classList.add('strip');
-  var last = piLogHistory[piLogHistory.length - 1] || '';
-  el.textContent = 'kiosk: ' + last;
+  el.classList.remove('strip');
+  el.textContent = '';
 }
 
 // Post a heartbeat so the admin page can show the kiosk's live state instead of
@@ -638,7 +642,7 @@ function throttledUnknownLog(distance) {
 /* ===== REMOTE KIOSK CONTROL (admin) ===== */
 // Must match APP_VERSION in netlify/functions/_shared.js. If the deployed
 // version differs, the kiosk reloads itself so it never runs a stale page.
-var KIOSK_APP_VERSION = '2026.10.12-15';
+var KIOSK_APP_VERSION = '2026.10.12-16';
 var kioskState = { face_login_enabled: true, maintenance_mode: false, maintenance_message: '' };
 var kioskSettingsTimer = null;
 var cameraStoppedForMaint = false;
@@ -820,9 +824,19 @@ async function bootKiosk() {
   // Load only the three nets the kiosk actually uses. face-api's default
   // loadFromUri pulls five nets, which is slow and pointless here.
   async function loadModels(url) {
-    await faceapi.nets.ssdMobilenetv1.loadFromUri(url);
+    // The tiny detector is far cheaper than ssd_mobilenetv1, which matters a
+    // lot on a Pi running the single-threaded WASM backend - ssd made the video
+    // visibly lag. Both models are vendored under models/.
+    if (window.IS_RPI) {
+      await faceapi.nets.tinyFaceDetector.loadFromUri(url);
+      window.__pkDetector = 'tiny';
+    } else {
+      await faceapi.nets.ssdMobilenetv1.loadFromUri(url);
+      window.__pkDetector = 'ssd';
+    }
     await faceapi.nets.faceLandmark68Net.loadFromUri(url);
     await faceapi.nets.faceRecognitionNet.loadFromUri(url);
+    piLog('detector: ' + window.__pkDetector);
   }
 
   // Face AI is optional. If vendor/face-api.min.js is missing (not transferred
@@ -1106,8 +1120,8 @@ async function startFaceDetection() {
   // 480p frame saturates all four A53 cores and the UI stops responding.
   const detectWidth = window.FACE_DETECT_WIDTH || 0;
   const minInterval = window.FACE_MIN_INTERVAL_MS || 0;
-  // Detector input size: smaller is faster on a Pi, 320 matches the downscale.
-  const inputSize = window.IS_RPI ? 320 : 416;
+  // Detector input size: smaller is faster on a Pi's CPU.
+  const inputSize = window.IS_RPI ? 256 : 416;
 
   let labeledDescriptors = [];
   try {
@@ -1150,10 +1164,10 @@ async function startFaceDetection() {
       frameCanvas.height = srcH;
       frameCtx.drawImage(video, 0, 0, srcW, srcH);
       // face-api requires a real options instance for whichever detector net is
-      // loaded. Passing a plain { inputSize: 160 } object throws
-      // "expected options to be instance of ...SsdMobilenetv1Options", which
-      // silently killed every detection loop.
-      var detOpts = new faceapi.SsdMobilenetv1Options({ inputSize: inputSize });
+      // loaded, and it must match that net exactly.
+      var detOpts = (window.__pkDetector === 'tiny')
+        ? new faceapi.TinyFaceDetectorOptions({ inputSize: inputSize, scoreThreshold: 0.3 })
+        : new faceapi.SsdMobilenetv1Options({ inputSize: inputSize });
       const det = await faceapi.detectSingleFace(frameCanvas, detOpts).withFaceLandmarks().withFaceDescriptor();
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
