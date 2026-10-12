@@ -196,11 +196,18 @@
         </div>
       </div>
       <div class="card animate-fade-in" style="margin-top:20px;">
-        <div class="card-header"><span class="card-title">Ready to Print Jobs</span></div>
+        <div class="card-header" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+          <span class="card-title">Ready to Print Jobs</span>
+          <input type="search" id="readySearch" class="input" style="width:auto;padding:6px 10px;font-size:13px;min-width:190px;" placeholder="Search job ID or file…" oninput="renderReadyJobs()" autocomplete="off">
+          <button class="btn btn-secondary btn-sm" onclick="document.getElementById('readySearch').value='';renderReadyJobs();">Clear</button>
+          <button class="btn btn-secondary btn-sm" id="readySelectAllBtn" onclick="toggleReadySelectAll()">Select all</button>
+          <button class="btn btn-danger btn-sm" id="readyDeleteBtn" disabled onclick="deleteSelectedReadyJobs()">Delete Selected</button>
+          <span class="text-xs text-muted" id="readyCount"></span>
+        </div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Job ID</th><th>File</th><th>Pages</th><th>Amount</th><th>Uploaded</th><th>Action</th></tr></thead>
-            <tbody id="readyJobsBody"><tr><td colspan="6" style="text-align:center;color:var(--gray-400);padding:24px;">Loading...</td></tr></tbody>
+            <thead><tr><th style="width:36px;"></th><th>Job ID</th><th>File</th><th>Pages</th><th>Amount</th><th>Uploaded</th><th>Action</th></tr></thead>
+            <tbody id="readyJobsBody"><tr><td colspan="7" style="text-align:center;color:var(--gray-400);padding:24px;">Loading...</td></tr></tbody>
           </table>
         </div>
       </div>
@@ -686,16 +693,143 @@ function loadUsers() {
     }).catch(() => {});
 }
 
+let readyRows = [];
+let readySelected = new Set();
+
 function loadReadyJobs() {
   fetch(API('printer', 'ready-jobs'), { headers: { 'X-Session-Token': token } })
     .then(r => r.json()).then(data => {
+      readyRows = (data.success && data.jobs) ? data.jobs : [];
+      readySelected.clear();
+      renderReadyJobs();
+    }).catch(() => {
       const tbody = document.getElementById('readyJobsBody');
-      if (!data.success || !data.jobs.length) {
-        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--gray-400);padding:24px;">No ready jobs</td></tr>';
-        return;
-      }
-      tbody.innerHTML = data.jobs.map(j => '<tr><td><strong>' + j.job_id + '</strong></td><td>' + j.file_name + '</td><td>' + j.pages + '</td><td>RM ' + parseFloat(j.total_price).toFixed(2) + '</td><td class="text-xs" style="white-space:nowrap;">' + fmtDateTime(j.created_at) + '</td><td><button class="btn btn-sm btn-primary" onclick="updateJobStatus(\'' + j.job_id + '\',\'printing\')">Print</button></td></tr>').join('');
-    }).catch(() => {});
+      if (tbody) tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--gray-400);padding:24px;">Failed to load</td></tr>';
+    });
+}
+
+/* Search happens in the browser: the ready-to-print queue is small, and filtering
+   the already-fetched rows means typing never waits on the network.
+
+   Separators are normalised because real filenames mix them - a search for
+   "chapter one" must still find "Thesis_Chapter_One.docx". */
+function readyNormalise(s) {
+  return String(s == null ? '' : s).toLowerCase().replace(/[_\-.]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function readyJobMatches(j, q) {
+  if (!q) return true;
+  var hay = readyNormalise(j.job_id + ' ' + (j.file_name || '') + ' ' + (j.pages || ''));
+  var needle = readyNormalise(q);
+  if (!needle) return true;
+  // Every word typed must appear, so "prn thesis" narrows instead of widening.
+  return needle.split(' ').every(function (word) {
+    return hay.indexOf(word) !== -1;
+  });
+}
+
+function renderReadyJobs() {
+  const tbody = document.getElementById('readyJobsBody');
+  if (!tbody) return;
+  const box = document.getElementById('readySearch');
+  const q = box ? box.value.trim().toLowerCase() : '';
+
+  // Drop selections for rows the search has hidden, so Delete Selected can never
+  // silently remove a job the operator cannot currently see.
+  const visible = readyRows.filter(j => readyJobMatches(j, q));
+  const visibleIds = {};
+  visible.forEach(j => { visibleIds[j.id] = true; });
+  Array.from(readySelected).forEach(id => { if (!visibleIds[id]) readySelected.delete(id); });
+
+  const counter = document.getElementById('readyCount');
+  if (counter) {
+    counter.textContent = q
+      ? (visible.length + ' of ' + readyRows.length + ' shown')
+      : (readyRows.length + ' ready');
+  }
+
+  if (!readyRows.length) {
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--gray-400);padding:24px;">No ready jobs</td></tr>';
+    updateReadySelectionUI();
+    return;
+  }
+  if (!visible.length) {
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--gray-400);padding:24px;">No jobs match "' + box.value.trim() + '"</td></tr>';
+    updateReadySelectionUI();
+    return;
+  }
+
+  tbody.innerHTML = visible.map(j =>
+    '<tr>'
+    + '<td><input type="checkbox" ' + (readySelected.has(j.id) ? 'checked' : '')
+    + ' onchange="toggleReadyRow(this, \'' + j.id + '\')"></td>'
+    + '<td><strong>' + j.job_id + '</strong></td>'
+    + '<td>' + (j.file_name || '-') + '</td>'
+    + '<td>' + j.pages + '</td>'
+    + '<td>RM ' + parseFloat(j.total_price).toFixed(2) + '</td>'
+    + '<td class="text-xs" style="white-space:nowrap;">' + fmtDateTime(j.created_at) + '</td>'
+    + '<td style="white-space:nowrap;">'
+    + '<button class="btn btn-sm btn-primary" onclick="updateJobStatus(\'' + j.job_id + '\',\'printing\')">Print</button> '
+    + '<button class="btn btn-sm btn-danger" onclick="deleteReadyJob(\'' + j.id + '\',\'' + j.job_id + '\')">Delete</button>'
+    + '</td></tr>'
+  ).join('');
+
+  updateReadySelectionUI();
+}
+
+function toggleReadyRow(cb, id) {
+  if (cb.checked) readySelected.add(id); else readySelected.delete(id);
+  updateReadySelectionUI();
+}
+
+function toggleReadySelectAll() {
+  const box = document.getElementById('readySearch');
+  const q = box ? box.value.trim().toLowerCase() : '';
+  const visible = readyRows.filter(j => readyJobMatches(j, q));
+  const allSelected = visible.length > 0 && visible.every(j => readySelected.has(j.id));
+  readySelected.clear();
+  if (!allSelected) visible.forEach(j => readySelected.add(j.id));
+  renderReadyJobs();
+}
+
+function updateReadySelectionUI() {
+  const n = readySelected.size;
+  const del = document.getElementById('readyDeleteBtn');
+  if (del) { del.disabled = !n; del.textContent = n ? ('Delete Selected (' + n + ')') : 'Delete Selected'; }
+  const allBtn = document.getElementById('readySelectAllBtn');
+  if (allBtn) allBtn.textContent = (n > 0 && n === readyRows.length) ? 'Clear selection' : 'Select all';
+}
+
+function deleteReadyJob(id, jobId) {
+  if (!confirm('Delete job ' + jobId + '?\n\nThe job, its payment record, its coin history and the '
+    + 'uploaded file will be permanently removed. This cannot be undone.')) return;
+  deleteReadyJobIds([id], jobId);
+}
+
+function deleteSelectedReadyJobs() {
+  const ids = Array.from(readySelected);
+  if (!ids.length) return;
+  if (!confirm('Delete ' + ids.length + ' ready-to-print job' + (ids.length === 1 ? '' : 's') + '?\n\n'
+    + 'The jobs, their payment records, coin history and uploaded files will be '
+    + 'permanently removed. This cannot be undone.')) return;
+  deleteReadyJobIds(ids, ids.length + ' jobs');
+}
+
+function deleteReadyJobIds(ids, label) {
+  fetch(API('admin', 'delete-print-jobs'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Session-Token': token },
+    body: JSON.stringify({ ids: ids })
+  })
+    .then(r => r.json())
+    .then(d => {
+      if (d.success) {
+        alert('Deleted ' + label + (d.files_removed ? ' and ' + d.files_removed + ' file(s).' : '.'));
+        loadReadyJobs();
+        loadAll();
+      } else alert(d.error || 'Delete failed');
+    })
+    .catch(() => alert('Delete failed'));
 }
 
 async function updateJobStatus(jobId, status) {

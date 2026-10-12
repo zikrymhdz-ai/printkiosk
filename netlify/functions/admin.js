@@ -736,11 +736,17 @@ function storageTarget(filePath) {
  * the same operation. The uploaded file is removed from storage too - otherwise
  * every deleted job keeps costing bucket space forever.
  */
+// Only accept real uuids. print_jobs.id is a uuid column, so a stray non-uuid in
+// the list makes PostgREST reject the whole `in.(...)` with a 400 and nothing is
+// deleted. Filtering up front means one bad value cannot take the batch with it.
+const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
 async function deletePrintJobs(event, session) {
   let body;
   try { body = JSON.parse(event.body || '{}'); } catch (e) { return err('Bad JSON body'); }
 
-  let ids = Array.isArray(body.ids) ? body.ids.filter(id => typeof id === 'string' && id.length > 0) : [];
+  let ids = Array.isArray(body.ids) ? body.ids.filter(id => typeof id === 'string' && UUID_RE.test(id)) : [];
+  const rejected = (Array.isArray(body.ids) ? body.ids.length : 0) - ids.length;
   if (ids.length > 300) return err('Too many jobs selected', 400);
 
   let jobs = [];
@@ -785,7 +791,9 @@ async function deletePrintJobs(event, session) {
     success: true,
     deleted: ids.length,
     files_removed: filesRemoved,
+    skipped: rejected,
     message: 'Deleted ' + ids.length + ' job' + (ids.length === 1 ? '' : 's')
+      + (rejected ? ' (' + rejected + ' invalid id(s) skipped)' : '')
   });
 }
 
