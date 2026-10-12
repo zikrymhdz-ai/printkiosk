@@ -187,7 +187,7 @@ var ua = navigator.userAgent || '';
   body.pi-kiosk .kiosk { min-height: 0; justify-content: center; }
   body.pi-kiosk .printer-panel { height: fit-content; }
   /* Viewport-relative height so the stack can be centred instead of filling. */
-  body.pi-kiosk .cam-box { flex: 0 0 auto; height: 46vh; min-height: 150px; aspect-ratio: auto; }
+  body.pi-kiosk .cam-box { flex: 0 0 auto; height: 60vh; min-height: 150px; aspect-ratio: auto; }
   body.pi-kiosk .cam-box video,
   body.pi-kiosk .cam-box canvas { height: 100%; }
   body.pi-kiosk .confirm-card { padding: 20px; }
@@ -314,7 +314,7 @@ window.addEventListener('load', function () {
   <p id="pinFeedback" style="font-size:13px; color:#ef4444; margin-top:4px; display:none;"></p>
 
   <button class="btn-kiosk btn-secondary-kiosk" style="width:100%; margin-top:14px;" id="guestBtn" onclick="startGuest()">
-    <span style="opacity:0.9;">I don't have an account â€” </span><strong>Scan as Guest</strong>
+    <span style="opacity:0.85;">I don&rsquo;t have an account &mdash;</span> <strong>Scan as Guest</strong>
   </button>
 
   <div class="bottom-links">Face recognition for kiosk auto-login</div>
@@ -387,7 +387,6 @@ window.addEventListener('load', function () {
     </div>
     <h2 style="font-size:23px; font-weight:700; margin-bottom:10px; color:#0f2a4a;">Kiosk Under Maintenance</h2>
     <p id="maintMsg" style="font-size:15px; color:#475569; line-height:1.6;">Kiosk temporarily unavailable for maintenance. Please see staff.</p>
-    <p style="font-size:12px; color:#93a5bd; margin-top:18px;">This screen is controlled from the admin dashboard.</p>
   </div>
 </div>
 
@@ -655,7 +654,7 @@ function throttledUnknownLog(distance) {
 /* ===== REMOTE KIOSK CONTROL (admin) ===== */
 // Must match APP_VERSION in netlify/functions/_shared.js. If the deployed
 // version differs, the kiosk reloads itself so it never runs a stale page.
-var KIOSK_APP_VERSION = '2026.10.12-18';
+var KIOSK_APP_VERSION = '2026.10.12-19';
 var kioskState = { face_login_enabled: true, maintenance_mode: false, maintenance_message: '' };
 var kioskSettingsTimer = null;
 var cameraStoppedForMaint = false;
@@ -847,8 +846,9 @@ async function bootKiosk() {
       await faceapi.nets.ssdMobilenetv1.loadFromUri(url);
       window.__pkDetector = 'ssd';
     }
-    await faceapi.nets.faceLandmark68Net.loadFromUri(url);
     await faceapi.nets.faceRecognitionNet.loadFromUri(url);
+    // The 68-landmark net is deliberately NOT loaded: recognition only needs a
+    // descriptor, and loading it cost startup time, RAM and a per-frame pass.
     piLog('detector: ' + window.__pkDetector);
   }
 
@@ -1176,12 +1176,21 @@ async function startFaceDetection() {
       frameCanvas.width = srcW;
       frameCanvas.height = srcH;
       frameCtx.drawImage(video, 0, 0, srcW, srcH);
-      // face-api requires a real options instance for whichever detector net is
-      // loaded, and it must match that net exactly.
-      var detOpts = (window.__pkDetector === 'tiny')
-        ? new faceapi.TinyFaceDetectorOptions({ inputSize: inputSize, scoreThreshold: 0.3 })
-        : new faceapi.SsdMobilenetv1Options({ inputSize: inputSize });
-      const det = await faceapi.detectSingleFace(frameCanvas, detOpts).withFaceLandmarks().withFaceDescriptor();
+
+      // Build the options once, not every frame - constructing them allocates and
+      // face-api re-validates them on each call.
+      if (!window.__pkDetOpts) {
+        window.__pkDetOpts = (window.__pkDetector === 'tiny')
+          ? new faceapi.TinyFaceDetectorOptions({ inputSize: inputSize, scoreThreshold: 0.3 })
+          : new faceapi.SsdMobilenetv1Options({ inputSize: inputSize });
+      }
+
+      // Only the descriptor is needed for matching a face. Dropping
+      // withFaceLandmarks() removes a whole extra network pass per frame (68-point
+      // landmarks), which was the main source of the laggy preview - the box is
+      // drawn from det.detection.box and never used the landmarks.
+      const det = await faceapi.detectSingleFace(frameCanvas, window.__pkDetOpts)
+        .withFaceDescriptor();
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
       if (det) {
@@ -1302,14 +1311,38 @@ function showUploadQR(sessionToken, user) {
       var q = qrcode(0, 'M');
       q.addData(url);
       q.make();
-      var cell = 220 / q.getModuleCount();
+      // Derive everything from the canvas' real size. Hardcoding a pixel size
+      // here while CSS scaled the canvas to a different one made the QR
+      // unscannable: the modules were drawn at one size then rescaled, which
+      // blurs the grid and eats the quiet zone scanners rely on.
+      var size = qr.width;
+      var quiet = 2; // quiet-zone modules, required for reliable scanning
+      var modules = q.getModuleCount() + quiet * 2;
+      var cell = size / modules;
+
+      // Keep the backing store at device resolution so modules land on whole
+      // pixels even on a hi-dpi panel.
+      var dpr = Math.min(window.devicePixelRatio || 1, 2);
+      qr.width = size * dpr;
+      qr.height = size * dpr;
+      qr.style.width = size + 'px';
+      qr.style.height = size + 'px';
+
       var ctx = qr.getContext('2d');
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.fillStyle = '#ffffff';
-      ctx.fillRect(0, 0, 220, 220);
+      ctx.fillRect(0, 0, size, size);
       ctx.fillStyle = '#000000';
       for (var r = 0; r < q.getModuleCount(); r++) {
         for (var c = 0; c < q.getModuleCount(); c++) {
-          if (q.isDark(r, c)) ctx.fillRect(Math.floor(c * cell), Math.floor(r * cell), Math.ceil(cell), Math.ceil(cell));
+          if (q.isDark(r, c)) {
+            ctx.fillRect(
+              Math.round((c + quiet) * cell),
+              Math.round((r + quiet) * cell),
+              Math.ceil(cell),
+              Math.ceil(cell)
+            );
+          }
         }
       }
     }

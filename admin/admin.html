@@ -224,20 +224,27 @@
       </div>
 
       <div class="card animate-fade-in" style="margin-top:20px;">
-        <div class="card-header" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
-          <span class="card-title">Face Detection Log</span>
-          <input type="date" id="faceLogDate" class="input" style="width:auto;padding:6px 10px;font-size:13px;" onchange="loadFaceDetections()">
-          <button class="btn btn-secondary btn-sm" onclick="document.getElementById('faceLogDate').value=todayStr();loadFaceDetections();">Today</button>
-          <button class="btn btn-secondary btn-sm" onclick="loadFaceDetections()">Refresh</button>
-          <span class="text-xs text-muted" id="faceLogStats"></span>
-        </div>
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>Time</th><th>Result</th><th>Customer</th><th>Distance</th><th>Kiosk</th></tr></thead>
-            <tbody id="faceLogBody"><tr><td colspan="5" style="text-align:center;color:var(--gray-400);padding:24px;">Loading...</td></tr></tbody>
-          </table>
-        </div>
-        <p class="text-xs text-muted" style="margin-top:12px;">Lower face-match distance means a closer match (threshold is 0.600). Unknown faces are recorded at most once every 15 seconds.</p>
+<div class="card-header" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+            <span class="card-title">Face Detection Log</span>
+            <input type="date" id="faceLogDate" class="input" style="width:auto;padding:6px 10px;font-size:13px;" onchange="loadFaceDetections()">
+            <button class="btn btn-secondary btn-sm" onclick="document.getElementById('faceLogDate').value=todayStr();loadFaceDetections();">Today</button>
+            <button class="btn btn-secondary btn-sm" onclick="loadFaceDetections()">Refresh</button>
+            <span class="text-xs text-muted" id="faceLogStats"></span>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px;">
+            <label class="text-xs text-muted" style="display:flex;align-items:center;gap:5px;cursor:pointer;">
+              <input type="checkbox" id="faceLogSelectAll" onchange="toggleFaceLogSelectAll(this.checked)"> Select all shown
+            </label>
+            <button class="btn btn-danger btn-sm" id="faceLogDeleteBtn" disabled onclick="deleteSelectedFaceDetections()">Delete Selected</button>
+            <button class="btn btn-secondary btn-sm" onclick="deleteAllFaceDetections()">Delete Entire Log</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th style="width:36px;"></th><th>Time</th><th>Result</th><th>Customer</th><th>Distance</th><th>Kiosk</th></tr></thead>
+              <tbody id="faceLogBody"><tr><td colspan="6" style="text-align:center;color:var(--gray-400);padding:24px;">Loading...</td></tr></tbody>
+            </table>
+          </div>
+          <p class="text-xs text-muted" style="margin-top:12px;">Lower face-match distance means a closer match (threshold is 0.600). Unknown faces are recorded at most once every 15 seconds.</p>
       </div>
     </div>
 
@@ -652,14 +659,17 @@ function saveKioskSettings() {
 function loadFaceDetections() {
   const date = document.getElementById('faceLogDate').value;
   const body = document.getElementById('faceLogBody');
+  faceLogRows = [];
+  faceLogSelected.clear();
+  updateFaceLogSelectionUI();
   fetch(API('admin', 'face-detections&limit=150&date=' + date), { headers: { 'X-Session-Token': token } })
     .then(r => r.json())
     .then(d => {
-      if (!d.success) { body.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--gray-400);padding:24px;">Failed to load</td></tr>'; return; }
+      if (!d.success) { body.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--gray-400);padding:24px;">Failed to load</td></tr>'; return; }
 
       if (d.unavailable) {
         document.getElementById('kioskMigrationWarn').style.display = 'block';
-        body.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--gray-400);padding:24px;">Audit log not available - run the migration SQL</td></tr>';
+        body.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--gray-400);padding:24px;">Audit log not available - run the migration SQL</td></tr>';
         document.getElementById('faceLogStats').textContent = '';
         return;
       }
@@ -670,10 +680,11 @@ function loadFaceDetections() {
         rows.length ? (st.matched + ' matched / ' + st.unknown + ' unknown') : '';
 
       if (!rows.length) {
-        body.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--gray-400);padding:24px;">No face detections recorded</td></tr>';
+        body.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--gray-400);padding:24px;">No face detections recorded</td></tr>';
         return;
       }
 
+      faceLogRows = rows;
       body.innerHTML = rows.map(function (r) {
         const matched = !!r.matched;
         const badge = matched
@@ -686,6 +697,7 @@ function loadFaceDetections() {
         const distCls = (r.confidence != null && matched && Number(r.confidence) < 0.45) ? ' style="color:var(--warning);font-weight:600;"' : '';
         const when = r.created_at ? new Date(r.created_at).toLocaleString() : '-';
         return '<tr>'
+          + '<td><input type="checkbox" onchange="toggleFaceLogRow(this, \'' + r.id + '\')"></td>'
           + '<td>' + when + '</td>'
           + '<td>' + badge + '</td>'
           + '<td>' + who + '</td>'
@@ -695,8 +707,60 @@ function loadFaceDetections() {
       }).join('');
     })
     .catch(() => {
-      body.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--gray-400);padding:24px;">Failed to load</td></tr>';
+      body.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--gray-400);padding:24px;">Failed to load</td></tr>';
     });
+}
+
+let faceLogRows = [];
+let faceLogSelected = new Set();
+
+function toggleFaceLogRow(checkbox, id) {
+  if (checkbox.checked) faceLogSelected.add(id); else faceLogSelected.delete(id);
+  updateFaceLogSelectionUI();
+}
+
+function toggleFaceLogSelectAll(checked) {
+  faceLogSelected.clear();
+  if (checked) faceLogRows.forEach(function (r) { faceLogSelected.add(r.id); });
+  document.querySelectorAll('#faceLogBody input[type=checkbox]').forEach(function (c) { c.checked = checked; });
+  updateFaceLogSelectionUI();
+}
+
+function updateFaceLogSelectionUI() {
+  const n = faceLogSelected.size;
+  const btn = document.getElementById('faceLogDeleteBtn');
+  if (btn) { btn.disabled = n === 0; btn.textContent = n ? ('Delete Selected (' + n + ')') : 'Delete Selected'; }
+  const all = document.getElementById('faceLogSelectAll');
+  if (all) {
+    all.checked = n > 0 && faceLogRows.length > 0 && n === faceLogRows.length;
+    all.indeterminate = n > 0 && n < faceLogRows.length;
+  }
+}
+
+function deleteSelectedFaceDetections() {
+  const ids = Array.from(faceLogSelected);
+  if (!ids.length) return;
+  if (!confirm('Delete ' + ids.length + ' selected face detection log entr' + (ids.length === 1 ? 'y' : 'ies') + '?')) return;
+  deleteFaceLogEntries({ ids: ids });
+}
+
+function deleteAllFaceDetections() {
+  if (!confirm('Delete ALL face detection log entries? This cannot be undone.')) return;
+  deleteFaceLogEntries({ all: true });
+}
+
+function deleteFaceLogEntries(payload) {
+  fetch(API('admin', 'delete-face-detections'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Session-Token': token },
+    body: JSON.stringify(payload)
+  })
+    .then(r => r.json())
+    .then(d => {
+      if (d.success) { alert(d.message || 'Deleted'); loadFaceDetections(); }
+      else alert(d.error || 'Delete failed');
+    })
+    .catch(() => alert('Delete failed'));
 }
 
 init();

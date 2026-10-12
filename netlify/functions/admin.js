@@ -20,6 +20,7 @@ exports.handler = async (event) => {
       case 'all-users': return getAllUsers();
       case 'viewer-data': return getViewerData();
       case 'face-detections': return getFaceDetections(url);
+      case 'delete-face-detections': return deleteFaceDetections(event);
       case 'kiosk-settings': return getKioskSettingsAdmin();
       case 'kiosk-status': return getKioskStatus();
       default: return err('Invalid action');
@@ -270,6 +271,29 @@ async function markAllAlertsRead() {
 }
 
 /* ===== FACE DETECTION AUDIT LOG ===== */
+// Delete selected rows, or the whole log when no ids are supplied.
+async function deleteFaceDetections(event) {
+  let body;
+  try { body = JSON.parse(event.body || '{}'); } catch (e) { return err('Bad JSON body'); }
+
+  let ids = Array.isArray(body.ids) ? body.ids.filter(function (id) { return typeof id === 'string' && id.length > 0; }) : [];
+
+  if (ids.length > 500) return err('Too many ids selected', 400);
+
+  if (ids.length === 0) {
+    if (!body.all) return err('No rows selected');
+    const all = await supabaseRequest('GET', '/face_detections', null, { 'select': 'id', 'limit': '1000' });
+    if (all.error) return err('Could not read the log', 500);
+    ids = (all.data || []).map(function (r) { return r.id; });
+    if (!ids.length) return json({ success: true, deleted: 0, message: 'Log already empty' });
+  }
+
+  const result = await supabaseRequest('DELETE', '/face_detections?id=in.(' + ids.join(',') + ')', null);
+  if (result.error) return err('Failed to delete: ' + (result.message || ''), 500);
+
+  return json({ success: true, deleted: ids.length, message: 'Deleted ' + ids.length + ' entr' + (ids.length === 1 ? 'y' : 'ies') });
+}
+
 async function getFaceDetections(url) {
   const limit = Math.min(200, Math.max(1, parseInt(url.searchParams.get('limit') || '100', 10)));
   const dateStr = url.searchParams.get('date') || '';
