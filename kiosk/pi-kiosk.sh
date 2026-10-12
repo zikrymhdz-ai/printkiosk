@@ -29,20 +29,37 @@ log() { printf '[printkiosk] %s\n' "$*"; }
 sync_from_live() {
   command -v curl >/dev/null 2>&1 || { log "curl not found; using local files"; return 0; }
   local tmp
-  tmp="$(mktemp)"
   local ok=0
   for f in kiosk/walkin.html kiosk/README-PI.md frontend_config.js; do
+    tmp="${APP_DIR}/$(basename "$f").new.$$"
     if curl -fsS --max-time 20 "${LIVE_BASE}/${f}" -o "$tmp" 2>/dev/null && [ -s "$tmp" ]; then
       if ! cmp -s "$tmp" "${APP_DIR}/${f}" 2>/dev/null; then
-        if cp "$tmp" "${APP_DIR}/${f}" 2>/dev/null; then
+        # Write atomically: the kiosk serves this file over HTTP, and a partially
+        # written walkin.html would be fetched by a reload and fail to parse.
+        if mv -f "$tmp" "${APP_DIR}/${f}" 2>/dev/null; then
           log "updated ${f} from live site"
+        else
+          rm -f "$tmp"
         fi
+      else
+        rm -f "$tmp"
       fi
       ok=1
+    else
+      rm -f "$tmp"
     fi
   done
-  rm -f "$tmp"
   [ "$ok" = 1 ] || log "live sync unavailable; using local copy"
+}
+
+# Keep the served HTML fresh. The kiosk reloads itself on an idle timer, and a
+# reload re-fetches from localhost, so without this the screen would keep
+# running whatever was on disk at boot and miss every later fix.
+start_sync_loop() {
+  while true; do
+    sleep 120
+    sync_from_live
+  done
 }
 
 check_local_assets() {
@@ -60,6 +77,7 @@ check_local_assets() {
 log "syncing kiosk files from ${LIVE_BASE}"
 sync_from_live
 check_local_assets
+start_sync_loop &
 
 # --- locate Chromium ---------------------------------------------------------
 if [ -z "$CHROMIUM" ]; then
