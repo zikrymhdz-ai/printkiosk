@@ -102,6 +102,69 @@
 
     <!-- Transactions -->
     <div id="section-transactions" style="display:none;">
+      <!-- Payment watcher liveness lives here, next to the money it protects. -->
+      <div id="watcherAlertBanner" style="display:none; margin-bottom:20px; padding:16px 18px; border-radius:var(--radius); border:2px solid #dc2626; background:#fef2f2;">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;">
+          <div style="flex:1;min-width:260px;">
+            <p style="font-size:16px;font-weight:700;color:#991b1b;margin-bottom:6px;" id="watcherAlertTitle">Payment Watcher Offline</p>
+            <p class="text-sm" style="color:#7f1d1d;" id="watcherAlertMsg">Customers can pay, but their jobs will not be confirmed automatically.</p>
+          </div>
+          <button class="btn btn-primary btn-sm" onclick="loadWatcherStatus()" style="white-space:nowrap;">Recheck</button>
+        </div>
+      </div>
+
+      <div class="card animate-fade-in" style="margin-bottom:20px;">
+        <div class="card-header">
+          <span class="card-title">Payment Watcher (staff phone)</span>
+          <span class="badge badge-gray" id="watcherBadge">Checking…</span>
+          <button class="btn btn-secondary btn-sm" onclick="loadWatcherStatus()">Refresh</button>
+        </div>
+        <div id="watcherStatusBody"><p class="text-sm text-muted" style="padding:8px 0;">Loading...</p></div>
+      </div>
+
+      <div class="card animate-fade-in" style="margin-bottom:20px;">
+        <div class="card-header">
+          <span class="card-title">Payments Needing Manual Confirmation</span>
+          <span class="badge badge-gray" id="paymentReviewBadge">0</span>
+          <button class="btn btn-secondary btn-sm" onclick="loadPaymentReview()">Refresh</button>
+        </div>
+        <p class="text-sm text-muted" style="margin-bottom:12px;">
+          Only appears when a payment could not be matched to exactly one job. Choose the correct job to confirm it by hand.
+        </p>
+        <div id="paymentReviewBody"><p class="text-sm text-muted" style="padding:8px 0;">Loading...</p></div>
+      </div>
+
+      <div class="card animate-fade-in" style="margin-bottom:20px;">
+        <div class="card-header" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+          <span class="card-title">Watcher Notification Log</span>
+          <select id="payLogStatusFilter" class="input" style="width:auto;padding:6px 10px;font-size:13px;" onchange="loadPaymentLog()">
+            <option value="">All notifications</option>
+            <option value="matched">Matched to a job</option>
+            <option value="sent">Sent to backend</option>
+            <option value="ignored">Ignored (not incoming)</option>
+            <option value="review">Needs review</option>
+            <option value="failed">Failed</option>
+          </select>
+          <button class="btn btn-secondary btn-sm" onclick="loadPaymentLog()">Refresh</button>
+          <button class="btn btn-secondary btn-sm" id="payLogSelectAllBtn" onclick="togglePayLogSelectAll()">Select all</button>
+          <button class="btn btn-danger btn-sm" id="payLogDeleteBtn" disabled onclick="deleteSelectedPayLog()">Delete Selected</button>
+          <span class="text-xs text-muted" id="payLogStats"></span>
+        </div>
+        <p class="text-sm text-muted" style="margin-bottom:12px;">
+          Every notification the watcher received from TnG / banking apps, whether or not it was a payment.
+          If a real payment is not detected, the row here shows the exact wording the phone saw, so the parser can be corrected against evidence.
+        </p>
+        <div id="watcherMigrationWarn" style="display:none; margin-bottom:14px; padding:12px; background:var(--warning-light); border:1px solid #fde68a; border-radius:var(--radius);">
+          <p class="text-sm" style="color:#92400e;"><strong>Watcher tables not migrated yet.</strong> Run <code>migrations/20261012_watcher_heartbeat_payment_log.sql</code> in the Supabase SQL editor to enable the liveness banner, this log and manual payment review.</p>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th style="width:36px;"></th><th>Time</th><th>App</th><th>Amount</th><th>Decision</th><th>Notification text</th></tr></thead>
+            <tbody id="payLogBody"><tr><td colspan="6" style="text-align:center;color:var(--gray-400);padding:24px;">Loading...</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
       <div class="card animate-fade-in">
         <div class="card-header" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
           <span class="card-title">Transactions</span>
@@ -173,43 +236,13 @@
       </div>
     </div>
 
-    <!-- Payment watcher offline: shown on EVERY tab, not just Security. Real money is
-     being taken at the counter while nothing auto-confirms, so staff must see this
-     no matter where they are in the dashboard. -->
-<div id="watcherAlertBanner" style="display:none; margin:0 0 20px 0; padding:16px 18px; border-radius:var(--radius); border:2px solid #dc2626; background:#fef2f2;">
-  <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;">
-    <div style="flex:1;min-width:260px;">
-      <p style="font-size:16px;font-weight:700;color:#991b1b;margin-bottom:6px;" id="watcherAlertTitle">Payment Watcher Offline</p>
-      <p class="text-sm" style="color:#7f1d1d;" id="watcherAlertMsg">Customers can pay, but their jobs will not be confirmed automatically.</p>
-    </div>
-    <button class="btn btn-primary btn-sm" onclick="loadWatcherStatus()" style="white-space:nowrap;">Recheck</button>
-  </div>
-</div>
+    <!-- Payment watcher status lives in Transactions: that is the tab staff are on
+     when money is involved. Kept out of Security so it does not shout at users who
+     are only checking the face log or kiosk controls. -->
 
     <!-- Security & Kiosk -->
     <div id="section-security" style="display:none;">
         <div class="card animate-fade-in" style="margin-bottom:20px;">
-          <div class="card-header">
-            <span class="card-title">Payment Watcher (staff phone)</span>
-            <span class="badge badge-gray" id="watcherBadge">Checking…</span>
-            <button class="btn btn-secondary btn-sm" onclick="loadWatcherStatus()">Refresh</button>
-          </div>
-          <div id="watcherStatusBody"><p class="text-sm text-muted" style="padding:8px 0;">Loading...</p></div>
-        </div>
-
-        <div class="card animate-fade-in" style="margin-bottom:20px;">
-          <div class="card-header">
-            <span class="card-title">Payments Needing Manual Confirmation</span>
-            <span class="badge badge-gray" id="paymentReviewBadge">0</span>
-            <button class="btn btn-secondary btn-sm" onclick="loadPaymentReview()">Refresh</button>
-          </div>
-          <p class="text-sm text-muted" style="margin-bottom:12px;">
-            Only appears when a payment could not be matched to exactly one job. Choose the correct job to confirm it by hand.
-          </p>
-          <div id="paymentReviewBody"><p class="text-sm text-muted" style="padding:8px 0;">Loading...</p></div>
-        </div>
-
-<div class="card animate-fade-in" style="margin-bottom:20px;">
           <div class="card-header">
             <span class="card-title">Shop Screen Status</span>
             <span class="badge badge-gray" id="kioskOnlineBadge">Checking…</span>
@@ -282,38 +315,6 @@
       </div>
     </div>
 
-        <div class="card animate-fade-in">
-          <div class="card-header" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
-            <span class="card-title">Watcher Notification Log</span>
-            <select id="payLogStatusFilter" class="input" style="width:auto;padding:6px 10px;font-size:13px;" onchange="loadPaymentLog()">
-              <option value="">All notifications</option>
-              <option value="matched">Matched to a job</option>
-              <option value="sent">Sent to backend</option>
-              <option value="ignored">Ignored (not incoming)</option>
-              <option value="review">Needs review</option>
-              <option value="failed">Failed</option>
-            </select>
-            <button class="btn btn-secondary btn-sm" onclick="loadPaymentLog()">Refresh</button>
-            <button class="btn btn-secondary btn-sm" id="payLogSelectAllBtn" onclick="togglePayLogSelectAll()">Select all</button>
-            <button class="btn btn-danger btn-sm" id="payLogDeleteBtn" disabled onclick="deleteSelectedPayLog()">Delete Selected</button>
-            <span class="text-xs text-muted" id="payLogStats"></span>
-          </div>
-          <p class="text-sm text-muted" style="margin-bottom:12px;">
-            Every notification the watcher received from TnG / banking apps, whether or not it was a payment.
-            If a real payment is not detected, the row here shows the exact wording the phone saw, so the parser can be corrected against evidence.
-          </p>
-          <div id="watcherMigrationWarn" style="display:none; margin-bottom:14px; padding:12px; background:var(--warning-light); border:1px solid #fde68a; border-radius:var(--radius);">
-            <p class="text-sm" style="color:#92400e;"><strong>Watcher tables not migrated yet.</strong> Run <code>migrations/20261012_watcher_heartbeat_payment_log.sql</code> in the Supabase SQL editor to enable the liveness banner, this log and manual payment review.</p>
-          </div>
-          <div class="table-wrap">
-            <table>
-              <thead><tr><th style="width:36px;"></th><th>Time</th><th>App</th><th>Amount</th><th>Decision</th><th>Notification text</th></tr></thead>
-              <tbody id="payLogBody"><tr><td colspan="6" style="text-align:center;color:var(--gray-400);padding:24px;">Loading...</td></tr></tbody>
-            </table>
-          </div>
-        </div>
-    </div>
-
     <!-- Users -->
     <div id="section-users" style="display:none;">
       <div class="card animate-fade-in">
@@ -380,12 +381,12 @@ function showSection(name, el) {
   const ov = document.getElementById('sidebarOverlay');
   sb.classList.remove('open');
   ov.classList.remove('show');
-  if (name === 'transactions') loadTransactions();
+  if (name === 'transactions') { loadTransactions(); loadWatcherStatus(); loadPaymentReview(); loadPaymentLog(); }
   if (name === 'alerts') loadAlerts();
   if (name === 'coins') loadCoinTransactions();
   if (name === 'users') loadUsers();
   if (name === 'printer') { loadReadyJobs(); }
-  if (name === 'security') { loadKioskSettings(); loadFaceDetections(); loadKioskStatus(); loadWatcherStatus(); loadPaymentReview(); loadPaymentLog(); }
+  if (name === 'security') { loadKioskSettings(); loadFaceDetections(); loadKioskStatus(); }
 }
 
 function loadAll() {
