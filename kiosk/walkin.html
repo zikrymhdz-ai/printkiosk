@@ -385,6 +385,10 @@ let animFrameId = null;
 // Surface backend/camera/model failures somewhere readable. On a Pi with no
 // keyboard these are otherwise invisible, and the shop just sees a dead screen.
 function piLog(msg) {
+  // Mirror to the browser console as well, so the messages also land in the
+  // systemd journal (the launcher runs Chromium with --enable-logging=stderr)
+  // and can be read over SSH instead of squinting at the on-screen overlay.
+  try { console.log('[pk] ' + msg); } catch (e) {}
   var el = document.getElementById('piDiag');
   if (!el) return;
   var line = msg + '\n';
@@ -426,7 +430,7 @@ function throttledUnknownLog(distance) {
 /* ===== REMOTE KIOSK CONTROL (admin) ===== */
 // Must match APP_VERSION in netlify/functions/_shared.js. If the deployed
 // version differs, the kiosk reloads itself so it never runs a stale page.
-var KIOSK_APP_VERSION = '2026.10.12-1';
+var KIOSK_APP_VERSION = '2026.10.12-2';
 var kioskState = { face_login_enabled: true, maintenance_mode: false, maintenance_message: '' };
 var kioskSettingsTimer = null;
 var cameraStoppedForMaint = false;
@@ -645,6 +649,16 @@ async function openCamera() {
     piLog('getUserMedia unavailable (not a secure context?)');
     return false;
   }
+
+  // Log what cameras the browser can actually see. If enumerateDevices() is
+  // empty the problem is OS-level (no v4l2 device / wrong permissions) rather
+  // than the constraint below, and this line makes that obvious.
+  try {
+    var devs = await navigator.mediaDevices.enumerateDevices();
+    var cams = devs.filter(function (d) { return d.kind === 'videoinput'; });
+    piLog('cameras seen: ' + cams.length);
+    cams.forEach(function (c, i) { piLog('  cam' + i + ': ' + (c.label || '(no label - check permissions)')); });
+  } catch (e) { piLog('enumerateDevices failed: ' + e.message); }
 
   var camW = window.IS_RPI ? 480 : 640;
   var attempts = [

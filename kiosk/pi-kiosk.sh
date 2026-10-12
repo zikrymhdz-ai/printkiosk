@@ -107,6 +107,8 @@ exec "$CHROMIUM" \
   --autoplay-policy=no-user-gesture-required \
   --use-fake-ui-for-media-stream \
   --allow-file-access-from-files \
+  --enable-logging=stderr \
+  --v=0 \
   --disable-application-cache \
   --disk-cache-size=1 \
   --media-cache-size=1 \
