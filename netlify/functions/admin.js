@@ -23,6 +23,10 @@ exports.handler = async (event) => {
       case 'face-snapshot': return getFaceSnapshot(url);
       case 'kiosk-settings': return getKioskSettingsAdmin();
       case 'kiosk-status': return getKioskStatus();
+      case 'watcher-status': return getWatcherStatus();
+      case 'payment-log': return getPaymentLog(url);
+      case 'payment-review': return getPaymentReview(url);
+      case 'payment-manual-confirm': return manualConfirmPayment(event, session);
       default: return err('Invalid action');
     }
   } else if (event.httpMethod === 'POST') {
@@ -33,6 +37,7 @@ exports.handler = async (event) => {
       // Must be POST: this deletes rows, so it must never run on a GET.
       case 'delete-face-detections': return deleteFaceDetections(event);
       case 'set-kiosk-settings': return setKioskSettingsAdmin(event, session);
+      case 'delete-payment-log': return deletePaymentLog(event);
       default: return err('Invalid action');
     }
   }
@@ -376,6 +381,159 @@ async function getFaceSnapshot(url) {
     body: m[2],
     isBase64Encoded: true
   };
+}
+
+/* ===== PAYMENT WATCHER (mobile) ===== */
+// Is the phone that watches for TnG payments actually alive?
+//
+// This is the single most important status in the product. If the watcher is
+// dead, customers still hand over real money at the counter but nothing marks
+// their job as paid, so printing silently fails until someone complains. The
+// heartbeat arrives every 30s; anything older than 90s means it is not reporting.
+const WATCHER_OFFLINE_AFTER_SEC = 90;
+
+async function getWatcherStatus() {
+  const result = await supabaseRequest('GET', '/watcher_heartbeats', null, {
+    'order': 'seen_at.desc',
+    'limit': '1'
+  });
+
+  if (result.error || !result.data || result.data.length === 0) {
+    return json({
+      success: true, online: false, never_reported: true,
+      message: 'The payment watcher has never reported in. Install it on the staff phone and grant notification access.'
+    });
+  }
+
+  const b = result.data[0];
+  const ageSeconds = Math.max(0, Math.round((Date.now() - new Date(b.seen_at).getTime()) / 1000));
+  const online = ageSeconds <= WATCHER_OFFLINE_AFTER_SEC;
+
+  return json({
+    success: true,
+    online: online,
+    // Offline means: no heartbeat, OR alive but the notification listener is
+    // unbound (Android revoked it). Both stop payments being detected, so both
+    // must be surfaced loudly rather than treated as fine.
+    listening: !!b.listening,
+    access_granted: !!b.access_granted,
+    status: {
+      watcher_id: b.watcher_id,
+      app_version: b.app_version,
+      seen_at: b.seen_at,
+      age_seconds: ageSeconds,
+      notifications_seen: b.notifications_seen,
+      payments_matched: b.payments_matched,
+      queued_pending: b.queued_pending,
+      last_post: b.last_post,
+      detail: b.detail
+    },
+    message: online
+      ? (!b.listening || !b.access_granted
+        ? 'The watcher app is running but notification access is OFF, so no payment can be detected. Grant it in Android settings.'
+        : 'Watcher is online and listening.')
+      : 'The payment watcher stopped reporting ' + ageSeconds + 's ago. Payments are being taken but NOT auto-confirmed.'
+  });
+}
+
+// Every notification the watcher saw, matched or not. This is the evidence needed
+// to fix the parser: TnG changes its wording without warning.
+async function getPaymentLog(url) {
+  const limit = Math.min(300, Math.max(1, parseInt(url.searchParams.get('limit') || '100', 10)));
+  const statusFilter = url.searchParams.get('status') || '';
+
+  const params = {
+    'select': 'id,package_name,title,raw_text,gate_text,amount,amount_raw,reference,incoming,status,job_id,detail,posted_at,seen_at',
+    'order': 'seen_at.desc',
+    'limit': String(limit)
+  };
+  if (statusFilter) params['status'] = 'eq.' + statusFilter;
+
+  const result = await supabaseRequest('GET', '/payment_log', null, params);
+  if (result.error) {
+    return json({ success: true, rows: [], unavailable: true });
+  }
+
+  const rows = result.data || [];
+  return json({
+    success: true,
+    rows: rows,
+    stats: {
+      total: rows.length,
+      incoming: rows.filter(r => r.incoming).length,
+      matched: rows.filter(r => r.status === 'matched').length,
+      ignored: rows.filter(r => r.status === 'ignored').length
+    }
+  });
+}
+
+async function deletePaymentLog(event) {
+  let body;
+  try { body = JSON.parse(event.body || '{}'); } catch (e) { return err('Bad JSON body'); }
+
+  let ids = Array.isArray(body.ids) ? body.ids.filter(id => typeof id === 'string' && id.length > 0) : [];
+  if (ids.length > 500) return err('Too many rows selected', 400);
+
+  if (!ids.length) {
+    if (!body.all) return err('No rows selected');
+    const all = await supabaseRequest('GET', '/payment_log', null, { 'select': 'id', 'limit': '1000' });
+    if (all.error) return err('Could not read the log', 500);
+    ids = (all.data || []).map(r => r.id);
+    if (!ids.length) return json({ success: true, deleted: 0 });
+  }
+
+  const result = await supabaseRequest('DELETE', '/payment_log?id=in.(' + ids.join(',') + ')', null);
+  if (result.error) return err('Failed to delete', 500);
+  return json({ success: true, deleted: ids.length });
+}
+
+// Payments that were ambiguous and parked for a human. This is the fallback that
+// keeps an unresolvable match from ever releasing the wrong customer's document.
+async function getPaymentReview(url) {
+  const status = url.searchParams.get('status') || 'pending';
+  const result = await supabaseRequest('GET', '/payment_review_queue', null, {
+    'status': 'eq.' + status,
+    'order': 'created_at.desc',
+    'limit': '100'
+  });
+  if (result.error) {
+    return json({ success: true, items: [], unavailable: true });
+  }
+  return json({ success: true, items: result.data || [] });
+}
+
+async function manualConfirmPayment(event, session) {
+  let body;
+  try { body = JSON.parse(event.body || '{}'); } catch (e) { return err('Bad JSON body'); }
+
+  const jobId = String(body.job_id || '');
+  const reviewId = String(body.review_id || '');
+  if (!jobId) return err('job_id required');
+
+  const jobResult = await supabaseRequest('GET', '/print_jobs', null, {
+    'id': 'eq.' + jobId, 'select': '*', 'limit': '1'
+  });
+  if (jobResult.error || !jobResult.data || !jobResult.data.length) {
+    return err('Print job not found');
+  }
+  const job = jobResult.data[0];
+
+  if (job.paid) return err('That job is already confirmed as paid');
+
+  const { confirmJobPaid } = require('./payment');
+  const res = await confirmJobPaid(job, 'manual_admin', 'MANUAL-' + job.job_id);
+  if (!res.ok) return err(res.error || 'Failed to confirm', 500);
+
+  if (reviewId) {
+    await supabaseRequest('PATCH', '/payment_review_queue?id=eq.' + reviewId, {
+      status: 'resolved',
+      resolved_job: job.job_id,
+      resolved_by: session.users.email || 'admin',
+      resolved_at: new Date().toISOString()
+    });
+  }
+
+  return json({ success: true, job_id: job.job_id, coins_earned: res.coinsEarned });
 }
 
 /* ===== REMOTE KIOSK CONTROL ===== */

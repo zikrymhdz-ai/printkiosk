@@ -6,6 +6,12 @@ const SUPABASE_REST_URL = SUPABASE_URL + '/rest/v1';
 
 const SESSION_DURATION = 86400 * 7;
 
+// How long a pending print job can still be matched to a payment by the watcher.
+// Ten minutes is long enough for a customer to upload, pick a payment method and
+// complete a transfer, and short enough that abandoned jobs stop squatting on the
+// unique match-amount slots.
+const JOB_PAYABLE_WINDOW_MIN = 10;
+
 // Shared secret between the PrintKiosk Payment Watcher APK and this backend,
 // used to sign server-side "payment detected" events (HMAC-SHA256).
 const NOTIFICATION_SECRET = process.env.NOTIFICATION_SECRET || 'pk_notif_v2_cedae2612263aeb4a55db926e0c2ee3007579c50b21ccc56';
@@ -18,7 +24,7 @@ const PRICE_DOUBLE_SIDED_MULTIPLIER = 0.7;
 // Bumped whenever the kiosk front-end changes. The kiosk compares this against
 // the version it was loaded with and reloads itself, so an unattended screen
 // never keeps running a stale copy of walkin.html.
-const APP_VERSION = '2026.10.12-24';
+const APP_VERSION = '2026.10.12-25';
 
 const ALLOWED_EXTENSIONS = ['pdf', 'doc', 'docx', 'jpg', 'jpeg', 'png'];
 
@@ -291,14 +297,21 @@ function calculatePrice(pages, colorMode, paperSize, sides, copies) {
 // If two unpaid jobs have the identical amount, one paying customer's money could
 // mark the *other* job paid (free print). We therefore nudge every concurrent
 // same-priced job by one cent so each payment maps to exactly one job.
+// Range stays 0.00-0.09 for everyone, including guests. It only has to separate
+// jobs that are still payable, so jobs past the payable window are ignored here
+// instead of squatting on a slot. That keeps ten slots sufficient even though the
+// table accumulates abandoned rows.
 async function assignUniqueMatchAmount(basePrice) {
   const baseCents = Math.round(basePrice * 100);
   if (baseCents <= 0) return { total: 0, fee: 0, base: 0 };
+
+  const cutoff = new Date(Date.now() - JOB_PAYABLE_WINDOW_MIN * 60 * 1000).toISOString();
 
   const result = await supabaseRequest('GET', '/print_jobs', null, {
     'paid': 'eq.false',
     'status': 'eq.pending',
     'select': 'total_price',
+    'created_at': 'gte.' + cutoff,
     'limit': '500'
   });
 
@@ -317,8 +330,10 @@ async function assignUniqueMatchAmount(basePrice) {
     }
   }
 
-  // Extremely unlikely: all 10 slots taken. Use the top slot.
-  return { total: (baseCents + 9) / 100, fee: 0.09, base: baseCents / 100 };
+  // All ten slots are genuinely live. Hand out the top slot and let the backend
+  // route the payment to staff review rather than silently confirming the newest
+  // job, which would release the wrong customer's document.
+  return { total: (baseCents + 9) / 100, fee: 0.09, base: baseCents / 100, crowded: true };
 }
 
 async function supabaseStorageUpload(bucket, path, fileBuffer, contentType) {
@@ -431,7 +446,7 @@ module.exports = {
   SUPABASE_URL, SUPABASE_KEY, SUPABASE_REST_URL,
   SESSION_DURATION, PRICE_BW_PER_PAGE, PRICE_COLOR_PER_PAGE,
   PRICE_A3_MULTIPLIER, PRICE_DOUBLE_SIDED_MULTIPLIER, ALLOWED_EXTENSIONS,
-  NOTIFICATION_SECRET, APP_VERSION,
+  NOTIFICATION_SECRET, APP_VERSION, JOB_PAYABLE_WINDOW_MIN,
   SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM_NAME,
   VERIFICATION_CODE_LENGTH, VERIFICATION_CODE_TTL,
   corsHeaders, json, err, supabaseRequest, generateJobId,

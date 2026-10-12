@@ -23,6 +23,12 @@ exports.handler = async (event) => {
   if (event.httpMethod === 'POST' && action === 'kiosk-heartbeat') {
     return await handleKioskHeartbeat(event);
   }
+  if (event.httpMethod === 'POST' && action === 'watcher-heartbeat') {
+    return await handleWatcherHeartbeat(event);
+  }
+  if (event.httpMethod === 'POST' && action === 'log-notification') {
+    return await handleLogNotification(event);
+  }
 
   switch (action) {
     case 'get-jobs': {
@@ -133,6 +139,83 @@ async function handleKioskHeartbeat(event) {
 
   if (result.error) {
     return json({ success: false, logged: false, error: 'Heartbeat table unavailable' });
+  }
+  return json({ success: true, logged: true });
+}
+
+// The watcher APK posts a heartbeat every 30s. This is the single most important
+// signal in the whole app: if the watcher is dead, real customers pay at the
+// counter but nothing auto-confirms, and staff only discover it when a customer
+// complains. Admin raises a prominent banner when this stops arriving.
+async function handleWatcherHeartbeat(event) {
+  let body;
+  try { body = JSON.parse(event.body || '{}'); } catch (e) { return err('Bad JSON body'); }
+
+  const int = (v) => (Number.isFinite(parseInt(v, 10)) ? parseInt(v, 10) : 0);
+
+  const result = await supabaseRequest('POST', '/watcher_heartbeats', {
+    watcher_id: String(body.watcher_id || 'watcher-1').slice(0, 40),
+    app_version: String(body.app_version || '').slice(0, 20),
+    listening: !!body.listening,
+    access_granted: !!body.access_granted,
+    notifications_seen: int(body.notifications_seen),
+    payments_matched: int(body.payments_matched),
+    queued_pending: int(body.queued_pending),
+    last_post: String(body.last_post || '').slice(0, 120),
+    detail: String(body.detail || '').slice(0, 600),
+    seen_at: new Date().toISOString()
+  });
+
+  if (result.error) {
+    // Table not migrated yet - never break the watcher over a heartbeat.
+    return json({ success: false, logged: false, error: 'Watcher heartbeat table unavailable' });
+  }
+  return json({ success: true, logged: true });
+}
+
+// Every watched notification is recorded here, matched or not. The whole point is
+// evidence: the TnG wording changes without warning, and guessing at a regex is
+// how payments get missed. Staff can read the exact text admin-side and we fix
+// the parser against what the app actually received.
+async function handleLogNotification(event) {
+  let body;
+  try { body = JSON.parse(event.body || '{}'); } catch (e) { return err('Bad JSON body'); }
+
+  const clientRef = String(body.client_ref || '').slice(0, 80) || null;
+  const amountRaw = String(body.amount_raw || '');
+  const amount = parseFloat(amountRaw);
+  const safeAmount = Number.isFinite(amount) && amount > 0 ? Math.round(amount * 100) / 100 : null;
+
+  // Idempotency: a retried notification (app was killed mid-request, or the
+  // response was lost and WorkManager resent it) must not become two rows.
+  if (clientRef) {
+    const existing = await supabaseRequest('GET', '/payment_log', null, {
+      'client_ref': 'eq.' + clientRef, 'select': 'id', 'limit': '1'
+    });
+    if (!existing.error && existing.data && existing.data.length > 0) {
+      return json({ success: true, logged: false, duplicate: true, id: existing.data[0].id });
+    }
+  }
+
+  const result = await supabaseRequest('POST', '/payment_log', {
+    package_name: String(body.package_name || '').slice(0, 80),
+    title: String(body.title || '').slice(0, 200),
+    raw_text: String(body.raw_text || '').slice(0, 2000),
+    gate_text: String(body.gate_text || '').slice(0, 2000),
+    amount: safeAmount,
+    amount_raw: amountRaw.slice(0, 40),
+    reference: String(body.reference || '').slice(0, 60),
+    incoming: !!body.incoming,
+    status: String(body.status || 'seen').slice(0, 40),
+    job_id: String(body.job_id || '').slice(0, 40),
+    detail: String(body.detail || '').slice(0, 400),
+    client_ref: clientRef,
+    posted_at: String(body.posted_at || '').slice(0, 30),
+    seen_at: new Date().toISOString()
+  });
+
+  if (result.error) {
+    return json({ success: false, logged: false, error: 'Payment log table unavailable' });
   }
   return json({ success: true, logged: true });
 }

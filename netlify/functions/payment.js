@@ -1,5 +1,5 @@
 const crypto = require('crypto');
-const { json, err, supabaseRequest, NOTIFICATION_SECRET } = require('./_shared');
+const { json, err, supabaseRequest, NOTIFICATION_SECRET, JOB_PAYABLE_WINDOW_MIN } = require('./_shared');
 
 exports.handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') return json({});
@@ -106,6 +106,8 @@ async function handlePaymentConfirm(event) {
   });
 }
 
+// JOB_PAYABLE_WINDOW_MIN is imported from _shared so the amount allocator and the
+// matcher can never drift apart: a slot is only held while its job is payable.
 async function handleNlsReceived(event) {
   let body;
   try { body = JSON.parse(event.body || '{}'); } catch (e) { return err('Bad JSON body'); }
@@ -124,14 +126,20 @@ async function handleNlsReceived(event) {
   const expected = crypto.createHmac('sha256', NOTIFICATION_SECRET).update(message).digest('hex');
   if (!hmac || expected !== hmac) return err('Invalid signature', 401);
 
+  const cutoff = new Date(Date.now() - JOB_PAYABLE_WINDOW_MIN * 60 * 1000).toISOString();
+
   const jobsResult = await supabaseRequest('GET', '/print_jobs', null, {
     'paid': 'eq.false',
     'status': 'eq.pending',
-    'select': 'id,job_id,user_id,total_price,file_name',
+    'select': 'id,job_id,user_id,total_price,file_name,created_at,page_spec,pages,copies,color_mode',
+    'created_at': 'gte.' + cutoff,
     'order': 'created_at.desc'
   });
 
   const jobs = jobsResult.error ? [] : (jobsResult.data || []);
+
+  // AMOUNT IS PRIMARY. The unique match fee (0.00-0.09) makes each live job's
+  // total distinct, so the amount is the strongest signal we have.
   const matches = jobs.filter(j => Math.abs(parseFloat(j.total_price) - amount) < 0.005);
 
   if (!matches.length) {
@@ -144,7 +152,34 @@ async function handleNlsReceived(event) {
     return json({ success: false, matched: false, reason: 'no_match', amount });
   }
 
-  const job = matches[0];
+  let job = matches[0];
+  let disambiguatedBy = 'amount';
+
+  if (matches.length > 1) {
+    // Rare: two live jobs share a total. The payer's name is only a tie-breaker,
+    // never the primary key, because the name on a bank account very often
+    // differs from the name on the account (nicknames, different ordering,
+    // truncated, romanisation). If it cannot separate them, do NOT guess.
+    await attachUserNames(matches);
+    const payer = extractPayerName(rawText);
+    if (payer) {
+      const named = matches.filter(j => jobBelongsToName(j, payer));
+      if (named.length === 1) {
+        job = named[0];
+        disambiguatedBy = 'amount+name';
+      } else if (named.length > 1) {
+        return await parkForReview(amount, amountRaw, payer, ref, rawText, named,
+          'amount matched ' + named.length + ' jobs and the payer name matched all of them');
+      }
+    }
+
+    if (disambiguatedBy === 'amount') {
+      // Could not pick safely. Park it instead of confirming somebody's document
+      // against somebody else's money.
+      return await parkForReview(amount, amountRaw, payer, ref, rawText, matches,
+        matches.length + ' pending jobs share RM ' + amount.toFixed(2) + ' and the payer name did not identify one');
+    }
+  }
 
   // Idempotency: already confirmed elsewhere?
   const dupResult = await supabaseRequest('GET', '/payments', null, {
@@ -160,22 +195,115 @@ async function handleNlsReceived(event) {
   const res = await confirmJobPaid(job, 'tng_detected', ref || ('DET-' + job.job_id));
   if (!res.ok) return err(res.error, 500);
 
-  if (matches.length > 1) {
-    await supabaseRequest('POST', '/alerts', {
-      type: 'payment_received',
-      message: 'Multiple pending jobs matched RM ' + amount.toFixed(2) + ' - confirmed the most recent (' + job.job_id + ')',
-      severity: 'info',
-      is_read: false
-    });
-  }
-
   return json({
     success: true,
     matched: true,
     job_id: job.job_id,
     amount,
     coins_earned: res.coinsEarned,
-    ambiguous: matches.length > 1
+    matched_by: disambiguatedBy
+  });
+}
+
+// Fetch the account name for each candidate so the payer name can break a tie.
+// Guest jobs have no user, so they can never be matched this way - by design,
+// guests rely on the unique amount alone.
+async function attachUserNames(jobs) {
+  const ids = jobs.map(j => j.user_id).filter(Boolean);
+  if (!ids.length) return;
+  const result = await supabaseRequest('GET', '/users', null, {
+    'id': 'in.(' + ids.join(',') + ')',
+    'select': 'id,name',
+    'limit': String(ids.length)
+  });
+  if (result.error || !result.data) return;
+  const byId = {};
+  for (const u of result.data) byId[u.id] = u.name;
+  for (const j of jobs) j._userName = j.user_id ? byId[j.user_id] : null;
+}
+
+// "MUHAMMAD ZIKRY BIN MOHD H has transferred RM0.21 to you"
+// Pull out the payer's name. Deliberately conservative: returns null rather than
+// a wrong guess, because a bad name match is worse than no name match.
+function extractPayerName(rawText) {
+  if (!rawText) return null;
+  const patterns = [
+    /(.{2,60}?)\s+has transferred\s+RM/i,
+    /from\s+(.{2,60}?)(?:\s+via|\s*$)/im,
+    /by\s+(.{2,60}?)(?:\s+via|\s*$)/im
+  ];
+  for (const re of patterns) {
+    const m = re.exec(rawText);
+    if (!m) continue;
+    let name = String(m[1]).trim()
+      .replace(/^You've recieved money!\s*/i, '')
+      .replace(/^You received money!\s*/i, '')
+      .replace(/[!.,:;]\s*$/, '')
+      .trim();
+    // A real name, not another sentence.
+    if (name.length >= 3 && name.length <= 60 && /[A-Za-z]{2}/.test(name) && !/\b(rm|money|received|payment)\b/i.test(name)) {
+      return name;
+    }
+  }
+  return null;
+}
+
+// Compare loosely on purpose: the customer signed up one way, the bank shows
+// another. Case and spacing must not matter; we are only breaking a tie that the
+// amount alone could not.
+function jobBelongsToName(job, payerName) {
+  if (!job.user_id || !payerName) return false;
+  return job._userName ? sameName(job._userName, payerName) : false;
+}
+
+function sameName(a, b) {
+  const norm = (s) => String(s).toLowerCase().replace(/[^a-z]/g, '');
+  const na = norm(a), nb = norm(b);
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  // One contained in the other covers truncation ("Muhammad Zikry" vs
+  // "Muhammad Zikry Bin Mohd H") and reordered/middle-name variants.
+  return na.includes(nb) || nb.includes(na);
+}
+
+// Park an ambiguous payment for a human instead of force-matching it.
+async function parkForReview(amount, amountRaw, payerName, ref, rawText, candidates, reason) {
+  const candidateJobs = candidates.map(c => ({
+    id: c.id,
+    job_id: c.job_id,
+    total_price: c.total_price,
+    pages: c.pages,
+    copies: c.copies,
+    color_mode: c.color_mode,
+    file_name: c.file_name,
+    created_at: c.created_at
+  }));
+
+  const inserted = await supabaseRequest('POST', '/payment_review_queue', {
+    amount: amount,
+    amount_raw: amountRaw,
+    payer_name: payerName || '',
+    reference: ref || '',
+    raw_text: rawText || '',
+    candidate_jobs: JSON.stringify(candidateJobs),
+    reason: reason,
+    status: 'pending'
+  });
+
+  await supabaseRequest('POST', '/alerts', {
+    type: 'payment_received',
+    message: 'Payment RM ' + amount.toFixed(2) + ' needs manual confirmation (' + reason + ')',
+    severity: 'warning',
+    is_read: false
+  });
+
+  return json({
+    success: false,
+    matched: false,
+    needs_review: true,
+    reason: reason,
+    amount: amount,
+    candidates: inserted.error ? null : candidateJobs
   });
 }
 
@@ -239,3 +367,7 @@ async function handleCheckStatus(event) {
 
   return json({ success: true, job: result.data[0] });
 }
+
+// Exported so the admin dashboard can confirm a parked (ambiguous) payment
+// without duplicating the coins/job/settlement logic.
+module.exports.confirmJobPaid = confirmJobPaid;
