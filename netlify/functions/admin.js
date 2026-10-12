@@ -272,6 +272,21 @@ async function markAllAlertsRead() {
 }
 
 /* ===== FACE DETECTION AUDIT LOG ===== */
+const FACE_LOG_RETENTION_DAYS = 30;
+// Netlify runs the kiosk-cleanup function daily, but scheduled functions are
+// unavailable on some plans. This opportunistic prune is the safety net: it runs
+// at most once an hour whenever an admin opens the log.
+let lastFaceLogPrune = 0;
+
+async function pruneFaceDetectionsIfDue() {
+  if (Date.now() - lastFaceLogPrune < 60 * 60 * 1000) return;
+  lastFaceLogPrune = Date.now();
+  const cutoff = new Date(Date.now() - FACE_LOG_RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  await supabaseRequest('DELETE', '/face_detections?created_at=lt.' + encodeURIComponent(cutoff), null, {
+    'select': 'id', 'limit': '500'
+  });
+}
+
 // Delete selected rows, or the whole log when no ids are supplied.
 async function deleteFaceDetections(event) {
   let body;
@@ -298,6 +313,8 @@ async function deleteFaceDetections(event) {
 async function getFaceDetections(url) {
   const limit = Math.min(200, Math.max(1, parseInt(url.searchParams.get('limit') || '100', 10)));
   const dateStr = url.searchParams.get('date') || '';
+
+  pruneFaceDetectionsIfDue(); // fire-and-forget, must not delay the response
 
   const params = {
     'select': 'id,user_id,user_name,matched,confidence,kiosk_id,created_at,face_snapshot',

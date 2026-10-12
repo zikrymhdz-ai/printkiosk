@@ -6,6 +6,11 @@
   node_bundler = "esbuild"
   included_files = []
 
+# Daily housekeeping: prune the face detection log (and its stored face photos)
+# to 30 days, so an always-on kiosk cannot grow the table indefinitely.
+[functions."kiosk-cleanup"]
+  schedule = "0 3 * * *"
+
 # ── CORS headers ──────────────────────────────────────────────
 [[headers]]
   for = "/*"

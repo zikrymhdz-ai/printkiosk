@@ -679,7 +679,7 @@ function throttledUnknownLog(distance) {
 /* ===== REMOTE KIOSK CONTROL (admin) ===== */
 // Must match APP_VERSION in netlify/functions/_shared.js. If the deployed
 // version differs, the kiosk reloads itself so it never runs a stale page.
-var KIOSK_APP_VERSION = '2026.10.12-20';
+var KIOSK_APP_VERSION = '2026.10.12-21';
 var kioskState = { face_login_enabled: true, maintenance_mode: false, maintenance_message: '' };
 var kioskSettingsTimer = null;
 var cameraStoppedForMaint = false;
@@ -871,9 +871,8 @@ async function bootKiosk() {
       await faceapi.nets.ssdMobilenetv1.loadFromUri(url);
       window.__pkDetector = 'ssd';
     }
+    await faceapi.nets.faceLandmark68Net.loadFromUri(url);
     await faceapi.nets.faceRecognitionNet.loadFromUri(url);
-    // The 68-landmark net is deliberately NOT loaded: recognition only needs a
-    // descriptor, and loading it cost startup time, RAM and a per-frame pass.
     piLog('detector: ' + window.__pkDetector);
   }
 
@@ -1210,14 +1209,15 @@ async function startFaceDetection() {
           : new faceapi.SsdMobilenetv1Options({ inputSize: inputSize });
       }
 
-      // @vladmandic/face-api returns the descriptor on the detection itself; there is
-      // no .withFaceDescriptor() composable (it does not exist on this build).
-      // Landmarks are only requested as a fallback if the descriptor is absent.
-      var det = await faceapi.detectSingleFace(frameCanvas, window.__pkDetOpts);
-      if (det && !det.descriptor) {
-        try { det = await faceapi.detectSingleFace(frameCanvas, window.__pkDetOpts).withFaceLandmarks(); }
-        catch (e2) { det = null; }
-      }
+      // The order of this chain is not optional on this face-api build:
+      // withFaceDescriptor() only exists AFTER withFaceLandmarks() has upgraded the
+      // result object. Calling detectSingleFace(...).withFaceDescriptor() directly
+      // throws "withFaceDescriptor is not a function", and skipping the landmark
+      // net throws "FaceLandmark68Net - load model before inference".
+      // Do not try to "optimise" the landmarks away - the chain depends on it.
+      var det = await faceapi.detectSingleFace(frameCanvas, window.__pkDetOpts)
+        .withFaceLandmarks()
+        .withFaceDescriptor();
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
       if (det) {
