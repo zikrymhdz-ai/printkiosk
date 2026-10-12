@@ -1,4 +1,4 @@
-const crypto = require('crypto');
+﻿const crypto = require('crypto');
 
 const SUPABASE_URL = process.env.SUPABASE_URL || 'https://ninsrrallzwmkqyosqeu.supabase.co';
 const SUPABASE_KEY = process.env.SUPABASE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5pbnNycmFsbHp3bWtxeW9zcWV1Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4Mzg2MDk1MiwiZXhwIjoyMDk5NDM2OTUyfQ.JabQJz9kRWtZqY7FVJD14yOaKT0phfXTQekGUzYe5ZA';
@@ -18,7 +18,7 @@ const PRICE_DOUBLE_SIDED_MULTIPLIER = 0.7;
 // Bumped whenever the kiosk front-end changes. The kiosk compares this against
 // the version it was loaded with and reloads itself, so an unattended screen
 // never keeps running a stale copy of walkin.html.
-const APP_VERSION = '2026.10.10-3';
+const APP_VERSION = '2026.10.12-1';
 
 const ALLOWED_EXTENSIONS = ['pdf', 'doc', 'docx', 'jpg', 'jpeg', 'png'];
 

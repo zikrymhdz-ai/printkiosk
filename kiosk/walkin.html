@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -29,6 +29,12 @@
 
   window.IS_RPI = isPi;
 
+  // Everything the kiosk needs is served from its own origin (vendor/ + models/),
+  // never a CDN. The Pi is on shop wifi that goes down, and face login / the guest
+  // QR must keep working with no internet at all.
+  window.LOCAL_LIBS = '../vendor/';
+  window.LOCAL_MODELS = '../models/';
+
   // Turn detection on for the Pi. On a Pi the WebGL backend is unreliable and
   // SIMD is unsupported, so the WASM CPU path is the one that actually works.
   if (isPi) {
@@ -42,8 +48,8 @@
 })();
 </script>
 <script src="../frontend_config.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-<script>pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
+<script src="../vendor/pdf.min.js"></script>
+<script>if (window.pdfjsLib) { pdfjsLib.GlobalWorkerOptions.workerSrc = '../vendor/pdf.worker.min.js'; }</script>
 <style>
   body { background: #0f172a; color: white; margin:0; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
   .kiosk-layout { max-width: 1100px; margin: 0 auto; display: flex; gap: 16px; padding: 16px; min-height: 100vh; align-items: stretch; }
@@ -124,17 +130,42 @@
   body.pi-kiosk #qrCanvas { width: 320px; height: 320px; }
   body.pi-kiosk .confirm-avatar { width: 92px; height: 92px; font-size: 40px; }
   body.pi-kiosk .status-bar { font-size: 16px; }
+  /* The camera box is the centrepiece - give it as much of the screen as
+     possible so a standing customer can see their own face well enough for
+     recognition. Thicker border and bigger overlay label to match. */
+  body.pi-kiosk .cam-box { border-width: 4px; border-radius: 16px; }
+  body.pi-kiosk .cam-box .overlay-text { font-size: 17px; padding: 8px 20px; bottom: 16px; }
+  body.pi-kiosk .status-bar { padding: 12px 0; font-size: 17px; gap: 10px; }
+  body.pi-kiosk .dot { width: 12px; height: 12px; }
+  body.pi-kiosk .pp-title { font-size: 16px; }
+  body.pi-kiosk .pp-status-line { font-size: 13px; }
+  body.pi-kiosk .pp-section-title { font-size: 12px; }
+  body.pi-kiosk .pp-row-top { font-size: 13px; }
   /* Hide the manual restart hint in kiosk mode; the launcher handles recovery. */
   body.pi-kiosk .bottom-links { display: none; }
-  /* Common Pi kiosk panels are 800x480 - keep everything on one screen. */
+  /* Common Pi kiosk panels are 800x480 - keep everything on one screen.
+     The camera box is given flex:1 so it absorbs whatever vertical space is
+     left after the status bar, PIN row and button. That makes it as large as
+     the panel allows instead of overflowing behind the controls. */
   @media (max-height: 560px) {
-    .kiosk-layout { padding: 10px; gap: 10px; }
+    .kiosk-layout { padding: 8px; gap: 8px; min-height: 100vh; }
     .kiosk-layout { max-width: 100%; }
-    .printer-panel { width: 210px; padding: 12px; }
-    .kiosk { max-width: none; }
-    .cam-box { aspect-ratio: 16/10; }
-    .pp-section { margin-top: 8px; }
-    .pp-row { margin-bottom: 5px; }
+    .printer-panel { width: 168px; padding: 10px; border-radius: 14px; }
+    .kiosk { max-width: none; min-height: 0; }
+    .kiosk-divider { margin: 8px 0; }
+    .pp-section { margin-top: 6px; }
+    .pp-row { margin-bottom: 4px; }
+    .pp-foot { display: none; }
+    body.pi-kiosk .btn-kiosk { padding: 10px 18px; font-size: 17px; min-height: 46px; }
+    body.pi-kiosk .pin-section input { font-size: 30px; padding: 12px; min-height: 46px; }
+    body.pi-kiosk .pin-section { gap: 8px; }
+    body.pi-kiosk #kioskPinHint { display: none; }
+  }
+  /* Camera grows to fill leftover vertical space on any screen. */
+  body.pi-kiosk .kiosk { min-height: 0; }
+  body.pi-kiosk .cam-box { flex: 1 1 auto; min-height: 150px; aspect-ratio: auto; }
+  body.pi-kiosk .cam-box video,
+  body.pi-kiosk .cam-box canvas { height: 100%; }
     .pp-foot { margin-top: 10px; padding-top: 7px; }
     .confirm-card { padding: 20px; }
     .confirm-overlay { align-items: flex-start; overflow-y: auto; }
@@ -172,7 +203,7 @@
 
   <hr class="kiosk-divider">
 
-  <p style="font-size:13px; color:#6b7280; text-align:center; margin:0;">Enter OTP PIN from website upload</p>
+  <p id="kioskPinHint" style="font-size:13px; color:#6b7280; text-align:center; margin:0;">Enter OTP PIN from website upload</p>
   <div class="pin-section">
     <input type="text" id="pinInput" placeholder="000000" maxlength="6" inputmode="numeric">
     <button class="btn-kiosk btn-primary-kiosk" onclick="lookupPin()">Go</button>
@@ -180,7 +211,7 @@
   <p id="pinFeedback" style="font-size:13px; color:#ef4444; margin-top:4px; display:none;"></p>
 
   <button class="btn-kiosk btn-secondary-kiosk" style="width:100%; margin-top:14px;" id="guestBtn" onclick="startGuest()">
-    <span style="opacity:0.9;">I don't have an account — </span><strong>Scan as Guest</strong>
+    <span style="opacity:0.9;">I don't have an account â€” </span><strong>Scan as Guest</strong>
   </button>
 
   <div class="bottom-links">Face recognition for kiosk auto-login</div>
@@ -336,8 +367,8 @@
   </div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
-<script defer src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/dist/face-api.min.js"></script>
+<script src="../vendor/qrcode.min.js"></script>
+<script defer src="../vendor/face-api.min.js"></script>
 <script>
 const SUPABASE_URL = CONFIG.SUPABASE_URL;
 const SUPABASE_KEY = CONFIG.SUPABASE_KEY;
@@ -395,7 +426,7 @@ function throttledUnknownLog(distance) {
 /* ===== REMOTE KIOSK CONTROL (admin) ===== */
 // Must match APP_VERSION in netlify/functions/_shared.js. If the deployed
 // version differs, the kiosk reloads itself so it never runs a stale page.
-var KIOSK_APP_VERSION = '2026.10.10-3';
+var KIOSK_APP_VERSION = '2026.10.12-1';
 var kioskState = { face_login_enabled: true, maintenance_mode: false, maintenance_message: '' };
 var kioskSettingsTimer = null;
 var cameraStoppedForMaint = false;
@@ -539,7 +570,7 @@ window.addEventListener('load', async () => {
     // so force the single-threaded non-SIMD WASM backend and skip the GPU attempts.
     if (window.IS_RPI) {
       try {
-        if (faceapi.tf.setWasmPaths) faceapi.tf.setWasmPaths('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@4.22.0/dist/');
+        if (faceapi.tf.setWasmPaths) faceapi.tf.setWasmPaths((window.LOCAL_LIBS || '../vendor/') + 'tfjs-wasm/');
         if (faceapi.tf.env && faceapi.tf.env().set) {
           faceapi.tf.env().set('WASM_HAS_MULTITHREAD_SUPPORT', false);
           faceapi.tf.env().set('WASM_HAS_SIMD_SUPPORT', false);
@@ -551,7 +582,7 @@ window.addEventListener('load', async () => {
       } catch(e) { piLog('wasm failed: ' + e.message); }
     }
     try {
-      if (faceapi.tf.setWasmPaths) faceapi.tf.setWasmPaths('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@4.22.0/dist/');
+      if (faceapi.tf.setWasmPaths) faceapi.tf.setWasmPaths((window.LOCAL_LIBS || '../vendor/') + 'tfjs-wasm/');
       if (faceapi.tf.env && faceapi.tf.env().set) {
         faceapi.tf.env().set('WASM_HAS_MULTITHREAD_SUPPORT', false);
         faceapi.tf.env().set('WASM_HAS_SIMD_SUPPORT', false);
@@ -564,20 +595,23 @@ window.addEventListener('load', async () => {
     }
     return false;
   }
+  // Load only the three nets the kiosk actually uses. face-api's default
+  // loadFromUri pulls five nets, which is slow and pointless here.
   async function loadModels(url) {
     await faceapi.nets.ssdMobilenetv1.loadFromUri(url);
     await faceapi.nets.faceLandmark68Net.loadFromUri(url);
     await faceapi.nets.faceRecognitionNet.loadFromUri(url);
   }
-  // Prefer the vendored models on the Pi: no CDN round-trip, and the kiosk must
-  // still come up when the shop internet is down.
+  // Vendored models on the Pi: no CDN round-trip, so the kiosk still comes up
+  // when the shop internet is down.
+  const LOCAL_MODELS = window.LOCAL_MODELS || '../models/';
   const modelUrls = window.IS_RPI
-    ? ['../models', 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/model']
-    : ['https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/model', '../models'];
+    ? [LOCAL_MODELS]
+    : ['https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/model', LOCAL_MODELS];
   let loaded = false;
   await initBackend();
   for (const url of modelUrls) {
-    try { await loadModels(url); loaded = true; piLog('models: ' + url); break; } catch(e) {}
+    try { await loadModels(url); loaded = true; piLog('models: ' + url); break; } catch(e) { piLog('model try failed (' + url + '): ' + e.message); }
   }
   if (!loaded) {
     document.getElementById('camStatus').innerHTML = '<span class="dot dot-yellow"></span> Face AI offline';
@@ -587,28 +621,8 @@ window.addEventListener('load', async () => {
   }
   modelsLoaded = true;
 
-  try {
-    // Ask for a smaller capture on the Pi - it cuts both detection time and memory.
-    const camW = window.IS_RPI ? 480 : 640;
-    faceStream = await navigator.mediaDevices.getUserMedia({
-      video: { width: { ideal: camW }, height: { ideal: 480 }, facingMode: 'user' },
-      audio: false
-    });
-    const video = document.getElementById('kioskCam');
-    video.srcObject = faceStream;
-    await video.play();
-    const canvas = document.getElementById('kioskCanvas');
-    canvas.width = video.videoWidth || camW;
-    canvas.height = video.videoHeight || 480;
-    document.getElementById('camStatus').innerHTML = '<span class="dot dot-green"></span> Face AI active';
-    document.getElementById('faceStatusText').textContent = 'Looking for face...';
-    piLog('camera ' + canvas.width + 'x' + canvas.height);
-    startFaceDetection();
-  } catch(e) {
-    document.getElementById('camStatus').innerHTML = '<span class="dot dot-yellow"></span> Camera blocked';
-    document.getElementById('faceStatusText').textContent = 'Camera access denied';
-    piLog('camera FAILED: ' + e.name + ' ' + e.message);
-  }
+  var camOk = await openCamera();
+  if (!camOk) scheduleCameraRetry();
 
   document.getElementById('pinInput').addEventListener('input', function() {
     this.value = this.value.replace(/\D/g, '').slice(0, 6);
@@ -618,6 +632,68 @@ window.addEventListener('load', async () => {
   loadPrinterStatus();
   setInterval(loadPrinterStatus, 30000);
 });
+
+/**
+ * Open the camera with a short list of constraints. Different Pi camera setups
+ * react differently: a CSI/USB camera may only expose a plain width/height,
+ * while the old "ideal 480p + facingMode" request can come back as
+ * OverconstrainedError on some webcams. We try the strictest first and relax it.
+ */
+async function openCamera() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    document.getElementById('camStatus').innerHTML = '<span class="dot dot-red"></span> No camera API';
+    piLog('getUserMedia unavailable (not a secure context?)');
+    return false;
+  }
+
+  var camW = window.IS_RPI ? 480 : 640;
+  var attempts = [
+    { video: { width: { ideal: camW }, height: { ideal: 480 }, facingMode: 'user' }, audio: false },
+    { video: { width: { ideal: camW }, height: { ideal: 480 } }, audio: false },
+    { video: true, audio: false }
+  ];
+
+  var lastErr = null;
+  for (var i = 0; i < attempts.length; i++) {
+    try {
+      faceStream = await navigator.mediaDevices.getUserMedia(attempts[i]);
+      var video = document.getElementById('kioskCam');
+      video.srcObject = faceStream;
+      await video.play();
+      var canvas = document.getElementById('kioskCanvas');
+      canvas.width = video.videoWidth || camW;
+      canvas.height = video.videoHeight || 480;
+      document.getElementById('camStatus').innerHTML = '<span class="dot dot-green"></span> Face AI active';
+      document.getElementById('faceStatusText').textContent = 'Looking for face...';
+      piLog('camera OK (' + canvas.width + 'x' + canvas.height + ') attempt ' + (i + 1));
+      startFaceDetection();
+      return true;
+    } catch (e) {
+      lastErr = e;
+      piLog('camera attempt ' + (i + 1) + ' failed: ' + e.name + ' ' + e.message);
+    }
+  }
+
+  var msg = lastErr ? lastErr.name + ' ' + lastErr.message : 'unknown';
+  document.getElementById('camStatus').innerHTML = '<span class="dot dot-yellow"></span> Camera blocked';
+  document.getElementById('faceStatusText').textContent = 'Camera unavailable - retrying...';
+  piLog('camera FAILED all attempts: ' + msg);
+  return false;
+}
+
+// A Pi sometimes has the camera enumerate a second or two after boot, or the
+// device is grabbed by another process. Retry quietly instead of giving up.
+function scheduleCameraRetry() {
+  if (window.__camRetry) return;
+  var delay = 4000;
+  window.__camRetry = setInterval(function() {
+    if (faceStream) { clearInterval(window.__camRetry); window.__camRetry = null; return; }
+    openCamera().then(function(ok) {
+      if (ok) { clearInterval(window.__camRetry); window.__camRetry = null; }
+      else delay = Math.min(delay * 2, 30000);
+    });
+  }, delay);
+}
 
 function loadPrinterStatus() {
   var fetchUrl;
@@ -986,32 +1062,8 @@ function stopCamera() {
 async function restartCamera() {
   if (kioskState && kioskState.maintenance_mode) return;
   if (!modelsLoaded) return;
-
-  try {
-    const camW = window.IS_RPI ? 480 : 640;
-    faceStream = await navigator.mediaDevices.getUserMedia({
-      video: { width: { ideal: camW }, height: { ideal: 480 }, facingMode: 'user' },
-      audio: false
-    });
-    const video = document.getElementById('kioskCam');
-    if (!video) return;
-    video.srcObject = faceStream;
-    await video.play();
-    const canvas = document.getElementById('kioskCanvas');
-    if (canvas) {
-      canvas.width = video.videoWidth || camW;
-      canvas.height = video.videoHeight || 480;
-    }
-    var st = document.getElementById('camStatus');
-    if (st) st.innerHTML = '<span class="dot dot-green"></span> Face AI active';
-    var fs = document.getElementById('faceStatusText');
-    if (fs) fs.textContent = 'Looking for face...';
-    startFaceDetection();
-  } catch (e) {
-    var st2 = document.getElementById('camStatus');
-    if (st2) st2.innerHTML = '<span class="dot dot-yellow"></span> Camera blocked';
-    piLog('restart camera FAILED: ' + e.name + ' ' + e.message);
-  }
+  var ok = await openCamera();
+  if (!ok) scheduleCameraRetry();
 }
 
 async function lookupPin() {
