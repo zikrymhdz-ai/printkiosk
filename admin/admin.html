@@ -116,7 +116,7 @@
       <div class="card animate-fade-in" style="margin-bottom:20px;">
         <div class="card-header">
           <span class="card-title">Payment Watcher (staff phone)</span>
-          <span class="badge badge-gray" id="watcherBadge">Checking…</span>
+          <span class="badge badge-gray" id="watcherBadge">Checkingâ€¦</span>
           <button class="btn btn-secondary btn-sm" onclick="loadWatcherStatus()">Refresh</button>
         </div>
         <div id="watcherStatusBody"><p class="text-sm text-muted" style="padding:8px 0;">Loading...</p></div>
@@ -127,13 +127,13 @@
           <span class="card-title">Confirm a Payment Manually</span>
         </div>
         <p class="text-sm text-muted" style="margin-bottom:14px;">
-          Use this when the watcher missed a payment — the staff phone was off, out of signal, or notification access had been revoked.
+          Use this when the watcher missed a payment â€” the staff phone was off, out of signal, or notification access had been revoked.
           Check the payment really arrived in TnG first, then confirm the matching job by hand.
         </p>
         <div class="grid-2" style="align-items:end;">
           <div>
             <label class="text-xs text-muted" style="display:block;margin-bottom:6px;">Pending jobs (newest first)</label>
-            <select id="manualJobSelect" class="input"><option value="">Loading…</option></select>
+            <select id="manualJobSelect" class="input"><option value="">Loadingâ€¦</option></select>
           </div>
           <div>
             <button class="btn btn-primary" onclick="manualConfirmByAmount()" style="width:100%;">Confirm selected job as paid</button>
@@ -190,6 +190,16 @@
           <span class="card-title">Transactions</span>
           <input type="date" id="txDate" class="input" style="width:auto;padding:6px 10px;font-size:13px;" onchange="loadTransactions()">
           <button class="btn btn-secondary btn-sm" onclick="document.getElementById('txDate').value=todayStr();loadTransactions();">Today</button>
+          <!-- Old unpaid jobs are the common case: the watcher missed them and the
+               customer paid by hand. "All dates / oldest first" is how staff reach
+               them, since the default view is only today. -->
+          <button class="btn btn-secondary btn-sm" onclick="showAllTransactions()">All dates (oldest first)</button>
+          <select id="txFilter" class="input" style="width:auto;padding:6px 10px;font-size:13px;" onchange="loadTransactions()">
+            <option value="">All</option>
+            <option value="unpaid">Unpaid only</option>
+            <option value="paid">Paid only</option>
+          </select>
+          <span class="text-xs text-muted" id="txCount"></span>
         </div>
         <div class="table-wrap">
           <table>
@@ -265,7 +275,7 @@
         <div class="card animate-fade-in" style="margin-bottom:20px;">
           <div class="card-header">
             <span class="card-title">Shop Screen Status</span>
-            <span class="badge badge-gray" id="kioskOnlineBadge">Checking…</span>
+            <span class="badge badge-gray" id="kioskOnlineBadge">Checkingâ€¦</span>
             <button class="btn btn-secondary btn-sm" onclick="loadKioskStatus()">Refresh</button>
           </div>
           <div id="kioskStatusBody"><p class="text-sm text-muted" style="padding:8px 0;">Loading...</p></div>
@@ -451,22 +461,69 @@ function updatePrinterDisplay(p) {
   }
 }
 
+// Clear the date so staff can reach old jobs the watcher never caught.
+function showAllTransactions() {
+  document.getElementById('txDate').value = '';
+  loadTransactions();
+}
+
 function loadTransactions() {
   const d = document.getElementById('txDate').value;
-  let action = 'transactions&limit=50';
+  const f = document.getElementById('txFilter') ? document.getElementById('txFilter').value : '';
+  let action = 'transactions&limit=100&sort=oldest';
   if (d) action += '&date=' + d;
+  if (f) action += '&paid=' + f;
   fetch(API('admin', action), { headers: { 'X-Session-Token': token } })
     .then(r => r.json()).then(data => {
       const tbody = document.getElementById('transactionsBody');
+      const counter = document.getElementById('txCount');
       if (!data.success || !data.transactions.length) {
         tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--gray-400);padding:24px;">No transactions</td></tr>';
+        if (counter) counter.textContent = '';
         return;
+      }
+      if (counter) {
+        const unpaid = data.transactions.filter(t => !t.paid).length;
+        counter.textContent = data.transactions.length + ' shown Â· ' + unpaid + ' unpaid';
       }
       tbody.innerHTML = data.transactions.map(t => {
         const statusClass = statusCls(t.status);
-        return '<tr><td><strong>' + t.job_id + '</strong></td><td>' + t.customer_name + '</td><td>' + t.file_name + '</td><td>' + t.pages + '</td><td>RM ' + parseFloat(t.total_price).toFixed(2) + '</td><td><span class="badge ' + statusClass + '">' + t.status.replace(/_/g, ' ') + '</span></td><td><span class="badge ' + (t.paid ? 'badge-success' : 'badge-danger') + '">' + (t.paid ? 'Yes' : 'No') + '</span></td><td>' + new Date(t.created_at).toLocaleDateString() + '</td></tr>';
+        // Paid is editable, but a job already printed or refunded must not be
+        // flipped back to unpaid or the document could be collected twice.
+        const locked = t.status === 'completed' || t.status === 'refund_issued';
+        const paidCell = t.paid
+          ? '<span class="badge badge-success">Yes</span> '
+            + (locked ? '' : '<button class="btn btn-sm btn-secondary" style="margin-left:4px;" onclick="setJobPaid(\'' + t.job_id + '\',false)">Undo</button>')
+          : '<span class="badge badge-danger">No</span> '
+            + (locked ? '' : '<button class="btn btn-sm btn-primary" style="margin-left:4px;" onclick="setJobPaid(\'' + t.job_id + '\',true)">Mark Paid</button>');
+        return '<tr><td><strong>' + t.job_id + '</strong></td><td>' + t.customer_name + '</td><td>' + t.file_name + '</td><td>' + t.pages + '</td><td>RM ' + parseFloat(t.total_price).toFixed(2) + '</td><td><span class="badge ' + statusClass + '">' + t.status.replace(/_/g, ' ') + '</span></td><td>' + paidCell + '</td><td>' + new Date(t.created_at).toLocaleDateString() + '</td></tr>';
       }).join('');
     }).catch(() => {});
+}
+
+// Toggle paid status on any transaction, including old ones the watcher missed.
+// Confirming money by hand is deliberate, so it is always confirmed twice.
+function setJobPaid(jobId, paid) {
+  const verb = paid ? 'mark as PAID' : 'clear payment on';
+  if (!confirm('Are you sure you want to ' + verb + ' ' + jobId + '?\n\n'
+    + (paid
+      ? 'The job will be queued for printing and the customer gets a print coin.'
+      : 'The job goes back to unpaid and any coin it earned is taken back.'))) return;
+
+  fetch(API('admin', 'set-job-paid'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Session-Token': token },
+    body: JSON.stringify({ job_id: jobId, paid: paid })
+  })
+    .then(r => r.json())
+    .then(d => {
+      if (d.success) {
+        if (d.unchanged) { /* nothing changed */ }
+        else loadTransactions();
+        loadStats();
+      } else alert(d.error || 'Failed');
+    })
+    .catch(() => alert('Failed'));
 }
 
 function loadAlerts() {
@@ -681,8 +738,8 @@ function loadPendingJobsForManualConfirm() {
       }
       sel.innerHTML = jobs.map(function (j) {
         const mins = j.age_minutes != null ? (j.age_minutes + 'm ago') : '';
-        return '<option value="' + j.id + '">' + j.job_id + ' — RM ' + Number(j.total_price).toFixed(2)
-             + ' (' + (j.pages || '?') + 'p' + (j.copies > 1 ? ' x' + j.copies : '') + ') — ' + mins + '</option>';
+        return '<option value="' + j.id + '">' + j.job_id + ' â€” RM ' + Number(j.total_price).toFixed(2)
+             + ' (' + (j.pages || '?') + 'p' + (j.copies > 1 ? ' x' + j.copies : '') + ') â€” ' + mins + '</option>';
       }).join('');
     })
     .catch(() => { sel.innerHTML = '<option value="">Failed to load</option>'; });
@@ -692,7 +749,7 @@ function manualConfirmByAmount() {
   const sel = document.getElementById('manualJobSelect');
   if (!sel || !sel.value) { alert('Select a job first'); return; }
   const jobId = sel.value;
-  const label = sel.options[sel.selectedIndex].text.split('—')[0].trim();
+  const label = sel.options[sel.selectedIndex].text.split('â€”')[0].trim();
   if (!confirm('Confirm ' + label + ' as paid?\n\nOnly do this after checking the money actually arrived in your TnG app.')) return;
 
   fetch(API('admin', 'payment-manual-confirm'), {
@@ -744,7 +801,7 @@ function loadPaymentReview() {
         return '<div style="border:1px solid var(--gray-200);border-radius:var(--radius);padding:14px;margin-bottom:14px;">'
           + '<p style="font-size:16px;font-weight:700;margin-bottom:4px;">RM ' + Number(it.amount || 0).toFixed(2) + ' received</p>'
           + '<p class="text-xs text-muted" style="margin-bottom:10px;">'
-          + (it.payer_name ? 'Payer: <strong>' + it.payer_name + '</strong> · ' : 'Payer name not in the notification · ')
+          + (it.payer_name ? 'Payer: <strong>' + it.payer_name + '</strong> Â· ' : 'Payer name not in the notification Â· ')
           + 'Received ' + new Date(it.created_at).toLocaleString() + '</p>'
           + '<p class="text-sm" style="margin-bottom:10px;color:#92400e;">' + (it.reason || 'Ambiguous match') + '</p>'
           + '<table><thead><tr><th>Job</th><th>Total</th><th>Pages</th><th>Type</th><th>File</th><th></th></tr></thead>'
@@ -1032,7 +1089,7 @@ function loadFaceDetections() {
           ? '<span class="badge badge-success">Matched</span>'
           : '<span class="badge badge-warning">Unknown</span>';
         const who = matched
-          ? (r.user_name || (r.user_id ? r.user_id.slice(0, 8) + '…' : 'Unknown user'))
+          ? (r.user_name || (r.user_id ? r.user_id.slice(0, 8) + 'â€¦' : 'Unknown user'))
           : '<span style="color:var(--gray-400);">Not registered</span>';
         const when = r.created_at ? new Date(r.created_at).toLocaleString() : '-';
         const face = r.has_snapshot

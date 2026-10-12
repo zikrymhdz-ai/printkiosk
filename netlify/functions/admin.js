@@ -28,6 +28,7 @@ exports.handler = async (event) => {
       case 'payment-review': return getPaymentReview(url);
       case 'pending-payable': return getPendingPayableJobs();
       case 'payment-manual-confirm': return manualConfirmPayment(event, session);
+      case 'set-job-paid': return setJobPaidStatus(event, session);
       default: return err('Invalid action');
     }
   } else if (event.httpMethod === 'POST') {
@@ -117,12 +118,16 @@ async function getStats() {
 }
 
 async function getTransactions(url) {
-  const limit = Math.min(parseInt(url.searchParams.get('limit')) || 20, 100);
+  const limit = Math.min(parseInt(url.searchParams.get('limit')) || 20, 200);
   const date = url.searchParams.get('date') || '';
+  const sort = url.searchParams.get('sort') || 'newest';
+  const paidFilter = url.searchParams.get('paid') || '';
 
   const params = {
     'select': '*,users(name,email)',
-    'order': 'created_at.desc',
+    // Staff work through the backlog oldest-first, so this is opt-in rather than
+    // changing the default view.
+    'order': sort === 'oldest' ? 'created_at.asc' : 'created_at.desc',
     'limit': String(limit)
   };
 
@@ -130,6 +135,9 @@ async function getTransactions(url) {
     params['created_at'] = 'gte.' + date + 'T00:00:00Z';
     params['and'] = '(created_at.lte.' + date + 'T23:59:59Z)';
   }
+
+  if (paidFilter === 'paid') params['paid'] = 'eq.true';
+  else if (paidFilter === 'unpaid') params['paid'] = 'eq.false';
 
   const result = await supabaseRequest('GET', '/print_jobs', null, params);
 
@@ -532,6 +540,99 @@ async function getPendingPayableJobs() {
   }));
 
   return json({ success: true, jobs, window_minutes: JOB_PAYABLE_WINDOW_MIN });
+}
+
+// Flip a job's paid flag from the Transactions table.
+//
+// Marking paid reuses the same confirmJobPaid() the watcher uses, so the coin,
+// the payment record and the status transition stay consistent - flipping the
+// column directly would print the job but never credit the customer.
+//
+// Un-marking has to undo all of that, otherwise a job could be reverted while
+// the customer keeps a coin they did not earn. Jobs already printed or refunded
+// are refused: un-paying those would let the document be collected twice.
+async function setJobPaidStatus(event, session) {
+  let body;
+  try { body = JSON.parse(event.body || '{}'); } catch (e) { return err('Bad JSON body'); }
+
+  const jobId = String(body.job_id || '');
+  const makePaid = !!body.paid;
+  if (!jobId) return err('job_id required');
+
+  const jobResult = await supabaseRequest('GET', '/print_jobs', null, {
+    'id': 'eq.' + jobId, 'select': '*', 'limit': '1'
+  });
+  if (jobResult.error || !jobResult.data || !jobResult.data.length) return err('Print job not found', 404);
+  const job = jobResult.data[0];
+
+  if (!!job.paid === makePaid) {
+    return json({ success: true, job_id: job.job_id, paid: !!job.paid, unchanged: true });
+  }
+
+  const actor = (session.users && (session.users.email || session.users.name)) || 'admin';
+  const who = 'manual_admin';
+
+  if (makePaid) {
+    const { confirmJobPaid } = require('./payment');
+    const res = await confirmJobPaid(job, who, 'ADMIN-' + job.job_id);
+    if (!res.ok) return err(res.error || 'Failed to mark paid', 500);
+
+    await supabaseRequest('POST', '/alerts', {
+      type: 'kiosk_control',
+      message: actor + ' marked ' + job.job_id + ' as paid manually (RM ' + parseFloat(job.total_price).toFixed(2) + ')',
+      severity: 'warning',
+      is_read: false
+    });
+
+    return json({ success: true, job_id: job.job_id, paid: true, coins_earned: res.coinsEarned });
+  }
+
+  // ---- reversing a payment ----
+  if (job.status === 'completed' || job.status === 'refund_issued') {
+    return err('That job is already ' + job.status.replace('_', ' ') + '. Use a refund instead of clearing payment.', 409);
+  }
+
+  // Remove the payment record this job earned.
+  await supabaseRequest('DELETE', '/payments?print_job_id=eq.' + job.id + '&status=eq.confirmed', null);
+
+  // Take the coin back, but only if it is still there. Floor at zero: a customer
+  // who already spent the coin cannot go negative.
+  if (job.user_id) {
+    const u = await supabaseRequest('GET', '/users', null, {
+      'id': 'eq.' + job.user_id, 'select': 'coins', 'limit': '1'
+    });
+    if (!u.error && u.data && u.data.length > 0) {
+      const current = parseInt(u.data[0].coins, 10) || 0;
+      const take = current > 0 ? 1 : 0;
+      const balance = current - take;
+      await supabaseRequest('PATCH', '/users?id=eq.' + job.user_id, { coins: balance });
+      await supabaseRequest('POST', '/coin_transactions', {
+        user_id: job.user_id,
+        print_job_id: job.id,
+        type: 'spent',
+        amount: take,
+        description: 'Payment cleared by admin for job ' + job.job_id,
+        balance_after: balance
+      });
+    }
+  }
+
+  const updated = await supabaseRequest('PATCH', '/print_jobs?id=eq.' + job.id, {
+    status: 'pending',
+    paid: false,
+    payment_ref: null,
+    updated_at: new Date().toISOString()
+  });
+  if (updated.error) return err('Failed to update job status', 500);
+
+  await supabaseRequest('POST', '/alerts', {
+    type: 'kiosk_control',
+    message: actor + ' cleared payment on ' + job.job_id + ' - now unpaid again',
+    severity: 'warning',
+    is_read: false
+  });
+
+  return json({ success: true, job_id: job.job_id, paid: false });
 }
 
 async function manualConfirmPayment(event, session) {
