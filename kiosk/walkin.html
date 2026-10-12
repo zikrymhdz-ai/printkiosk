@@ -64,60 +64,61 @@ var ua = navigator.userAgent || '';
 <script src="../vendor/pdf.min.js"></script>
 <script>if (window.pdfjsLib) { pdfjsLib.GlobalWorkerOptions.workerSrc = '../vendor/pdf.worker.min.js'; }</script>
 <style>
-  body { background: #0f172a; color: white; margin:0; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+  body { background: #eef4ff; color: #0f2a4a; margin:0; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
   .kiosk-layout { max-width: 1100px; margin: 0 auto; display: flex; gap: 16px; padding: 16px; min-height: 100vh; align-items: stretch; }
   .kiosk { flex: 1; min-width: 0; max-width: 640px; margin: 0 auto; padding: 0; display: flex; flex-direction: column; }
-  .printer-panel { width: 260px; flex-shrink: 0; background: #1e293b; border: 1px solid #334155; border-radius: 20px; padding: 18px; height: fit-content; }
+  .printer-panel { width: 260px; flex-shrink: 0; background: #ffffff; border: 1px solid #dbeafe; border-radius: 20px; padding: 18px; height: fit-content; box-shadow: 0 4px 16px rgba(37,99,235,0.08); }
   .pp-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
-  .pp-title { font-size: 15px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
-  .pp-status-line { font-size: 12px; color: #94a3b8; margin-bottom: 14px; }
+  .pp-title { font-size: 15px; font-weight: 700; display: flex; align-items: center; gap: 8px; color: #1e3a8a; }
+  .pp-status-line { font-size: 12px; color: #64748b; margin-bottom: 14px; }
   .pp-section { margin-top: 12px; }
-  .pp-section-title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: #64748b; margin-bottom: 8px; }
+  .pp-section-title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: #93a5bd; margin-bottom: 8px; }
   .pp-row { margin-bottom: 8px; }
   .pp-row-top { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 3px; }
-  .pp-row-label { color: #cbd5e1; font-weight: 500; }
-  .pp-row-value { color: #94a3b8; font-weight: 600; }
-  .pp-bar { height: 8px; background: #0f172a; border-radius: 6px; overflow: hidden; }
+  .pp-row-label { color: #475569; font-weight: 500; }
+  .pp-row-value { color: #1e40af; font-weight: 600; }
+  .pp-bar { height: 8px; background: #e8effb; border-radius: 6px; overflow: hidden; }
   .pp-bar-fill { height: 100%; border-radius: 6px; transition: width 0.6s ease, background-color 0.4s; min-width: 2px; }
-  .pp-foot { margin-top: 16px; font-size: 11px; color: #475569; border-top: 1px solid #1e293b; padding-top: 10px; display: flex; justify-content: space-between; }
+  .pp-foot { margin-top: 16px; font-size: 11px; color: #93a5bd; border-top: 1px solid #e6eefb; padding-top: 10px; display: flex; justify-content: space-between; }
   @media (max-width: 900px) { .kiosk-layout { flex-direction: column; } .printer-panel { width: auto; } }
-  .cam-box { width: 100%; aspect-ratio: 4/3; border-radius: 20px; overflow: hidden; background: #000; position: relative; border: 2px solid #3b82f6; transition: border-color 0.3s; }
+  .cam-box { width: 100%; aspect-ratio: 4/3; border-radius: 20px; overflow: hidden; background: #0f172a; position: relative; border: 3px solid #2563eb; transition: border-color 0.3s; box-shadow: 0 6px 20px rgba(37,99,235,0.15); }
   .cam-box video { width: 100%; height: 100%; object-fit: cover; display: block; transform: scaleX(-1); }
   .cam-box canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; transform: scaleX(-1); }
   .cam-box .overlay-text { position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.75); padding: 6px 16px; border-radius: 20px; font-size: 13px; white-space: nowrap; z-index: 2; }
   .pin-section { margin-top: 16px; display: flex; gap: 8px; }
-  .pin-section input { flex: 1; background: #1e293b; border: 2px solid #334155; color: white; font-size: 28px; text-align: center; letter-spacing: 12px; padding: 12px; border-radius: 12px; outline: none; font-weight: 700; font-family: monospace; transition: border-color 0.2s, box-shadow 0.2s; }
-  .pin-section input:focus { border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,0.2); }
-  .pin-section input::placeholder { color: #475569; font-size: 18px; letter-spacing: 4px; }
+  .pin-section input { flex: 1; background: #ffffff; border: 2px solid #bfdbfe; color: #0f2a4a; font-size: 28px; text-align: center; letter-spacing: 12px; padding: 12px; border-radius: 12px; outline: none; font-weight: 700; font-family: monospace; transition: border-color 0.2s, box-shadow 0.2s; }
+  .pin-section input:focus { border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37,99,235,0.18); }
+  .pin-section input::placeholder { color: #b6c6de; font-size: 18px; letter-spacing: 4px; }
   .btn-kiosk { padding: 12px 24px; border-radius: 12px; font-size: 16px; font-weight: 600; cursor: pointer; border: none; transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); }
   .btn-kiosk:active { transform: scale(0.97); }
   .btn-kiosk:disabled { opacity:0.4; cursor:default; transform:none; }
-  .btn-primary-kiosk { background: #3b82f6; color: white; }
-  .btn-primary-kiosk:hover:not(:disabled) { background: #2563eb; box-shadow: 0 4px 12px rgba(59,130,246,0.3); }
-  .btn-secondary-kiosk { background: #1e293b; color: #94a3b8; border: 1px solid #334155; }
-  .btn-secondary-kiosk:hover:not(:disabled) { background: #334155; color: white; }
+  .btn-primary-kiosk { background: linear-gradient(135deg, #3b82f6, #2563eb); color: white; box-shadow: 0 4px 14px rgba(37,99,235,0.35); }
+  .btn-primary-kiosk:hover:not(:disabled) { background: linear-gradient(135deg, #2563eb, #1d4ed8); box-shadow: 0 6px 18px rgba(37,99,235,0.45); }
+  .btn-secondary-kiosk { background: #ffffff; color: #2563eb; border: 2px solid #bfdbfe; }
+  .btn-secondary-kiosk:hover:not(:disabled) { background: #eff6ff; color: #1d4ed8; }
   .btn-green-kiosk { background: #16a34a; color: white; }
   .btn-green-kiosk:hover:not(:disabled) { background: #15803d; box-shadow: 0 4px 12px rgba(22,163,74,0.3); }
-  .status-bar { display: flex; align-items: center; gap: 8px; padding: 8px 0; font-size: 13px; color: #94a3b8; }
+  .status-bar { display: flex; align-items: center; gap: 8px; padding: 8px 0; font-size: 13px; color: #475569; }
   .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex-shrink:0; }
   .dot-green { background: #22c55e; }
   .dot-yellow { background: #eab308; }
   .dot-red { background: #ef4444; }
-  .confirm-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.85); display: flex; align-items: center; justify-content: center; z-index: 200; }
+  /* Overlays use a soft light-blue backdrop so the screen feels bright, not dark. */
+  .confirm-overlay { position: fixed; inset: 0; background: rgba(238,244,255,0.94); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; z-index: 200; padding: 16px; }
   /* Admin disabled face login at the kiosk. */
   .cam-box.face-login-off, #camBox.face-login-off { opacity: 0.4; filter: grayscale(1); }
   body.maintenance-active #camBox, body.maintenance-active .kiosk-actions { pointer-events: none; }
-  .confirm-card { background: #1e293b; border-radius: 24px; padding: 32px; text-align: center; max-width: 360px; width: 90%; border: 1px solid #334155; }
-  .confirm-avatar { width: 72px; height: 72px; border-radius: 50%; background: linear-gradient(135deg, #3b82f6, #7c3aed); display: flex; align-items: center; justify-content: center; font-size: 32px; font-weight: 700; margin: 0 auto 12px; color: white; box-shadow: 0 4px 16px rgba(59,130,246,0.3); }
-  .job-card { background: #1e293b; border-radius: 16px; padding: 20px; margin-top: 12px; border: 1px solid #334155; text-align:left; }
-  .job-card .label { color: #64748b; font-size: 12px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em; }
-  .job-card .value { color: white; font-size: 16px; font-weight: 600; word-break:break-all; }
-  .pin-display { font-size: 48px; font-weight: 900; letter-spacing: 16px; color: #3b82f6; font-family: monospace; }
+  .confirm-card { background: #ffffff; border-radius: 24px; padding: 32px; text-align: center; max-width: 360px; width: 100%; border: 1px solid #dbeafe; box-shadow: 0 18px 48px rgba(37,99,235,0.20); }
+  .confirm-avatar { width: 72px; height: 72px; border-radius: 50%; background: linear-gradient(135deg, #3b82f6, #1d4ed8); display: flex; align-items: center; justify-content: center; font-size: 32px; font-weight: 700; margin: 0 auto 12px; color: white; box-shadow: 0 6px 18px rgba(37,99,235,0.35); }
+  .job-card { background: #f8fbff; border-radius: 16px; padding: 20px; margin-top: 12px; border: 1px solid #e2e8f0; text-align:left; }
+  .job-card .label { color: #93a5bd; font-size: 12px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em; }
+  .job-card .value { color: #0f2a4a; font-size: 16px; font-weight: 600; word-break:break-all; }
+  .pin-display { font-size: 48px; font-weight: 900; letter-spacing: 16px; color: #2563eb; font-family: monospace; }
   .hidden { display: none !important; }
-  .bottom-links { margin-top: auto; padding: 16px 0; text-align: center; font-size: 13px; color: #475569; }
-  .bottom-links a { color: #3b82f6; text-decoration: none; transition: color 0.2s; }
+  .bottom-links { margin-top: auto; padding: 16px 0; text-align: center; font-size: 13px; color: #93a5bd; }
+  .bottom-links a { color: #2563eb; text-decoration: none; transition: color 0.2s; }
   .bottom-links a:hover { color: #60a5fa; }
-  .kiosk-divider { border: none; border-top: 1px solid #1e293b; margin: 12px 0; }
+  .kiosk-divider { border: none; border-top: 1px solid #dbeafe; margin: 12px 0; }
   .action-row { display:flex; gap:8px; margin-top:10px; }
   .action-row button { flex:1; }
   .pulse-ring { animation: pulseRing 1.5s infinite; }
@@ -140,7 +141,7 @@ var ua = navigator.userAgent || '';
   body.pi-kiosk .pin-section input { font-size: 40px; padding: 18px; min-height: 72px; }
   body.pi-kiosk .pin-section { gap: 12px; }
   body.pi-kiosk .confirm-card button { min-height: 64px; font-size: 20px; }
-  body.pi-kiosk #qrCanvas { width: 320px; height: 320px; }
+  body.pi-kiosk #qrCanvas { width: 190px; height: 190px; display: block; }
   body.pi-kiosk .confirm-avatar { width: 92px; height: 92px; font-size: 40px; }
   body.pi-kiosk .status-bar { font-size: 16px; }
   /* The camera box is the centrepiece - give it as much of the screen as
@@ -293,7 +294,7 @@ window.addEventListener('load', function () {
 
   <hr class="kiosk-divider">
 
-  <p id="kioskPinHint" style="font-size:13px; color:#6b7280; text-align:center; margin:0;">Enter OTP PIN from website upload</p>
+  <p id="kioskPinHint" style="font-size:13px; color:#64748b; text-align:center; margin:0;">Enter OTP PIN from website upload</p>
   <div class="pin-section">
     <input type="text" id="pinInput" placeholder="000000" maxlength="6" inputmode="numeric">
     <button class="btn-kiosk btn-primary-kiosk" onclick="lookupPin()">Go</button>
@@ -357,9 +358,9 @@ window.addEventListener('load', function () {
 <div id="confirmOverlay" class="confirm-overlay hidden">
   <div class="confirm-card">
     <div class="confirm-avatar" id="confirmAvatar"></div>
-    <p style="color:#9ca3af; margin-bottom:4px; font-size:14px;">Is this you?</p>
+    <p style="color:#7d90ad; margin-bottom:4px; font-size:14px;">Is this you?</p>
     <p id="confirmName" style="font-size:22px; font-weight:700; margin:4px 0;"></p>
-    <p id="confirmCoins" style="font-size:14px; color:#6b7280; margin-bottom:16px;"></p>
+    <p id="confirmCoins" style="font-size:14px; color:#64748b; margin-bottom:16px;"></p>
     <div style="display:flex; gap:8px;">
       <button class="btn-kiosk btn-secondary-kiosk" style="flex:1;" onclick="rejectFace()">No</button>
       <button class="btn-kiosk btn-primary-kiosk" style="flex:1;" onclick="acceptFace()">Yes, that's me</button>
@@ -367,24 +368,24 @@ window.addEventListener('load', function () {
   </div>
 </div>
 
-<div id="maintOverlay" class="confirm-overlay hidden" style="background:#0f172a;">
+<div id="maintOverlay" class="confirm-overlay hidden" style="background:#eef4ff;">
   <div class="confirm-card" style="text-align:center; max-width:420px;">
-    <div style="width:56px; height:56px; border-radius:50%; background:var(--warning); display:flex; align-items:center; justify-content:center; margin:0 auto 16px;">
-      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5"><path d="M12 9v4M12 17h.01"/><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg>
+    <div style="width:64px; height:64px; border-radius:50%; background:linear-gradient(135deg,#3b82f6,#2563eb); display:flex; align-items:center; justify-content:center; margin:0 auto 18px; box-shadow:0 8px 20px rgba(37,99,235,0.35);">
+      <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round"><path d="M12 9v4M12 17h.01"/><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg>
     </div>
-    <h2 style="font-size:22px; font-weight:700; margin-bottom:8px; color:#fff;">Kiosk Under Maintenance</h2>
-    <p id="maintMsg" style="font-size:15px; color:#cbd5e1; line-height:1.6;">Kiosk temporarily unavailable for maintenance. Please see staff.</p>
-    <p style="font-size:12px; color:#64748b; margin-top:16px;">This screen is controlled from the admin dashboard.</p>
+    <h2 style="font-size:23px; font-weight:700; margin-bottom:10px; color:#0f2a4a;">Kiosk Under Maintenance</h2>
+    <p id="maintMsg" style="font-size:15px; color:#475569; line-height:1.6;">Kiosk temporarily unavailable for maintenance. Please see staff.</p>
+    <p style="font-size:12px; color:#93a5bd; margin-top:18px;">This screen is controlled from the admin dashboard.</p>
   </div>
 </div>
 
 <div id="jobsOverlay" class="confirm-overlay hidden">
   <div class="confirm-card" style="text-align:left; max-height:80vh; overflow-y:auto;">
-    <p style="color:#9ca3af; margin-bottom:4px; font-size:14px;">Welcome back,</p>
+    <p style="color:#7d90ad; margin-bottom:4px; font-size:14px;">Welcome back,</p>
     <p id="jobsUserName" style="font-size:20px; font-weight:700; margin-bottom:4px;"></p>
-    <p style="color:#6b7280; font-size:13px; margin-bottom:16px;">Select a print job to proceed</p>
+    <p style="color:#7d90ad; font-size:13px; margin-bottom:16px;">Select a print job to proceed</p>
     <div id="jobsList" style="display:flex; flex-direction:column; gap:10px;"></div>
-    <div id="jobsEmpty" style="display:none; text-align:center; padding:24px; color:#6b7280;">
+    <div id="jobsEmpty" style="display:none; text-align:center; padding:24px; color:#64748b;">
       <p style="font-size:14px; font-weight:600;">No pending jobs</p>
       <p style="font-size:13px; margin-top:4px;">Upload files from your phone first</p>
     </div>
@@ -397,11 +398,11 @@ window.addEventListener('load', function () {
 
 <div id="qrOverlay" class="confirm-overlay hidden">
   <div class="confirm-card">
-    <p style="color:#9ca3af; margin-bottom:4px; font-size:14px;" id="qrGreeting">Welcome,</p>
+    <p style="color:#7d90ad; margin-bottom:4px; font-size:14px;" id="qrGreeting">Welcome,</p>
     <p id="qrName" style="font-size:20px; font-weight:700; margin:4px 0;"></p>
-    <p style="color:#6b7280; font-size:13px; margin-bottom:12px;">Scan this QR with your phone camera to upload your files</p>
-    <div id="qrCanvasWrap" style="background:#fff; border-radius:16px; padding:14px; display:inline-block;">
-      <canvas id="qrCanvas" width="220" height="220"></canvas>
+    <p style="color:#7d90ad; font-size:13px; margin-bottom:12px;">Scan this QR with your phone camera to upload your files</p>
+    <div id="qrCanvasWrap" style="background:#fff; border-radius:16px; padding:14px; display:inline-block; border:2px solid #dbeafe; box-shadow:0 6px 18px rgba(37,99,235,0.12);">
+      <canvas id="qrCanvas" width="190" height="190"></canvas>
     </div>
     <p id="qrHint" style="font-size:12px; color:#eab308; margin-top:10px;"></p>
     <div style="display:flex; gap:8px; margin-top:16px;">
@@ -442,12 +443,12 @@ window.addEventListener('load', function () {
     </div>
     <h3 style="font-size:20px; font-weight:700; text-align:center; margin-bottom:4px;">Payment Confirmed</h3>
     <p style="color:#94a3b8; font-size:13px; text-align:center; margin-bottom:20px;">Your print job is being processed</p>
-    <div style="background:#0f172a; border-radius:12px; padding:16px; margin-bottom:16px;">
-      <div style="display:flex; justify-content:space-between; padding:6px 0;"><span style="color:#64748b; font-size:13px;">Job ID</span><span style="font-size:13px; font-weight:600;" id="receiptJobId">-</span></div>
-      <div style="display:flex; justify-content:space-between; padding:6px 0;"><span style="color:#64748b; font-size:13px;">File</span><span style="font-size:13px; font-weight:600; text-align:right; max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" id="receiptFile">-</span></div>
-      <div style="display:flex; justify-content:space-between; padding:6px 0;"><span style="color:#64748b; font-size:13px;">Pages</span><span style="font-size:13px; font-weight:600;" id="receiptPages">-</span></div>
-      <div style="display:flex; justify-content:space-between; padding:6px 0;"><span style="color:#64748b; font-size:13px;">Color</span><span style="font-size:13px; font-weight:600;" id="receiptColor">-</span></div>
-      <div style="display:flex; justify-content:space-between; padding:6px 0;"><span style="color:#64748b; font-size:13px;">Copies</span><span style="font-size:13px; font-weight:600;" id="receiptCopies">-</span></div>
+    <div style="background:#f8fbff; border:1px solid #e2e8f0; border-radius:12px; padding:16px; margin-bottom:16px;">
+      <div style="display:flex; justify-content:space-between; padding:6px 0;"><span style="color:#7d90ad; font-size:13px;">Job ID</span><span style="font-size:13px; font-weight:600;" id="receiptJobId">-</span></div>
+      <div style="display:flex; justify-content:space-between; padding:6px 0;"><span style="color:#7d90ad; font-size:13px;">File</span><span style="font-size:13px; font-weight:600; text-align:right; max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" id="receiptFile">-</span></div>
+      <div style="display:flex; justify-content:space-between; padding:6px 0;"><span style="color:#7d90ad; font-size:13px;">Pages</span><span style="font-size:13px; font-weight:600;" id="receiptPages">-</span></div>
+      <div style="display:flex; justify-content:space-between; padding:6px 0;"><span style="color:#7d90ad; font-size:13px;">Color</span><span style="font-size:13px; font-weight:600;" id="receiptColor">-</span></div>
+      <div style="display:flex; justify-content:space-between; padding:6px 0;"><span style="color:#7d90ad; font-size:13px;">Copies</span><span style="font-size:13px; font-weight:600;" id="receiptCopies">-</span></div>
       <div style="display:flex; justify-content:space-between; padding:6px 0; border-top:1px solid #1e293b; margin-top:4px; padding-top:10px;"><span style="color:#94a3b8; font-size:14px; font-weight:600;">Total Paid</span><span style="font-size:18px; font-weight:700; color:#22c55e;" id="receiptTotal">RM 0.00</span></div>
     </div>
     <div style="background:rgba(59,130,246,0.1); border-radius:10px; padding:10px 14px; text-align:center; margin-bottom:16px;" id="receiptCoinsRow">
@@ -642,7 +643,7 @@ function throttledUnknownLog(distance) {
 /* ===== REMOTE KIOSK CONTROL (admin) ===== */
 // Must match APP_VERSION in netlify/functions/_shared.js. If the deployed
 // version differs, the kiosk reloads itself so it never runs a stale page.
-var KIOSK_APP_VERSION = '2026.10.12-16';
+var KIOSK_APP_VERSION = '2026.10.12-17';
 var kioskState = { face_login_enabled: true, maintenance_mode: false, maintenance_message: '' };
 var kioskSettingsTimer = null;
 var cameraStoppedForMaint = false;
@@ -1320,7 +1321,7 @@ function showUserJobs(userData) {
   document.getElementById('jobsUserName').textContent = userData.name;
   var list = document.getElementById('jobsList');
   var empty = document.getElementById('jobsEmpty');
-  list.innerHTML = '<p style="text-align:center; color:#6b7280; padding:16px;">Loading jobs...</p>';
+  list.innerHTML = '<p style="text-align:center; color:#64748b; padding:16px;">Loading jobs...</p>';
   empty.style.display = 'none';
   document.getElementById('jobsOverlay').classList.remove('hidden');
 
@@ -1339,7 +1340,7 @@ function showUserJobs(userData) {
         var statusBadge = isPaid
           ? '<span style="background:#166534; color:white; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:600;">Paid</span>'
           : '<span style="background:#92400e; color:white; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:600;">Unpaid</span>';
-        return '<div class="job-card" style="cursor:pointer; padding:14px; background:#1e293b; border-radius:12px; border:1px solid #334155; transition:border-color 0.2s;" onmouseover="this.style.borderColor=\'#3b82f6\'" onmouseout="this.style.borderColor=\'#334155\'" onclick="selectJob(\'' + j.job_id + '\')">' +
+        return '<div class="job-card" style="cursor:pointer; padding:14px; border-radius:12px; transition:border-color 0.2s;" onmouseover="this.style.borderColor=\'#3b82f6\'" onmouseout="this.style.borderColor=\'#334155\'" onclick="selectJob(\'' + j.job_id + '\')">' +
           '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">' +
             '<span style="font-weight:700; font-size:14px; color:#f1f5f9; max-width:60%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">' + (j.file_name || 'File') + '</span>' +
             statusBadge +
