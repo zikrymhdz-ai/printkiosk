@@ -638,7 +638,7 @@ function throttledUnknownLog(distance) {
 /* ===== REMOTE KIOSK CONTROL (admin) ===== */
 // Must match APP_VERSION in netlify/functions/_shared.js. If the deployed
 // version differs, the kiosk reloads itself so it never runs a stale page.
-var KIOSK_APP_VERSION = '2026.10.12-12';
+var KIOSK_APP_VERSION = '2026.10.12-14';
 var kioskState = { face_login_enabled: true, maintenance_mode: false, maintenance_message: '' };
 var kioskSettingsTimer = null;
 var cameraStoppedForMaint = false;
@@ -915,7 +915,26 @@ function withTimeout(promise, ms, label) {
  * while the old "ideal 480p + facingMode" request can come back as
  * OverconstrainedError on some webcams. We try the strictest first and relax it.
  */
+// Single-flight wrapper. openCamera() is called from bootKiosk(), the retry
+// timer and restartCamera(); without this guard two of them can overlap and open
+// competing streams, which saturates the Pi's four cores and makes the whole
+// screen flicker.
+var __camOpening = false;
 async function openCamera() {
+  if (__camOpening) return false;
+  if (faceStream) return true; // already open - never stack a second stream
+  __camOpening = true;
+  try {
+    return await openCameraInner();
+  } catch (e) {
+    piLog('openCamera threw: ' + e.message);
+    return false;
+  } finally {
+    __camOpening = false;
+  }
+}
+
+async function openCameraInner() {
   // Log BEFORE anything that can hang, so we always know we got here.
   piLog('openCamera: start');
 
@@ -981,15 +1000,19 @@ async function openCamera() {
 // A Pi sometimes has the camera enumerate a second or two after boot, or the
 // device is grabbed by another process. Retry quietly instead of giving up.
 function scheduleCameraRetry() {
-  if (window.__camRetry) return;
+  if (window.__camRetryTimer) return;
   var delay = 4000;
-  window.__camRetry = setInterval(function() {
-    if (faceStream) { clearInterval(window.__camRetry); window.__camRetry = null; return; }
-    openCamera().then(function(ok) {
-      if (ok) { clearInterval(window.__camRetry); window.__camRetry = null; }
-      else delay = Math.min(delay * 2, 30000);
+  var tick = function() {
+    window.__camRetryTimer = null;
+    // Stop permanently as soon as the camera is up.
+    if (faceStream) return;
+    openCamera().then(function (ok) {
+      if (ok) return;
+      delay = Math.min(delay * 2, 60000);
+      window.__camRetryTimer = setTimeout(tick, delay);
     });
-  }, delay);
+  };
+  window.__camRetryTimer = setTimeout(tick, delay);
 }
 
 function loadPrinterStatus() {
@@ -1063,6 +1086,16 @@ function setPrinterStatusFallback() {
 }
 
 async function startFaceDetection() {
+  // Only one detection loop may ever run. animFrameId holds a single id, so a
+  // second start() would leave the first loop running forever (cancelAnimationFrame
+  // cannot reach it) and peg every core on the Pi.
+  if (window.__detectRunning) {
+    piLog('startFaceDetection: already running, not starting again');
+    return;
+  }
+  window.__detectRunning = true;
+  piLog('startFaceDetection: starting');
+
   const video = document.getElementById('kioskCam');
   const canvas = document.getElementById('kioskCanvas');
   const ctx = canvas.getContext('2d');
@@ -1350,8 +1383,16 @@ function rejectFace() {
 
 function stopCamera() {
   if (animFrameId) cancelAnimationFrame(animFrameId);
-  if (faceStream) faceStream.getTracks().forEach(t => t.stop());
-  faceStream = null;
+  animFrameId = null;
+  window.__detectRunning = false;
+  window.__camOpening = false;
+  if (window.__camRetryTimer) { clearTimeout(window.__camRetryTimer); window.__camRetryTimer = null; }
+  if (faceStream) {
+    faceStream.getTracks().forEach(t => t.stop());
+    faceStream = null;
+  }
+  var video = document.getElementById('kioskCam');
+  if (video) video.srcObject = null;
 }
 
 // Re-acquire the camera after maintenance mode released it. The original stream
