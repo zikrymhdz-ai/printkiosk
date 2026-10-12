@@ -239,7 +239,11 @@ function pkFlushErrors() {
     probe += ' hb=' + (hb.tried || 0) + 'try/' + (hb.ok || 0) + 'ok'
       + ' st=' + (hb.lastStatus || '-')
       + (hb.lastError ? ' ERR=' + hb.lastError : '')
-      + (hb.lastBody ? ' body=' + hb.lastBody : '');
+      + (hb.lastBody ? ' body=' + hb.lastBody : '')
+      + ' pi=' + (window.IS_RPI ? '1' : '0')
+      + ' api=' + (hb.apiUrl || '?')
+      + (hb.apiFallback ? ' FALLBACK=' + hb.apiFallback : '')
+      + ' ua=' + String(navigator.userAgent || '').replace(/[^A-Za-z0-9_. ;\/:-]/g, '').slice(0, 120);
     var errs = (window.__pkErrors && window.__pkErrors.length)
       ? window.__pkErrors.slice(-2).join(' || ')
       : 'none';
@@ -535,6 +539,17 @@ function startKioskHeartbeat() {
         url = (typeof API === 'function') ? API('data', 'kiosk-heartbeat') : null;
       } catch (e) { url = null; }
 
+      // Always report to the live backend by absolute URL. API() can resolve to
+      // the local PHP fallback when PRINTKIOSK_API_BASE was not set, and the Pi's
+      // static file server answers those POSTs with an HTML 501 - which silently
+      // meant the kiosk reported nothing to admin at all.
+      var LIVE_HB = 'https://printkioskfyp.netlify.app/.netlify/functions/data?action=kiosk-heartbeat';
+      window.__pkHb.apiUrl = url || 'none';
+      if (!url || url.indexOf('netlify.app') === -1) {
+        if (url) window.__pkHb.apiFallback = url;
+        url = LIVE_HB;
+      }
+
       var payload = {
         kiosk_id: 'kiosk-1',
         app_version: (typeof KIOSK_APP_VERSION !== 'undefined') ? KIOSK_APP_VERSION : '',
@@ -612,7 +627,7 @@ function throttledUnknownLog(distance) {
 /* ===== REMOTE KIOSK CONTROL (admin) ===== */
 // Must match APP_VERSION in netlify/functions/_shared.js. If the deployed
 // version differs, the kiosk reloads itself so it never runs a stale page.
-var KIOSK_APP_VERSION = '2026.10.12-9';
+var KIOSK_APP_VERSION = '2026.10.12-10';
 var kioskState = { face_login_enabled: true, maintenance_mode: false, maintenance_message: '' };
 var kioskSettingsTimer = null;
 var cameraStoppedForMaint = false;
