@@ -1,4 +1,4 @@
-const { json, err, supabaseRequest, validateSession, supabaseStorageDelete } = require('./_shared');
+const { json, err, supabaseRequest, validateSession, supabaseStorageDelete, JOB_PAYABLE_WINDOW_MIN } = require('./_shared');
 
 exports.handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') return json({});
@@ -26,6 +26,7 @@ exports.handler = async (event) => {
       case 'watcher-status': return getWatcherStatus();
       case 'payment-log': return getPaymentLog(url);
       case 'payment-review': return getPaymentReview(url);
+      case 'pending-payable': return getPendingPayableJobs();
       case 'payment-manual-confirm': return manualConfirmPayment(event, session);
       default: return err('Invalid action');
     }
@@ -500,6 +501,37 @@ async function getPaymentReview(url) {
     return json({ success: true, items: [], unavailable: true });
   }
   return json({ success: true, items: result.data || [] });
+}
+
+// Jobs a customer could still legitimately be paying for right now. Used by the
+// manual confirm dropdown so staff have an exact list to choose from instead of
+// hunting through the full job table.
+async function getPendingPayableJobs() {
+  const cutoff = new Date(Date.now() - JOB_PAYABLE_WINDOW_MIN * 60 * 1000).toISOString();
+  const result = await supabaseRequest('GET', '/print_jobs', null, {
+    'paid': 'eq.false',
+    'status': 'eq.pending',
+    'created_at': 'gte.' + cutoff,
+    'select': 'id,job_id,total_price,pages,copies,color_mode,created_at',
+    'order': 'created_at.desc',
+    'limit': '50'
+  });
+
+  if (result.error) return json({ success: false, jobs: [] });
+
+  const now = Date.now();
+  const jobs = (result.data || []).map(j => ({
+    id: j.id,
+    job_id: j.job_id,
+    total_price: parseFloat(j.total_price),
+    pages: j.pages,
+    copies: j.copies,
+    color_mode: j.color_mode,
+    created_at: j.created_at,
+    age_minutes: j.created_at ? Math.round((now - new Date(j.created_at).getTime()) / 60000) : null
+  }));
+
+  return json({ success: true, jobs, window_minutes: JOB_PAYABLE_WINDOW_MIN });
 }
 
 async function manualConfirmPayment(event, session) {

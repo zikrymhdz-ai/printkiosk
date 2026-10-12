@@ -124,6 +124,26 @@
 
       <div class="card animate-fade-in" style="margin-bottom:20px;">
         <div class="card-header">
+          <span class="card-title">Confirm a Payment Manually</span>
+        </div>
+        <p class="text-sm text-muted" style="margin-bottom:14px;">
+          Use this when the watcher missed a payment — the staff phone was off, out of signal, or notification access had been revoked.
+          Check the payment really arrived in TnG first, then confirm the matching job by hand.
+        </p>
+        <div class="grid-2" style="align-items:end;">
+          <div>
+            <label class="text-xs text-muted" style="display:block;margin-bottom:6px;">Pending jobs (newest first)</label>
+            <select id="manualJobSelect" class="input"><option value="">Loading…</option></select>
+          </div>
+          <div>
+            <button class="btn btn-primary" onclick="manualConfirmByAmount()" style="width:100%;">Confirm selected job as paid</button>
+          </div>
+        </div>
+        <p class="text-xs text-muted" style="margin-top:10px;">This grants the customer a print coin, same as an automatic match.</p>
+      </div>
+
+      <div class="card animate-fade-in" style="margin-bottom:20px;">
+        <div class="card-header">
           <span class="card-title">Payments Needing Manual Confirmation</span>
           <span class="badge badge-gray" id="paymentReviewBadge">0</span>
           <button class="btn btn-secondary btn-sm" onclick="loadPaymentReview()">Refresh</button>
@@ -381,7 +401,7 @@ function showSection(name, el) {
   const ov = document.getElementById('sidebarOverlay');
   sb.classList.remove('open');
   ov.classList.remove('show');
-  if (name === 'transactions') { loadTransactions(); loadWatcherStatus(); loadPaymentReview(); loadPaymentLog(); }
+  if (name === 'transactions') { loadTransactions(); loadWatcherStatus(); loadPaymentReview(); loadPaymentLog(); loadPendingJobsForManualConfirm(); }
   if (name === 'alerts') loadAlerts();
   if (name === 'coins') loadCoinTransactions();
   if (name === 'users') loadUsers();
@@ -645,6 +665,52 @@ function loadWatcherStatus() {
 }
 
 /* ===== PAYMENTS WAITING FOR A HUMAN ===== */
+// Safety net for when the watcher is down. Without this, a missed payment means
+// the customer is stuck at the kiosk with no way to print until someone reads
+// the TnG app and knows to do it manually.
+function loadPendingJobsForManualConfirm() {
+  const sel = document.getElementById('manualJobSelect');
+  if (!sel) return;
+  fetch(API('admin', 'pending-payable'), { headers: { 'X-Session-Token': token } })
+    .then(r => r.json())
+    .then(d => {
+      const jobs = (d.success && d.jobs) ? d.jobs : [];
+      if (!jobs.length) {
+        sel.innerHTML = '<option value="">No jobs waiting for payment</option>';
+        return;
+      }
+      sel.innerHTML = jobs.map(function (j) {
+        const mins = j.age_minutes != null ? (j.age_minutes + 'm ago') : '';
+        return '<option value="' + j.id + '">' + j.job_id + ' — RM ' + Number(j.total_price).toFixed(2)
+             + ' (' + (j.pages || '?') + 'p' + (j.copies > 1 ? ' x' + j.copies : '') + ') — ' + mins + '</option>';
+      }).join('');
+    })
+    .catch(() => { sel.innerHTML = '<option value="">Failed to load</option>'; });
+}
+
+function manualConfirmByAmount() {
+  const sel = document.getElementById('manualJobSelect');
+  if (!sel || !sel.value) { alert('Select a job first'); return; }
+  const jobId = sel.value;
+  const label = sel.options[sel.selectedIndex].text.split('—')[0].trim();
+  if (!confirm('Confirm ' + label + ' as paid?\n\nOnly do this after checking the money actually arrived in your TnG app.')) return;
+
+  fetch(API('admin', 'payment-manual-confirm'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Session-Token': token },
+    body: JSON.stringify({ job_id: jobId })
+  })
+    .then(r => r.json())
+    .then(d => {
+      if (d.success) {
+        alert('Job ' + d.job_id + ' confirmed as paid.');
+        loadPendingJobsForManualConfirm();
+        loadPaymentReview();
+      } else alert(d.error || 'Failed');
+    })
+    .catch(() => alert('Failed'));
+}
+
 function loadPaymentReview() {
   const body = document.getElementById('paymentReviewBody');
   const badge = document.getElementById('paymentReviewBadge');
