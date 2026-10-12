@@ -20,6 +20,7 @@ exports.handler = async (event) => {
       case 'all-users': return getAllUsers();
       case 'viewer-data': return getViewerData();
       case 'face-detections': return getFaceDetections(url);
+      case 'face-snapshot': return getFaceSnapshot(url);
       case 'delete-face-detections': return deleteFaceDetections(event);
       case 'kiosk-settings': return getKioskSettingsAdmin();
       case 'kiosk-status': return getKioskStatus();
@@ -299,7 +300,7 @@ async function getFaceDetections(url) {
   const dateStr = url.searchParams.get('date') || '';
 
   const params = {
-    'select': 'id,user_id,user_name,matched,confidence,kiosk_id,created_at',
+    'select': 'id,user_id,user_name,matched,confidence,kiosk_id,created_at,face_snapshot',
     'order': 'created_at.desc',
     'limit': String(limit)
   };
@@ -312,7 +313,16 @@ async function getFaceDetections(url) {
     return json({ success: true, detections: [], unavailable: true });
   }
 
-  const detections = result.data || [];
+  const detections = (result.data || []).map(d => {
+    // Never ship the base64 image in the list payload - it would bloat the
+    // response by hundreds of KB per row. Return a flag and let the admin fetch
+    // the single image it actually renders, lazily, via ?action=face-snapshot.
+    const has = !!d.face_snapshot;
+    delete d.face_snapshot;
+    d.has_snapshot = has;
+    return d;
+  });
+
   return json({
     success: true,
     detections: detections,
@@ -322,6 +332,32 @@ async function getFaceDetections(url) {
       unknown: detections.filter(d => !d.matched).length
     }
   });
+}
+
+// Serve one stored snapshot as a real image so the admin can <img> it.
+async function getFaceSnapshot(url) {
+  const id = String(url.searchParams.get('id') || '');
+  if (!/^[0-9a-fA-F-]{36}$/.test(id)) return json({ success: false, error: 'Invalid id' }, 400);
+
+  const result = await supabaseRequest('GET', '/face_detections', null, {
+    'select': 'face_snapshot', 'id': 'eq.' + id, 'limit': '1'
+  });
+  if (result.error || !result.data || !result.data.length || !result.data[0].face_snapshot) {
+    return json({ success: false, error: 'No image' }, 404);
+  }
+
+  const m = /^data:(image\/(?:png|jpeg|jpg));base64,([A-Za-z0-9+/=]+)$/.exec(result.data[0].face_snapshot);
+  if (!m) return json({ success: false, error: 'Bad image' }, 404);
+
+  return {
+    statusCode: 200,
+    headers: {
+      'Content-Type': m[1],
+      'Cache-Control': 'private, max-age=31536000, immutable'
+    },
+    body: m[2],
+    isBase64Encoded: true
+  };
 }
 
 /* ===== REMOTE KIOSK CONTROL ===== */

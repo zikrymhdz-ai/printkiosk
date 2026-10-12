@@ -155,14 +155,29 @@ async function handleLogFaceDetection(event) {
     if (!u.error && u.data && u.data.length > 0) userName = u.data[0].name;
   }
 
-  const result = await supabaseRequest('POST', '/face_detections', {
+  // Optional camera snapshot of the recognised face (data-URI), capped so a log
+  // row can never balloon. Ignored if the column has not been migrated yet.
+  let snapshot = null;
+  const raw = String(body.face_snapshot || '');
+  if (/^data:image\/(png|jpeg|jpg);base64,[A-Za-z0-9+/=]+$/.test(raw) && raw.length < 300000) {
+    snapshot = raw;
+  }
+
+  const record = {
     user_id: userId,
     user_name: userName,
     matched: matched,
     confidence: confidence,
     kiosk_id: String(body.kiosk_id || 'kiosk-1').slice(0, 40),
     source: 'kiosk'
-  });
+  };
+
+  let result = snapshot
+    ? await supabaseRequest('POST', '/face_detections', Object.assign({ face_snapshot: snapshot }, record))
+    : { error: true };
+  if (result.error) {
+    result = await supabaseRequest('POST', '/face_detections', record);
+  }
 
   if (result.error) {
     // Table not migrated yet - never break the kiosk over an audit log.

@@ -629,7 +629,31 @@ var KIOSK_ID = 'kiosk-1';
 var lastUnknownLog = 0;
 var UNKNOWN_LOG_INTERVAL_MS = 15000;
 
-function logFaceDetection(userId, distance, matched) {
+// Grab a small JPEG of the face so the admin can see who was recognised.
+function captureFaceSnapshot(box) {
+  try {
+    var v = document.getElementById('video');
+    if (!v || !v.videoWidth) return null;
+
+    // Crop to the face box with a little padding, then square it up.
+    var vw = v.videoWidth, vh = v.videoHeight;
+    var x = Math.max(0, box.x - box.width * 0.25);
+    var y = Math.max(0, box.y - box.height * 0.25);
+    var w = Math.min(vw - x, box.width * 1.5);
+    var h = Math.min(vh - y, box.height * 1.5);
+    if (w < 8 || h < 8) return null;
+
+    var side = Math.max(w, h);
+    var size = 128;
+    var c = document.createElement('canvas');
+    c.width = size; c.height = size;
+    var cx = c.getContext('2d');
+    cx.drawImage(v, x, y, side, side, 0, 0, size, size);
+    return c.toDataURL('image/jpeg', 0.6);
+  } catch (e) { return null; }
+}
+
+function logFaceDetection(userId, distance, matched, snapshot) {
   try {
     fetch(API('data', 'log-face-detection'), {
       method: 'POST',
@@ -638,7 +662,8 @@ function logFaceDetection(userId, distance, matched) {
         user_id: userId || null,
         confidence: (typeof distance === 'number' && isFinite(distance)) ? distance : null,
         matched: !!matched,
-        kiosk_id: KIOSK_ID
+        kiosk_id: KIOSK_ID,
+        face_snapshot: snapshot || null
       })
     }).catch(function() {});
   } catch (e) { /* never let audit logging break the kiosk */ }
@@ -654,7 +679,7 @@ function throttledUnknownLog(distance) {
 /* ===== REMOTE KIOSK CONTROL (admin) ===== */
 // Must match APP_VERSION in netlify/functions/_shared.js. If the deployed
 // version differs, the kiosk reloads itself so it never runs a stale page.
-var KIOSK_APP_VERSION = '2026.10.12-19';
+var KIOSK_APP_VERSION = '2026.10.12-20';
 var kioskState = { face_login_enabled: true, maintenance_mode: false, maintenance_message: '' };
 var kioskSettingsTimer = null;
 var cameraStoppedForMaint = false;
@@ -1185,12 +1210,14 @@ async function startFaceDetection() {
           : new faceapi.SsdMobilenetv1Options({ inputSize: inputSize });
       }
 
-      // Only the descriptor is needed for matching a face. Dropping
-      // withFaceLandmarks() removes a whole extra network pass per frame (68-point
-      // landmarks), which was the main source of the laggy preview - the box is
-      // drawn from det.detection.box and never used the landmarks.
-      const det = await faceapi.detectSingleFace(frameCanvas, window.__pkDetOpts)
-        .withFaceDescriptor();
+      // @vladmandic/face-api returns the descriptor on the detection itself; there is
+      // no .withFaceDescriptor() composable (it does not exist on this build).
+      // Landmarks are only requested as a fallback if the descriptor is absent.
+      var det = await faceapi.detectSingleFace(frameCanvas, window.__pkDetOpts);
+      if (det && !det.descriptor) {
+        try { det = await faceapi.detectSingleFace(frameCanvas, window.__pkDetOpts).withFaceLandmarks(); }
+        catch (e2) { det = null; }
+      }
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
       if (det) {
@@ -1232,8 +1259,8 @@ async function startFaceDetection() {
               document.getElementById('confirmName').textContent = matchedUser.name;
               document.getElementById('confirmCoins').textContent = matchedUser.coins + ' coins';
               document.getElementById('confirmOverlay').classList.remove('hidden');
-              // Audit: record the successful match for the admin security log.
-              logFaceDetection(matchedUser.id, match.distance, true);
+              // Audit: record the successful match, with a picture, for the admin security log.
+              logFaceDetection(matchedUser.id, match.distance, true, captureFaceSnapshot(box));
             }
             animFrameId = requestAnimationFrame(detect);
             return;

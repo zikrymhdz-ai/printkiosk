@@ -240,8 +240,8 @@
           </div>
           <div class="table-wrap">
             <table>
-              <thead><tr><th style="width:36px;"></th><th>Time</th><th>Result</th><th>Customer</th><th>Distance</th><th>Kiosk</th></tr></thead>
-              <tbody id="faceLogBody"><tr><td colspan="6" style="text-align:center;color:var(--gray-400);padding:24px;">Loading...</td></tr></tbody>
+              <thead><tr><th style="width:36px;"></th><th>Face</th><th>Time</th><th>Result</th><th>Customer</th></tr></thead>
+              <tbody id="faceLogBody"><tr><td colspan="5" style="text-align:center;color:var(--gray-400);padding:24px;">Loading...</td></tr></tbody>
             </table>
           </div>
           <p class="text-xs text-muted" style="margin-top:12px;">Lower face-match distance means a closer match (threshold is 0.600). Unknown faces are recorded at most once every 15 seconds.</p>
@@ -693,18 +693,23 @@ function loadFaceDetections() {
         const who = matched
           ? (r.user_name || (r.user_id ? r.user_id.slice(0, 8) + '…' : 'Unknown user'))
           : '<span style="color:var(--gray-400);">Not registered</span>';
-        const dist = (r.confidence != null) ? Number(r.confidence).toFixed(3) : '-';
-        const distCls = (r.confidence != null && matched && Number(r.confidence) < 0.45) ? ' style="color:var(--warning);font-weight:600;"' : '';
         const when = r.created_at ? new Date(r.created_at).toLocaleString() : '-';
+        const face = r.has_snapshot
+          ? '<img data-snap="' + r.id + '" alt="" class="face-thumb" ' +
+            'style="width:52px;height:52px;border-radius:8px;object-fit:cover;display:block;background:#f1f5f9;cursor:zoom-in" ' +
+            'onclick="viewFaceSnapshot(this)" ' +
+            'onerror="this.outerHTML=\'<div style=&quot;width:52px;height:52px;border-radius:8px;background:#f1f5f9;display:flex;align-items:center;justify-content:center;color:#cbd5e1;font-size:18px&quot;>&#128100;</div>\'">'
+          : '<div style="width:52px;height:52px;border-radius:8px;background:#f8fafc;display:flex;align-items:center;justify-content:center;color:#cbd5e1;font-size:18px;border:1px dashed #e2e8f0;">&mdash;</div>';
         return '<tr>'
           + '<td><input type="checkbox" onchange="toggleFaceLogRow(this, \'' + r.id + '\')"></td>'
+          + '<td>' + face + '</td>'
           + '<td>' + when + '</td>'
           + '<td>' + badge + '</td>'
           + '<td>' + who + '</td>'
-          + '<td' + distCls + '>' + dist + '</td>'
-          + '<td>' + (r.kiosk_id || '-') + '</td>'
           + '</tr>';
       }).join('');
+
+      loadFaceSnapshotThumbnails();
     })
     .catch(() => {
       body.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--gray-400);padding:24px;">Failed to load</td></tr>';
@@ -713,6 +718,34 @@ function loadFaceDetections() {
 
 let faceLogRows = [];
 let faceLogSelected = new Set();
+
+// Snapshots need the session token, which an <img src> cannot send. Fetch them
+// as blobs and swap in object URLs, only for rows that actually have a picture.
+function loadFaceSnapshotThumbnails() {
+  document.querySelectorAll('#faceLogBody img[data-snap]').forEach(function (img) {
+    const id = img.getAttribute('data-snap');
+    fetch(API('admin', 'face-snapshot&id=' + encodeURIComponent(id)), {
+      headers: { 'X-Session-Token': token }
+    })
+      .then(function (r) { return r.ok ? r.blob() : Promise.reject(); })
+      .then(function (b) { img.src = URL.createObjectURL(b); })
+      .catch(function() {});
+  });
+}
+
+function viewFaceSnapshot(img) {
+  if (!img.src) return;
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.82);z-index:99999;' +
+    'display:flex;align-items:center;justify-content:center;cursor:zoom-out;padding:24px;';
+  const big = document.createElement('img');
+  big.src = img.src;
+  big.style.cssText = 'max-width:min(560px,90vw);max-height:88vh;border-radius:14px;' +
+    'box-shadow:0 24px 70px rgba(0,0,0,.55);image-rendering:auto;';
+  overlay.appendChild(big);
+  overlay.addEventListener('click', function () { overlay.remove(); });
+  document.body.appendChild(overlay);
+}
 
 function toggleFaceLogRow(checkbox, id) {
   if (checkbox.checked) faceLogSelected.add(id); else faceLogSelected.delete(id);

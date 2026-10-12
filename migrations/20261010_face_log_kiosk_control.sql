@@ -16,6 +16,11 @@ CREATE TABLE IF NOT EXISTS face_detections (
 CREATE INDEX IF NOT EXISTS face_detections_created_at_idx
   ON face_detections (created_at DESC);
 
+-- Small camera snapshot of a matched face, so the admin can see who was
+-- recognised. Stored as a data-URI (null when the snapshot could not be taken).
+ALTER TABLE face_detections
+  ADD COLUMN IF NOT EXISTS face_snapshot TEXT;
+
 -- 2) Single-row table the admin uses to control the kiosk remotely.
 CREATE TABLE IF NOT EXISTS kiosk_settings (
   id TEXT PRIMARY KEY DEFAULT 'default',
