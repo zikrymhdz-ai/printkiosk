@@ -647,13 +647,17 @@ function captureFaceSnapshot(box) {
 
     // Crop to the face box with a little padding, then square it up.
     var vw = v.videoWidth, vh = v.videoHeight;
-    var x = Math.max(0, box.x - box.width * 0.25);
-    var y = Math.max(0, box.y - box.height * 0.25);
-    var w = Math.min(vw - x, box.width * 1.5);
-    var h = Math.min(vh - y, box.height * 1.5);
-    if (w < 8 || h < 8) return null;
+    var pad = box.width * 0.25;
+    var side = Math.max(box.width, box.height) * 1.5;
+    // Clamp the whole square inside the frame. Anchoring only the top-left and
+    // letting it run past the right/bottom edge would sample black bars and could
+    // throw on some drivers.
+    var x = Math.max(0, Math.min(box.x - pad, vw - side));
+    var y = Math.max(0, Math.min(box.y - pad, vh - side));
+    if (side < 8) return null;
+    if (x + side > vw) x = Math.max(0, vw - side);
+    if (y + side > vh) y = Math.max(0, vh - side);
 
-    var side = Math.max(w, h);
     var size = 128;
     var c = document.createElement('canvas');
     c.width = size; c.height = size;
@@ -689,7 +693,7 @@ function throttledUnknownLog(distance) {
 /* ===== REMOTE KIOSK CONTROL (admin) ===== */
 // Must match APP_VERSION in netlify/functions/_shared.js. If the deployed
 // version differs, the kiosk reloads itself so it never runs a stale page.
-var KIOSK_APP_VERSION = '2026.10.12-23';
+var KIOSK_APP_VERSION = '2026.10.12-24';
 var kioskState = { face_login_enabled: true, maintenance_mode: false, maintenance_message: '' };
 var kioskSettingsTimer = null;
 var cameraStoppedForMaint = false;
@@ -1291,13 +1295,17 @@ async function startFaceDetection() {
             const d = await r.json();
             if (d.success && d.data) {
               matchedUser = d.data;
+              // Audit: record the successful match, with a picture, for the admin
+              // security log. The snapshot MUST be taken before stopCamera() below -
+              // stopping the track clears videoWidth, and captureFaceSnapshot() bails
+              // out when videoWidth is 0, so capturing afterwards silently saved null.
+              var snapshot = captureFaceSnapshot(box);
               stopCamera();
               document.getElementById('confirmAvatar').textContent = matchedUser.name.charAt(0).toUpperCase();
               document.getElementById('confirmName').textContent = matchedUser.name;
               document.getElementById('confirmCoins').textContent = matchedUser.coins + ' coins';
               document.getElementById('confirmOverlay').classList.remove('hidden');
-              // Audit: record the successful match, with a picture, for the admin security log.
-              logFaceDetection(matchedUser.id, match.distance, true, captureFaceSnapshot(box));
+              logFaceDetection(matchedUser.id, match.distance, true, snapshot);
             }
             animFrameId = requestAnimationFrame(detect);
             return;
