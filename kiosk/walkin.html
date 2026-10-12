@@ -48,17 +48,24 @@ var ua = navigator.userAgent || '';
 
   // Turn detection on for the Pi. On a Pi the WebGL backend is unreliable and
   // SIMD is unsupported, so the WASM CPU path is the one that actually works.
-  if (isPi) {
+if (isPi) {
     window.PRINTKIOSK_API_BASE = 'https://printkioskfyp.netlify.app';
     // Detection runs on the CPU (single-threaded WASM), so every pass stalls
     // the video preview. Detect less often and on a smaller frame: the picture
     // stays smooth and recognition is still fast enough to log someone in.
     window.FACE_MIN_INTERVAL_MS = 400;
     window.FACE_DETECT_WIDTH = 256;
+    // Floor for the adaptive throttle. The detect loop measures how long its own
+    // inference actually takes and stretches the gap when passes are slow, so a
+    // slow Pi backs off instead of freezing the UI several times a second.
+    window.FACE_ADAPTIVE_MIN_MS = 400;
+    window.FACE_ADAPTIVE_MAX_MS = 1400;
+    // A pass slower than this is treated as "this device needs breathing room".
+    window.FACE_SLOW_PASS_MS = 200;
     // Keep the screen awake and allow a reload to recover from a wedged renderer.
     // Flicker / reload control, all switchable from the admin dashboard.
 //   KIOSK_ALLOW_RELOAD   - false disables the periodic idle page reload
-//   KIOSK_ALLOW_PULSE    - false stops the camera box outline pulse
+//   KIOSK_ALLOW_PULSE    - false stops the camera box pulse animation
 //   KIOSK_SETTINGS_POLL_MS - how often admin settings are checked (ms)
 window.KIOSK_ALLOW_RELOAD = true;
 window.KIOSK_ALLOW_PULSE = false;
@@ -598,6 +605,10 @@ function startKioskHeartbeat() {
         camera_size: (vid && vid.videoWidth) ? (vid.videoWidth + 'x' + vid.videoHeight) : '',
         models_loaded: (typeof modelsLoaded !== 'undefined') ? !!modelsLoaded : false,
         cam_label: cam ? cam.textContent : '',
+        // Face timing, so "the kiosk feels laggy" can be checked against real
+        // numbers from the device instead of guessed at from a desk.
+        face_pass_ms: (typeof window.__pkFaceMs !== 'undefined') ? Math.round(window.__pkFaceMs) : null,
+        face_gap_ms: (typeof window.__pkFaceGap !== 'undefined') ? Math.round(window.__pkFaceGap) : null,
         js_errors: (window.__pkErrors || []).slice(-3)
       };
 
@@ -693,7 +704,7 @@ function throttledUnknownLog(distance) {
 /* ===== REMOTE KIOSK CONTROL (admin) ===== */
 // Must match APP_VERSION in netlify/functions/_shared.js. If the deployed
 // version differs, the kiosk reloads itself so it never runs a stale page.
-var KIOSK_APP_VERSION = '2026.10.12-35';
+var KIOSK_APP_VERSION = '2026.10.12-36';
 var kioskState = { face_login_enabled: true, maintenance_mode: false, maintenance_message: '' };
 var kioskSettingsTimer = null;
 var cameraStoppedForMaint = false;
@@ -1219,16 +1230,43 @@ async function startFaceDetection() {
   let lastDetect = 0;
   let detecting = false;
 
+  // Adaptive detection gap. Starts at the configured floor and widens when a pass
+  // turns out to be expensive on this hardware, then eases back if passes are
+  // cheap. A Raspberry Pi running single-threaded WASM blocks the main thread for
+  // the whole inference, which is what the user perceives as lag - so the cure is
+  // fewer, well-spaced passes rather than a fixed guess tuned for one machine.
+  const adaptiveMin = window.FACE_ADAPTIVE_MIN_MS || minInterval || 400;
+  const adaptiveMax = Math.max(adaptiveMin, window.FACE_ADAPTIVE_MAX_MS || 1400);
+  const slowPassMs = window.FACE_SLOW_PASS_MS || 200;
+  let detectGap = adaptiveMin;
+  let lastPassMs = 0;
+
+  // A full-screen overlay means the customer is mid-flow: no point burning CPU
+  // looking for a face that cannot be acted on until they tap through it.
+  function overlayBlocking() {
+    var ids = ['confirmOverlay', 'qrOverlay', 'maintOverlay'];
+    for (var i = 0; i < ids.length; i++) {
+      var el = document.getElementById(ids[i]);
+      if (el && !el.classList.contains('hidden')) return true;
+    }
+    return false;
+  }
+
   async function detect() {
     animFrameId = requestAnimationFrame(detect);
     if (!modelsLoaded || !video.videoWidth) return;
 
-    // Pi: cap the detection rate and never overlap two inference passes.
     const now = performance.now ? performance.now() : Date.now();
     if (detecting) return;
-    if (minInterval && now - lastDetect < minInterval) return;
+    if (now - lastDetect < detectGap) return;
+
+    // Nothing to gain from detecting behind a full-screen card.
+    if (document.body.classList.contains('maintenance-active')) return;
+    if (overlayBlocking() && matchedUser) return;
+
     lastDetect = now;
     detecting = true;
+    const passStart = now;
 
     try {
       let srcW = video.videoWidth;
@@ -1325,10 +1363,25 @@ async function startFaceDetection() {
       document.getElementById('faceDot').className = 'dot dot-red';
       document.getElementById('faceStatusText').textContent = 'Face scanning error';
       piLog('detect error: ' + e.message);
-    } finally {
-      // Must clear here, otherwise the early return above would wedge the loop.
-      detecting = false;
-    }
+} finally {
+     // Must clear here, otherwise the early return above would wedge the loop.
+     detecting = false;
+
+     // Feed the measured cost back into the gap. Inference blocks the main
+     // thread, so a slow pass is exactly what makes the kiosk feel laggy; widening
+     // the gap keeps the preview moving on hardware that cannot keep up, and the
+     // gap tightens again if later passes turn out to be cheap.
+     const ended = performance.now ? performance.now() : Date.now();
+     lastPassMs = ended - passStart;
+     if (lastPassMs > slowPassMs) {
+       detectGap = Math.min(adaptiveMax, detectGap + 150);
+     } else if (lastPassMs < slowPassMs * 0.6) {
+       detectGap = Math.max(adaptiveMin, detectGap - 40);
+     }
+     // Published for the admin heartbeat so lag can be measured, not guessed.
+     window.__pkFaceMs = lastPassMs;
+     window.__pkFaceGap = detectGap;
+   }
   }
   detect();
 }

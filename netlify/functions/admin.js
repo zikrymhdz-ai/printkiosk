@@ -901,6 +901,8 @@ async function getKioskStatus() {
       camera_size: hb.camera_size,
       models_loaded: hb.models_loaded,
       cam_label: hb.cam_label,
+      face_pass_ms: hb.face_pass_ms,
+      face_gap_ms: hb.face_gap_ms,
       seen_at: hb.seen_at,
       age_seconds: Math.round(ageMs / 1000)
     }

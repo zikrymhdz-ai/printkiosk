@@ -18,3 +18,12 @@ CREATE TABLE IF NOT EXISTS kiosk_heartbeats (
 
 CREATE INDEX IF NOT EXISTS kiosk_heartbeats_seen_at_idx
   ON kiosk_heartbeats (seen_at DESC);
+
+-- Measured face-detection cost from the kiosk. face_pass_ms is how long one
+-- inference pass blocks the main thread; face_gap_ms is the adaptive interval
+-- the kiosk settled on. Reported so "the kiosk feels laggy" can be checked
+-- against the device instead of guessed at.
+ALTER TABLE kiosk_heartbeats
+  ADD COLUMN IF NOT EXISTS face_pass_ms INTEGER;
+ALTER TABLE kiosk_heartbeats
+  ADD COLUMN IF NOT EXISTS face_gap_ms  INTEGER;

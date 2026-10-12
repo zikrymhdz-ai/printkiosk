@@ -1145,6 +1145,16 @@ const problems = [];
       if (!s.models_loaded) problems.push('face models failed to load (models/ folder missing on the Pi)');
       if (!s.camera) problems.push('camera did not open (no device, wrong permissions, or busy)');
 
+      // Face timing tells you whether the kiosk is struggling, and how much the
+      // adaptive throttle has had to back off.
+      if (s.face_pass_ms != null) {
+        if (s.face_pass_ms > 200) {
+          problems.push('Face detection is slow: ' + s.face_pass_ms + 'ms per pass'
+            + (s.face_gap_ms ? ', throttled to one pass every ' + s.face_gap_ms + 'ms' : '')
+            + '. Recognition may feel sluggish.');
+        }
+      }
+
       // A row with no version and no state fields is the liveness canary, which
       // means only the inline snippet ran and the main script never executed.
       if (!s.app_version && s.kiosk_id === 'kiosk-1') {
@@ -1157,6 +1167,10 @@ const problems = [];
         + '<div class="row"><span>face-api library</span><span>' + yn(s.face_lib) + '</span></div>'
         + '<div class="row"><span>Models loaded</span><span>' + yn(s.models_loaded) + '</span></div>'
         + '<div class="row"><span>Camera open</span><span>' + yn(s.camera) + (s.camera_size ? ' (' + s.camera_size + ')' : '') + '</span></div>'
+        + (s.face_pass_ms != null
+            ? '<div class="row"><span>Face pass</span><span style="font-weight:600;color:' + (s.face_pass_ms > 200 ? '#dc2626' : '#16a34a') + ';">'
+              + s.face_pass_ms + 'ms' + (s.face_gap_ms ? ' &middot; every ' + s.face_gap_ms + 'ms' : '') + '</span></div>'
+            : '')
         + '<div class="row"><span>Version</span><span style="font-weight:600;">' + (s.app_version || '-') + '</span></div>'
         + '<div class="row"><span>Last report</span><span>' + s.age_seconds + 's ago</span></div>'
         + '</div>';

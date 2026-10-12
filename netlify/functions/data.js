@@ -134,6 +134,10 @@ async function handleKioskHeartbeat(event) {
     camera_size: String(body.camera_size || '').slice(0, 20),
     models_loaded: !!body.models_loaded,
     cam_label: String(body.cam_label || '').slice(0, 80),
+    // Measured face-detection cost, so "the kiosk is laggy" can be checked
+    // against the device's own numbers.
+    face_pass_ms: (Number.isFinite(parseInt(body.face_pass_ms, 10)) ? parseInt(body.face_pass_ms, 10) : null),
+    face_gap_ms: (Number.isFinite(parseInt(body.face_gap_ms, 10)) ? parseInt(body.face_gap_ms, 10) : null),
     seen_at: new Date().toISOString()
   });
 
