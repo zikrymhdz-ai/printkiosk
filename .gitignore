@@ -1,11 +1,18 @@
-# Local Netlify folder
-.netlify
+﻿.netlify
+*.swp
 
 # Node
 node_modules/
 
 # User uploaded documents (excluded from source control)
 uploads/
+
+# Never publish APKs. They embed the watcher signing secret and are only ever
+# distributed by hand to the staff phone. Anything left under the publish
+# directory is served publicly by Netlify, which would hand the secret to
+# anyone who guesses the URL.
+apk/*.apk
+*.apk
 
 # Local tooling
 ngrok.exe
@@ -15,4 +22,3 @@ start.bat
 # OS / editor
 Thumbs.db
 .DS_Store
-*.swp

@@ -14,7 +14,7 @@ const JOB_PAYABLE_WINDOW_MIN = 10;
 
 // Shared secret between the PrintKiosk Payment Watcher APK and this backend,
 // used to sign server-side "payment detected" events (HMAC-SHA256).
-const NOTIFICATION_SECRET = process.env.NOTIFICATION_SECRET || 'pk_notif_v2_cedae2612263aeb4a55db926e0c2ee3007579c50b21ccc56';
+const NOTIFICATION_SECRET = process.env.NOTIFICATION_SECRET || 'pk_notif_v3_fd3877b903677547e567f1d1f0cc68770df89598a5c7d09fe229d81d8dc4d37c';
 
 const PRICE_BW_PER_PAGE = 0.20;
 const PRICE_COLOR_PER_PAGE = 1.10;
