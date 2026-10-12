@@ -56,7 +56,13 @@ var ua = navigator.userAgent || '';
     window.FACE_MIN_INTERVAL_MS = 400;
     window.FACE_DETECT_WIDTH = 256;
     // Keep the screen awake and allow a reload to recover from a wedged renderer.
-    window.KIOSK_ALLOW_RELOAD = true;
+    // Flicker / reload control, all switchable from the admin dashboard.
+//   KIOSK_ALLOW_RELOAD   - false disables the periodic idle page reload
+//   KIOSK_ALLOW_PULSE    - false stops the camera box outline pulse
+//   KIOSK_SETTINGS_POLL_MS - how often admin settings are checked (ms)
+window.KIOSK_ALLOW_RELOAD = true;
+window.KIOSK_ALLOW_PULSE = false;
+window.KIOSK_SETTINGS_POLL_MS = 30000;
   }
 })();
 </script>
@@ -121,7 +127,11 @@ var ua = navigator.userAgent || '';
   .kiosk-divider { border: none; border-top: 1px solid #dbeafe; margin: 12px 0; }
   .action-row { display:flex; gap:8px; margin-top:10px; }
   .action-row button { flex:1; }
-  .pulse-ring { animation: pulseRing 1.5s infinite; }
+  /* A static outline instead of a 1.5s box-shadow pulse. The animation made the
+     camera box visibly throb every 1.5 seconds on the shop display, which read
+     as screen flicker. Set window.KIOSK_ALLOW_PULSE = true to bring it back. */
+  .pulse-ring { box-shadow: 0 0 0 3px rgba(59,130,246,0.18); }
+  body.pulse-on .pulse-ring { animation: pulseRing 1.5s infinite; }
   @keyframes pulseRing { 0% { box-shadow: 0 0 0 0 rgba(59,130,246,0.4); } 70% { box-shadow: 0 0 0 16px rgba(59,130,246,0); } 100% { box-shadow: 0 0 0 0 rgba(59,130,246,0); } }
 
   /* ---- Raspberry Pi kiosk ---- */
@@ -679,7 +689,7 @@ function throttledUnknownLog(distance) {
 /* ===== REMOTE KIOSK CONTROL (admin) ===== */
 // Must match APP_VERSION in netlify/functions/_shared.js. If the deployed
 // version differs, the kiosk reloads itself so it never runs a stale page.
-var KIOSK_APP_VERSION = '2026.10.12-21';
+var KIOSK_APP_VERSION = '2026.10.12-23';
 var kioskState = { face_login_enabled: true, maintenance_mode: false, maintenance_message: '' };
 var kioskSettingsTimer = null;
 var cameraStoppedForMaint = false;
@@ -689,10 +699,19 @@ function applyKioskSettings(s) {
   var overlay = document.getElementById('maintOverlay');
   if (!overlay) return;
 
-  if (kioskState.maintenance_mode) {
+  // This runs on every 10s poll. Writing to the DOM (classList, textContent,
+  // style) even when nothing changed forces a repaint of the overlay layer and
+  // showed up as a subtle periodic flicker. Only touch the DOM on real changes.
+  var wasMaint = document.body.classList.contains('maintenance-active');
+  var isMaint = !!kioskState.maintenance_mode;
+  var prevMsg = window.__pkMaintMsg || '';
+
+  if (isMaint) {
     var msg = document.getElementById('maintMsg');
-    if (msg) msg.textContent = kioskState.maintenance_message || 'Kiosk temporarily unavailable.';
-    overlay.classList.remove('hidden');
+    var nextMsg = kioskState.maintenance_message || 'Kiosk temporarily unavailable.';
+    if (msg && nextMsg !== prevMsg) msg.textContent = nextMsg;
+    window.__pkMaintMsg = nextMsg;
+    if (!wasMaint) overlay.classList.remove('hidden');
     document.body.classList.add('maintenance-active');
     // Freeze the camera so nothing happens behind the maintenance screen.
     if (!cameraStoppedForMaint && typeof stopCamera === 'function') {
@@ -700,8 +719,9 @@ function applyKioskSettings(s) {
     }
   } else {
     var wasStopped = cameraStoppedForMaint;
-    overlay.classList.add('hidden');
+    if (wasMaint) overlay.classList.add('hidden');
     document.body.classList.remove('maintenance-active');
+    window.__pkMaintMsg = '';
     // Critical: maintenance stopped the camera, so bring it back when it ends,
     // otherwise face recognition stays dead until a manual page reload.
     if (wasStopped) {
@@ -714,11 +734,15 @@ function applyKioskSettings(s) {
   // Face login can be disabled independently of maintenance mode.
   var box = document.getElementById('camBox');
   var status = document.getElementById('faceStatusText');
-  if (!kioskState.face_login_enabled) {
-    if (box) box.classList.add('face-login-off');
-    if (status && !kioskState.maintenance_mode) status.textContent = 'Face login disabled by admin - use QR or PIN';
-  } else if (box) {
-    box.classList.remove('face-login-off');
+  var faceOff = !kioskState.face_login_enabled;
+  // Only write when the state actually flips, not on every poll.
+  if (box && box.classList.contains('face-login-off') !== faceOff) {
+    box.classList.toggle('face-login-off', faceOff);
+  }
+  if (faceOff) {
+    if (status && !isMaint && status.textContent !== 'Face login disabled by admin - use QR or PIN') {
+      status.textContent = 'Face login disabled by admin - use QR or PIN';
+    }
   }
 }
 
@@ -747,7 +771,11 @@ function startKioskSettingsPolling() {
   };
   poll();
   if (kioskSettingsTimer) clearInterval(kioskSettingsTimer);
-  kioskSettingsTimer = setInterval(poll, 10000);
+  // 10s was frequent enough that the network round-trip was near-continuous.
+  // 30s still reacts quickly to admin changes (maintenance mode, face login
+  // toggle) while cutting the idle request rate by two thirds.
+  var pollMs = window.KIOSK_SETTINGS_POLL_MS || 30000;
+  kioskSettingsTimer = setInterval(poll, pollMs);
 
   // A kiosk tab can sit in the background or wake from sleep; re-check whenever
   // it becomes visible again so admin changes are never missed.
@@ -779,6 +807,9 @@ function initPiKiosk() {
 
   piLog('rpi kiosk mode');
 
+  // Honour the pulse toggle declared at the top of this file.
+  if (window.KIOSK_ALLOW_PULSE) document.body.classList.add('pulse-on');
+
   // Keep the screen awake for as long as this page is visible.
   if ('wakeLock' in navigator) {
     var keepAwake = function() {
@@ -792,11 +823,17 @@ function initPiKiosk() {
 
   // Reloading periodically clears out GPU/WASM memory growth on long-running
   // kiosk sessions. Only fires when idle, so a customer mid-flow is unaffected.
+  //
+  // Every 60s was far too aggressive: each reload tears down the camera and the
+  // face models, so the screen visibly flashed white and the preview restarted.
+  // Every 6 hours is frequent enough to reclaim memory, rare enough to never be
+  // noticed. Set KIOSK_ALLOW_RELOAD = false (line ~59) to disable entirely.
   setInterval(function() {
     if (window.KIOSK_ALLOW_RELOAD && !matchedUser && isIdleFor(PI_IDLE_MS)) {
+      piLog('idle reload (6h)');
       location.reload();
     }
-  }, 60000);
+  }, 6 * 60 * 60 * 1000);
 
   // Block the browser's own gestures so a customer cannot navigate away.
   document.addEventListener('contextmenu', function(e) { e.preventDefault(); });

@@ -136,6 +136,11 @@ exec "$CHROMIUM" \
   --no-sandbox \
   --disable-dev-shm-usage \
   --disable-gpu \
+  --disable-background-timer-throttling \
+  --disable-renderer-backgrounding \
+  --disable-backgrounding-occluded-windows \
+  --disable-features=TranslateUI,Translate,CalculateNativeWinOcclusion \
+  --force-device-scale-factor=1 \
   --enable-logging=stderr \
   --v=0 \
   --disable-application-cache \
@@ -148,6 +153,17 @@ exec "$CHROMIUM" \
 
 # NOTE ON THE FLAGS BELOW (added because getUserMedia and enumerateDevices both
 # *hung* instead of erroring on this Pi):
+#   --disable-background-timer-throttling / --disable-renderer-backgrounding /
+#   --disable-backgrounding-occluded-windows
+#                           Chromium treats a kiosk window that is not focused
+#                           as occluded and throttles its timers to ~1/min. That
+#                           starved the heartbeat, the admin settings poll and the
+#                           face detection loop, so the screen appeared to stutter
+#                           and flicker. These keep the render loop running.
+#   --force-device-scale-factor=1
+#                           stops Chromium guessing the panel DPI, which made the
+#                           canvas repaint at a different size than the CSS layout
+#                           and produced visible shimmer on camera frames.
 #   --no-sandbox            the setuid sandbox is unreliable on Raspberry Pi OS and
 #                           a sandboxed renderer cannot reach /dev/video0, so the
 #                           video capture service stalls instead of failing fast.
