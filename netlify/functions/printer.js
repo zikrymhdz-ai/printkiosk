@@ -217,11 +217,25 @@ async function setSupplyLevels(event) {
   const body = JSON.parse(event.body || '{}');
   const updateData = { last_checked: new Date().toISOString() };
 
-  if (body.paper_level !== undefined) updateData.paper_level = Math.max(0, Math.min(100, parseInt(body.paper_level)));
-  if (body.toner_black !== undefined) updateData.toner_black = Math.max(0, Math.min(100, parseInt(body.toner_black)));
-  if (body.toner_cyan !== undefined) updateData.toner_cyan = Math.max(0, Math.min(100, parseInt(body.toner_cyan)));
-  if (body.toner_magenta !== undefined) updateData.toner_magenta = Math.max(0, Math.min(100, parseInt(body.toner_magenta)));
-  if (body.toner_yellow !== undefined) updateData.toner_yellow = Math.max(0, Math.min(100, parseInt(body.toner_yellow)));
+  // Only accept real numbers. parseInt(null) is NaN, and Math.max/min pass NaN
+  // straight through, so an empty or malformed field would otherwise be written
+  // as a null level and quietly blank the printer's supplies.
+  const setLevel = function (key, raw) {
+    if (raw === undefined || raw === null) return;
+    const n = parseInt(raw, 10);
+    if (!Number.isFinite(n)) return;
+    updateData[key] = Math.max(0, Math.min(100, n));
+  };
+
+  setLevel('paper_level', body.paper_level);
+  setLevel('toner_black', body.toner_black);
+  setLevel('toner_cyan', body.toner_cyan);
+  setLevel('toner_magenta', body.toner_magenta);
+  setLevel('toner_yellow', body.toner_yellow);
+
+  if (Object.keys(updateData).length === 1) {
+    return err('No valid levels supplied', 400);
+  }
 
   const currentResult = await supabaseRequest('GET', '/printer_status', null, {
     'select': 'id', 'order': 'last_checked.desc', 'limit': '1'

@@ -440,6 +440,31 @@ function updatePrinterDisplay(p) {
     bar.style.width = val + '%';
     bar.className = 'progress-fill progress-blue';
   }
+
+  // Keep the "Set Supply Levels" form in step with what the status card shows.
+  // These inputs were hardcoded to value="100" and never populated, so the form
+  // claimed full supplies while the printer read 50% - and submitting it would
+  // have silently overwritten the real level.
+  setSupplyInput('setPaper', p.paper_level);
+  setSupplyInput('setTonerB', p.toner_black);
+  setSupplyInput('setTonerC', p.toner_cyan);
+  setSupplyInput('setTonerM', p.toner_magenta);
+  setSupplyInput('setTonerY', p.toner_yellow);
+}
+
+// The status poll runs every 30s, so this must never overwrite a value the
+// operator is part-way through typing. Skipping the focused field costs nothing
+// and is refreshed on the next poll after they move on.
+function setSupplyInput(id, val) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  if (document.activeElement === el) return;
+  // A level that is missing or null is "unknown", not 0. Writing 0 here would
+  // show the printer as empty when the truth is that it was never recorded.
+  if (val === null || val === undefined || val === '') return;
+  const n = parseInt(val, 10);
+  if (!Number.isFinite(n)) return;
+  el.value = Math.max(0, Math.min(100, n));
 }
 
 // Clear the date so staff can reach old jobs the watcher never caught.
@@ -857,12 +882,37 @@ async function updateJobStatus(jobId, status) {
 }
 
 async function setSupplyLevels() {
+  // Clamp here as well as on input: a cleared or half-typed field would otherwise
+  // send NaN, and JSON.stringify turns NaN into null - which would blank a level
+  // in the database instead of leaving it alone.
+  const readLevel = function (id, label) {
+    const el = document.getElementById(id);
+    const n = parseInt(el.value, 10);
+    if (isNaN(n)) {
+      alert('Enter a number for ' + label + '.');
+      el.focus();
+      return null;
+    }
+    return Math.max(0, Math.min(100, n));
+  };
+
+  const paper = readLevel('setPaper', 'Paper %');
+  if (paper === null) return;
+  const black = readLevel('setTonerB', 'Toner Black %');
+  if (black === null) return;
+  const cyan = readLevel('setTonerC', 'Toner Cyan %');
+  if (cyan === null) return;
+  const magenta = readLevel('setTonerM', 'Toner Magenta %');
+  if (magenta === null) return;
+  const yellow = readLevel('setTonerY', 'Toner Yellow %');
+  if (yellow === null) return;
+
   const data = {
-    paper_level: parseInt(document.getElementById('setPaper').value),
-    toner_black: parseInt(document.getElementById('setTonerB').value),
-    toner_cyan: parseInt(document.getElementById('setTonerC').value),
-    toner_magenta: parseInt(document.getElementById('setTonerM').value),
-    toner_yellow: parseInt(document.getElementById('setTonerY').value)
+    paper_level: paper,
+    toner_black: black,
+    toner_cyan: cyan,
+    toner_magenta: magenta,
+    toner_yellow: yellow
   };
   try {
     const res = await fetch(API('printer', 'set-levels'), {
