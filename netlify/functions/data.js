@@ -114,7 +114,7 @@ async function handleKioskHeartbeat(event) {
   let body;
   try { body = JSON.parse(event.body || '{}'); } catch (e) { return err('Bad JSON body'); }
 
-  const logs = Array.isArray(body.last_log) ? body.last_log.slice(-6).map(String).join(' | ') : '';
+  const logs = Array.isArray(body.last_log) ? body.last_log.slice(-12).map(String).join(' | ') : '';
   const errors = Array.isArray(body.js_errors) ? body.js_errors.slice(-3).map(String).join(' || ') : '';
 
   const result = await supabaseRequest('POST', '/kiosk_heartbeats', {

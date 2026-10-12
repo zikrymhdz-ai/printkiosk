@@ -566,7 +566,7 @@ function startKioskHeartbeat() {
         app_version: (typeof KIOSK_APP_VERSION !== 'undefined') ? KIOSK_APP_VERSION : '',
         state: kioskHeartbeat.state,
         detail: kioskHeartbeat.detail,
-        last_log: (typeof piLogHistory !== 'undefined') ? piLogHistory.slice(-6) : [],
+        last_log: (typeof piLogHistory !== 'undefined') ? piLogHistory.slice(-12) : [],
         face_lib: (typeof faceapi !== 'undefined'),
         camera: !!(typeof faceStream !== 'undefined' && faceStream && vid && vid.videoWidth),
         camera_size: (vid && vid.videoWidth) ? (vid.videoWidth + 'x' + vid.videoHeight) : '',
@@ -638,7 +638,7 @@ function throttledUnknownLog(distance) {
 /* ===== REMOTE KIOSK CONTROL (admin) ===== */
 // Must match APP_VERSION in netlify/functions/_shared.js. If the deployed
 // version differs, the kiosk reloads itself so it never runs a stale page.
-var KIOSK_APP_VERSION = '2026.10.12-11';
+var KIOSK_APP_VERSION = '2026.10.12-12';
 var kioskState = { face_login_enabled: true, maintenance_mode: false, maintenance_message: '' };
 var kioskSettingsTimer = null;
 var cameraStoppedForMaint = false;
@@ -882,8 +882,10 @@ async function bootKiosk() {
   // on a Pi 4 takes a long time and can hang outright. Because it was awaited
   // first, openCamera() was never reached and the camera stayed black with no
   // error at all. The camera is fast and independent, so it goes first.
+  piLog('bootKiosk: opening camera');
   try {
     var camOk = await openCamera();
+    piLog('openCamera returned: ' + camOk);
     if (!camOk) scheduleCameraRetry();
   } catch (e) { piLog('camera start failed: ' + e.message); }
 
@@ -914,6 +916,9 @@ function withTimeout(promise, ms, label) {
  * OverconstrainedError on some webcams. We try the strictest first and relax it.
  */
 async function openCamera() {
+  // Log BEFORE anything that can hang, so we always know we got here.
+  piLog('openCamera: start');
+
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
     document.getElementById('camStatus').innerHTML = '<span class="dot dot-red"></span> No camera API';
     piLog('getUserMedia unavailable (not a secure context?)');
@@ -922,9 +927,10 @@ async function openCamera() {
 
   // Log what cameras the browser can actually see. If enumerateDevices() is
   // empty the problem is OS-level (no v4l2 device / wrong permissions) rather
-  // than the constraint below, and this line makes that obvious.
+  // than the constraint below. It is time-bound because it can stall in kiosk
+  // mode, which would otherwise hide every camera error behind "Starting...".
   try {
-    var devs = await navigator.mediaDevices.enumerateDevices();
+    var devs = await withTimeout(navigator.mediaDevices.enumerateDevices(), 8000, 'enumerateDevices');
     var cams = devs.filter(function (d) { return d.kind === 'videoinput'; });
     piLog('cameras seen: ' + cams.length);
     cams.forEach(function (c, i) { piLog('  cam' + i + ': ' + (c.label || '(no label - check permissions)')); });
