@@ -638,7 +638,7 @@ function throttledUnknownLog(distance) {
 /* ===== REMOTE KIOSK CONTROL (admin) ===== */
 // Must match APP_VERSION in netlify/functions/_shared.js. If the deployed
 // version differs, the kiosk reloads itself so it never runs a stale page.
-var KIOSK_APP_VERSION = '2026.10.12-14';
+var KIOSK_APP_VERSION = '2026.10.12-15';
 var kioskState = { face_login_enabled: true, maintenance_mode: false, maintenance_message: '' };
 var kioskSettingsTimer = null;
 var cameraStoppedForMaint = false;
@@ -1106,6 +1106,8 @@ async function startFaceDetection() {
   // 480p frame saturates all four A53 cores and the UI stops responding.
   const detectWidth = window.FACE_DETECT_WIDTH || 0;
   const minInterval = window.FACE_MIN_INTERVAL_MS || 0;
+  // Detector input size: smaller is faster on a Pi, 320 matches the downscale.
+  const inputSize = window.IS_RPI ? 320 : 416;
 
   let labeledDescriptors = [];
   try {
@@ -1147,7 +1149,12 @@ async function startFaceDetection() {
       frameCanvas.width = srcW;
       frameCanvas.height = srcH;
       frameCtx.drawImage(video, 0, 0, srcW, srcH);
-      const det = await faceapi.detectSingleFace(frameCanvas, { inputSize: 160 }).withFaceLandmarks().withFaceDescriptor();
+      // face-api requires a real options instance for whichever detector net is
+      // loaded. Passing a plain { inputSize: 160 } object throws
+      // "expected options to be instance of ...SsdMobilenetv1Options", which
+      // silently killed every detection loop.
+      var detOpts = new faceapi.SsdMobilenetv1Options({ inputSize: inputSize });
+      const det = await faceapi.detectSingleFace(frameCanvas, detOpts).withFaceLandmarks().withFaceDescriptor();
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
       if (det) {
