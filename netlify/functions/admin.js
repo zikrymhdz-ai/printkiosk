@@ -21,7 +21,6 @@ exports.handler = async (event) => {
       case 'viewer-data': return getViewerData();
       case 'face-detections': return getFaceDetections(url);
       case 'face-snapshot': return getFaceSnapshot(url);
-      case 'delete-face-detections': return deleteFaceDetections(event);
       case 'kiosk-settings': return getKioskSettingsAdmin();
       case 'kiosk-status': return getKioskStatus();
       default: return err('Invalid action');
@@ -31,6 +30,8 @@ exports.handler = async (event) => {
       case 'mark-alert-read': return markAlertRead(event);
       case 'mark-all-alerts-read': return markAllAlertsRead();
       case 'delete-user': return deleteUser(event);
+      // Must be POST: this deletes rows, so it must never run on a GET.
+      case 'delete-face-detections': return deleteFaceDetections(event);
       case 'set-kiosk-settings': return setKioskSettingsAdmin(event, session);
       default: return err('Invalid action');
     }
