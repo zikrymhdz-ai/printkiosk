@@ -5,11 +5,16 @@ Requires=graphical.target
 
 [Service]
 Type=simple
-User=pi
+User=user
 Environment=DISPLAY=:0
 Environment=XDG_RUNTIME_DIR=/run/user/1000
-Environment=PRINTKIOSK_DIR=/home/pi/printkiosk
-ExecStart=/bin/bash /home/pi/printkiosk/kiosk/pi-kiosk.sh
+# Chromium's camera/media stack talks to D-Bus and the desktop portal. A
+# systemd unit does NOT inherit the graphical session's bus address, so without
+# this Chromium logs "Failed to connect to the bus" and enumerateDevices()/
+# getUserMedia() hang forever instead of returning.
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
+Environment=PRINTKIOSK_DIR=/home/user/printkiosk
+ExecStart=/bin/bash /home/user/printkiosk/kiosk/pi-kiosk.sh
 Restart=always
 RestartSec=5
 # Let the page reload itself without systemd killing it mid-request
