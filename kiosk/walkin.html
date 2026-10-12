@@ -612,7 +612,7 @@ function throttledUnknownLog(distance) {
 /* ===== REMOTE KIOSK CONTROL (admin) ===== */
 // Must match APP_VERSION in netlify/functions/_shared.js. If the deployed
 // version differs, the kiosk reloads itself so it never runs a stale page.
-var KIOSK_APP_VERSION = '2026.10.12-8';
+var KIOSK_APP_VERSION = '2026.10.12-9';
 var kioskState = { face_login_enabled: true, maintenance_mode: false, maintenance_message: '' };
 var kioskSettingsTimer = null;
 var cameraStoppedForMaint = false;
@@ -805,9 +805,12 @@ async function bootKiosk() {
   // control. The PIN and guest-QR flows must keep working regardless.
   async function initFaceAI() {
     if (typeof faceapi === 'undefined') {
-      document.getElementById('camStatus').innerHTML = '<span class="dot dot-yellow"></span> Face AI missing';
-      document.getElementById('faceStatusText').textContent = 'Face login unavailable - use PIN or QR';
-      piLog('face-api library MISSING - copy vendor/ to ' + 'the Pi (QR + PIN still work)');
+      var camEl0 = document.getElementById('kioskCam');
+      if (!faceStream || !camEl0 || !camEl0.videoWidth) {
+        document.getElementById('camStatus').innerHTML = '<span class="dot dot-yellow"></span> Face AI missing';
+        document.getElementById('faceStatusText').textContent = 'Face login unavailable - use PIN or QR';
+      }
+      piLog('face-api library MISSING - copy vendor/ to the Pi (QR + PIN still work)');
       return;
     }
     try {
@@ -820,8 +823,13 @@ async function bootKiosk() {
         catch (e) { piLog('model try failed (' + urls[u] + '): ' + e.message); }
       }
       if (!modelsLoaded) {
-        document.getElementById('camStatus').innerHTML = '<span class="dot dot-yellow"></span> Face AI offline';
-        document.getElementById('faceStatusText').textContent = 'Face recognition unavailable';
+        // Only claim "offline" if the camera is not running; otherwise the
+        // camera label must keep showing Face AI active.
+        var camEl = document.getElementById('kioskCam');
+        if (!faceStream || !camEl || !camEl.videoWidth) {
+          document.getElementById('camStatus').innerHTML = '<span class="dot dot-yellow"></span> Face AI offline';
+          document.getElementById('faceStatusText').textContent = 'Face recognition unavailable';
+        }
         piLog('models FAILED - copy models/ to the Pi');
       }
     } catch (e) {
@@ -843,12 +851,34 @@ async function bootKiosk() {
     setInterval(loadPrinterStatus, 30000);
   } catch (e) { piLog('printer status failed: ' + e.message); }
 
-  // Face AI and the camera come last and must never block the above.
-  await initFaceAI();
+  // Camera FIRST, and never behind face AI.
+  // initFaceAI() awaits ~12MB of model downloads plus the WASM backend, which
+  // on a Pi 4 takes a long time and can hang outright. Because it was awaited
+  // first, openCamera() was never reached and the camera stayed black with no
+  // error at all. The camera is fast and independent, so it goes first.
   try {
     var camOk = await openCamera();
     if (!camOk) scheduleCameraRetry();
   } catch (e) { piLog('camera start failed: ' + e.message); }
+
+  // Face AI runs afterwards in the background, hard time-limited so it can never
+  // block the kiosk again.
+  withTimeout(initFaceAI(), 120000, 'face AI init').catch(function (e) {
+    piLog('face AI gave up: ' + e.message);
+  });
+}
+
+// Reject a promise that takes too long, so one slow init cannot wedge the kiosk.
+function withTimeout(promise, ms, label) {
+  return new Promise(function (resolve, reject) {
+    var timer = setTimeout(function () {
+      reject(new Error(label + ' timed out after ' + (ms / 1000) + 's'));
+    }, ms);
+    Promise.resolve(promise).then(
+      function (v) { clearTimeout(timer); resolve(v); },
+      function (e) { clearTimeout(timer); reject(e); }
+    );
+  });
 }
 
 /**
@@ -1289,7 +1319,9 @@ function stopCamera() {
 // tracks were stopped, so this must call getUserMedia again.
 async function restartCamera() {
   if (kioskState && kioskState.maintenance_mode) return;
-  if (!modelsLoaded) return;
+  // No modelsLoaded check here: the camera must come back even when face
+  // recognition is unavailable, otherwise leaving maintenance mode leaves a
+  // permanently black camera.
   var ok = await openCamera();
   if (!ok) scheduleCameraRetry();
 }
