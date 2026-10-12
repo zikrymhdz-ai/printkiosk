@@ -530,9 +530,19 @@ function loadKioskStatus() {
                           : '<span style="color:#dc2626;font-weight:600;">No</span>';
 
       const problems = [];
+      if (s.detail && /ERR:|JS ERROR|PROMISE ERROR/.test(s.detail)) {
+        problems.push('JavaScript error on the screen: ' + String(s.detail).split('|| ERR:').pop().slice(0, 200));
+      }
       if (!s.face_lib) problems.push('face-api.js did not load (vendor/ folder missing on the Pi)');
       if (!s.models_loaded) problems.push('face models failed to load (models/ folder missing on the Pi)');
       if (!s.camera) problems.push('camera did not open (no device, wrong permissions, or busy)');
+
+      // A row with no version and no state fields is the liveness canary, which
+      // means only the inline snippet ran and the main script never executed.
+      if (!s.app_version) {
+        problems.unshift('The main kiosk script never ran (only the inline liveness check fired). ' +
+          'The screen would be non-interactive. Check the error text below.');
+      }
 
       let html = '<div class="order-summary">'
         + '<div class="row"><span>State</span><span style="font-weight:600;">' + (s.state || '-') + '</span></div>'

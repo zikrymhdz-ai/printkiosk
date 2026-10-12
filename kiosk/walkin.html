@@ -210,6 +210,44 @@ window.addEventListener('load', function () {
     }).catch(function () {});
   } catch (e) {}
 });
+
+// Error reporting lives in its OWN script block, placed before the main one.
+// Inside the main block it was useless: a throw at the top of that block (a
+// missing CONFIG) killed the handler before it could ever register.
+window.__pkErrors = [];
+function pkReportError(msg) {
+  window.__pkErrors.push(String(msg).slice(0, 200));
+  var box = document.getElementById('pkError');
+  if (box) { box.textContent = String(msg).slice(0, 300); box.classList.add('show'); }
+}
+window.addEventListener('error', function (e) {
+  pkReportError('JS ERROR: ' + (e.message || e.type) + (e.filename ? (' @ ' + e.filename + ':' + e.lineno) : ''));
+});
+window.addEventListener('unhandledrejection', function (e) {
+  var r = (e && e.reason) || {};
+  pkReportError('PROMISE ERROR: ' + (r.message || r));
+});
+// Send any captured errors straight to the backend so the admin page can show
+// them. This works even when the main script never executed at all.
+function pkFlushErrors() {
+  try {
+    if (!window.__pkErrors.length) return;
+    fetch('https://printkioskfyp.netlify.app/.netlify/functions/data?action=kiosk-heartbeat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        kiosk_id: 'kiosk-error',
+        state: 'JS ERROR',
+        detail: window.__pkErrors.slice(-3).join(' || ').slice(0, 400),
+        last_log: []
+      })
+    }).catch(function () {});
+  } catch (e) {}
+}
+window.addEventListener('load', function () {
+  setTimeout(pkFlushErrors, 800);
+  setInterval(pkFlushErrors, 20000);
+});
 </script>
 
 <div class="kiosk-layout">
@@ -394,8 +432,14 @@ window.addEventListener('load', function () {
 <script src="../vendor/qrcode.min.js"></script>
 <script defer src="../vendor/face-api.min.js"></script>
 <script>
-const SUPABASE_URL = CONFIG.SUPABASE_URL;
-const SUPABASE_KEY = CONFIG.SUPABASE_KEY;
+// Read the config defensively. If frontend_config.js failed to load, CONFIG
+  // is undefined and a bare `CONFIG.SUPABASE_URL` threw at the very top of this
+  // block, which aborted EVERYTHING below it - no camera, no printer status, no
+  // admin control and no heartbeat. Never let one missing file do that again.
+  var HAS_CONFIG = (typeof CONFIG !== 'undefined' && CONFIG) ? CONFIG : null;
+  var SUPABASE_URL = HAS_CONFIG ? (HAS_CONFIG.SUPABASE_URL || '') : '';
+  var SUPABASE_KEY = HAS_CONFIG ? (HAS_CONFIG.SUPABASE_KEY || '') : '';
+  if (!HAS_CONFIG) { window.__pkConfigError = 'frontend_config.js did not load'; }
 
 let faceStream = null;
 let matchedUser = null;
@@ -484,7 +528,9 @@ function startKioskHeartbeat() {
         camera: !!(typeof faceStream !== 'undefined' && faceStream && vid && vid.videoWidth),
         camera_size: (vid && vid.videoWidth) ? (vid.videoWidth + 'x' + vid.videoHeight) : '',
         models_loaded: (typeof modelsLoaded !== 'undefined') ? !!modelsLoaded : false,
-        cam_label: cam ? cam.textContent : ''
+        cam_label: cam ? cam.textContent : '',
+        config_ok: !window.__pkConfigError,
+        js_errors: (window.__pkErrors || []).slice(-3)
       };
 
       if (!url) {
@@ -537,7 +583,7 @@ function throttledUnknownLog(distance) {
 /* ===== REMOTE KIOSK CONTROL (admin) ===== */
 // Must match APP_VERSION in netlify/functions/_shared.js. If the deployed
 // version differs, the kiosk reloads itself so it never runs a stale page.
-var KIOSK_APP_VERSION = '2026.10.12-4';
+var KIOSK_APP_VERSION = '2026.10.12-5';
 var kioskState = { face_login_enabled: true, maintenance_mode: false, maintenance_message: '' };
 var kioskSettingsTimer = null;
 var cameraStoppedForMaint = false;
