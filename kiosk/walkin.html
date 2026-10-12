@@ -166,10 +166,8 @@
   body.pi-kiosk .cam-box { flex: 1 1 auto; min-height: 150px; aspect-ratio: auto; }
   body.pi-kiosk .cam-box video,
   body.pi-kiosk .cam-box canvas { height: 100%; }
-    .pp-foot { margin-top: 10px; padding-top: 7px; }
-    .confirm-card { padding: 20px; }
-    .confirm-overlay { align-items: flex-start; overflow-y: auto; }
-  }
+  body.pi-kiosk .confirm-card { padding: 20px; }
+  body.pi-kiosk .confirm-overlay { align-items: flex-start; overflow-y: auto; }
   /* Portrait / stacked displays */
   @media (max-width: 720px) {
     body.pi-kiosk .kiosk-layout { flex-direction: column; }
@@ -183,10 +181,21 @@
     border-radius: 8px; padding: 6px 8px; max-width: 46vw;
     white-space: pre-wrap; pointer-events: none; display: none;
   }
+  /* A one-line status strip is always visible on the Pi so a dead screen can be
+     diagnosed without a keyboard; the full overlay still toggles on 5 taps. */
+  #piDiag.strip { display: block; }
   body.pi-kiosk.show-diag #piDiag { display: block; }
+  #pkError {
+    position: fixed; left: 0; right: 0; top: 0; z-index: 1000;
+    background: #b91c1c; color: #fff; font: 12px/1.5 monospace;
+    padding: 6px 10px; display: none; white-space: pre-wrap;
+  }
+  #pkError.show { display: block; }
 </style>
 </head>
 <body>
+
+<div id="pkError"></div>
 
 <div class="kiosk-layout">
 <div id="kioskApp" class="kiosk">
@@ -384,17 +393,86 @@ let animFrameId = null;
 // --- Pi kiosk support -------------------------------------------------------
 // Surface backend/camera/model failures somewhere readable. On a Pi with no
 // keyboard these are otherwise invisible, and the shop just sees a dead screen.
+var piLogHistory = [];
+
 function piLog(msg) {
-  // Mirror to the browser console as well, so the messages also land in the
-  // systemd journal (the launcher runs Chromium with --enable-logging=stderr)
-  // and can be read over SSH instead of squinting at the on-screen overlay.
   try { console.log('[pk] ' + msg); } catch (e) {}
+  piLogHistory.push(msg);
+  while (piLogHistory.length > 40) piLogHistory.shift();
+
   var el = document.getElementById('piDiag');
-  if (!el) return;
-  var line = msg + '\n';
-  if (el.textContent.indexOf(msg) === -1) el.textContent += line;
+  if (el) {
+    // Keep only the most recent lines on screen so the overlay stays readable.
+    el.textContent = piLogHistory.slice(-12).join('\n');
+  }
+
   var t = document.getElementById('faceStatusText');
   if (t && msg) t.textContent = msg;
+
+  reportKioskStatus(msg);
+}
+
+// Show any uncaught error in a red banner. A single thrown error used to kill
+// the whole load handler (camera, printer status and admin control all died
+// silently), so make failures impossible to miss.
+window.addEventListener('error', function (e) {
+  var box = document.getElementById('pkError');
+  if (box) {
+    box.textContent = 'JS ERROR: ' + (e.message || e.type) + (e.filename ? (' @ ' + e.filename + ':' + e.lineno) : '');
+    box.classList.add('show');
+  }
+  piLog('JS ERROR: ' + (e.message || e.type));
+});
+window.addEventListener('unhandledrejection', function (e) {
+  var r = (e && e.reason) || {};
+  piLog('PROMISE ERROR: ' + (r.message || r));
+});
+
+// One-line status strip, always visible on the Pi (no keyboard needed).
+function updateStatusStrip() {
+  var el = document.getElementById('piDiag');
+  if (!el) return;
+  if (document.body.classList.contains('show-diag')) return; // full overlay already showing
+  el.classList.add('strip');
+  var last = piLogHistory[piLogHistory.length - 1] || '';
+  el.textContent = 'kiosk: ' + last;
+}
+
+// Post a heartbeat so the admin page can show the kiosk's live state instead of
+// us guessing from a black screen.
+var kioskHeartbeat = { state: 'starting', detail: '' };
+function reportKioskStatus(msg) {
+  kioskHeartbeat.detail = msg || '';
+  var s = document.getElementById('faceStatusText');
+  kioskHeartbeat.state = s ? s.textContent : '';
+}
+
+function startKioskHeartbeat() {
+  var send = function() {
+    var cam = document.getElementById('camStatus');
+    var vid = document.getElementById('kioskCam');
+    var faceapiOk = (typeof faceapi !== 'undefined');
+    try {
+      fetch(API('data', 'kiosk-heartbeat'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          kiosk_id: 'kiosk-1',
+          app_version: KIOSK_APP_VERSION,
+          state: kioskHeartbeat.state,
+          detail: kioskHeartbeat.detail,
+          last_log: piLogHistory.slice(-6),
+          face_lib: faceapiOk,
+          camera: !!(faceStream && vid && vid.videoWidth),
+          camera_size: (vid && vid.videoWidth) ? (vid.videoWidth + 'x' + vid.videoHeight) : '',
+          models_loaded: !!modelsLoaded,
+          cam_label: cam ? cam.textContent : ''
+        })
+      }).catch(function() {});
+    } catch (e) { /* backend unreachable - ignore */ }
+  };
+  send();
+  setInterval(send, 20000);
 }
 
 /* ===== SECURITY AUDIT LOG =====
@@ -430,7 +508,7 @@ function throttledUnknownLog(distance) {
 /* ===== REMOTE KIOSK CONTROL (admin) ===== */
 // Must match APP_VERSION in netlify/functions/_shared.js. If the deployed
 // version differs, the kiosk reloads itself so it never runs a stale page.
-var KIOSK_APP_VERSION = '2026.10.12-2';
+var KIOSK_APP_VERSION = '2026.10.12-3';
 var kioskState = { face_login_enabled: true, maintenance_mode: false, maintenance_message: '' };
 var kioskSettingsTimer = null;
 var cameraStoppedForMaint = false;
@@ -568,6 +646,8 @@ window.addEventListener('load', async () => {
   if (window.IS_RPI) initPiKiosk();
   // Let the admin pause the kiosk / disable face login remotely.
   startKioskSettingsPolling();
+  updateStatusStrip();
+  startKioskHeartbeat();
 
   async function initBackend() {
     // Pi 4 runs ARMv7/A53 cores with no reliable WebGL in Chromium and no wasm SIMD,
@@ -606,28 +686,38 @@ window.addEventListener('load', async () => {
     await faceapi.nets.faceLandmark68Net.loadFromUri(url);
     await faceapi.nets.faceRecognitionNet.loadFromUri(url);
   }
-  // Vendored models on the Pi: no CDN round-trip, so the kiosk still comes up
-  // when the shop internet is down.
-  const LOCAL_MODELS = window.LOCAL_MODELS || '../models/';
-  const modelUrls = window.IS_RPI
-    ? [LOCAL_MODELS]
-    : ['https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/model', LOCAL_MODELS];
-  let loaded = false;
-  await initBackend();
-  for (const url of modelUrls) {
-    try { await loadModels(url); loaded = true; piLog('models: ' + url); break; } catch(e) { piLog('model try failed (' + url + '): ' + e.message); }
-  }
-  if (!loaded) {
-    document.getElementById('camStatus').innerHTML = '<span class="dot dot-yellow"></span> Face AI offline';
-    document.getElementById('faceStatusText').textContent = 'Face recognition unavailable';
-    piLog('models FAILED');
-    return;
-  }
-  modelsLoaded = true;
 
-  var camOk = await openCamera();
-  if (!camOk) scheduleCameraRetry();
+  // Face AI is optional. If vendor/face-api.min.js is missing (not transferred
+  // to the Pi) we must NOT throw: an exception here used to abort the whole
+  // load handler, leaving a black camera, an empty printer panel and no admin
+  // control. The PIN and guest-QR flows must keep working regardless.
+  async function initFaceAI() {
+    if (typeof faceapi === 'undefined') {
+      document.getElementById('camStatus').innerHTML = '<span class="dot dot-yellow"></span> Face AI missing';
+      document.getElementById('faceStatusText').textContent = 'Face login unavailable - use PIN or QR';
+      piLog('face-api library MISSING - copy vendor/ to ' + 'the Pi (QR + PIN still work)');
+      return;
+    }
+    try {
+      var urls = window.IS_RPI
+        ? [window.LOCAL_MODELS || '../models/']
+        : ['https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/model', window.LOCAL_MODELS || '../models/'];
+      await initBackend();
+      for (var u = 0; u < urls.length; u++) {
+        try { await loadModels(urls[u]); modelsLoaded = true; piLog('models: ' + urls[u]); break; }
+        catch (e) { piLog('model try failed (' + urls[u] + '): ' + e.message); }
+      }
+      if (!modelsLoaded) {
+        document.getElementById('camStatus').innerHTML = '<span class="dot dot-yellow"></span> Face AI offline';
+        document.getElementById('faceStatusText').textContent = 'Face recognition unavailable';
+        piLog('models FAILED - copy models/ to the Pi');
+      }
+    } catch (e) {
+      piLog('face AI init error: ' + e.message);
+    }
+  }
 
+  // Finish wiring the kiosk UI first, then bring face AI up in the background.
   document.getElementById('pinInput').addEventListener('input', function() {
     this.value = this.value.replace(/\D/g, '').slice(0, 6);
     if (this.value.length === 6) lookupPin();
@@ -635,6 +725,10 @@ window.addEventListener('load', async () => {
 
   loadPrinterStatus();
   setInterval(loadPrinterStatus, 30000);
+
+  await initFaceAI();
+  var camOk = await openCamera();
+  if (!camOk) scheduleCameraRetry();
 });
 
 /**

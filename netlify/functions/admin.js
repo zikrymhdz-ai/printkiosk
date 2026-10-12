@@ -21,6 +21,7 @@ exports.handler = async (event) => {
       case 'viewer-data': return getViewerData();
       case 'face-detections': return getFaceDetections(url);
       case 'kiosk-settings': return getKioskSettingsAdmin();
+      case 'kiosk-status': return getKioskStatus();
       default: return err('Invalid action');
     }
   } else if (event.httpMethod === 'POST') {
@@ -300,6 +301,44 @@ async function getFaceDetections(url) {
 }
 
 /* ===== REMOTE KIOSK CONTROL ===== */
+// Latest heartbeat from the shop screen: is it alive, did it load face-api,
+// did the camera open? Answers "why is the kiosk screen black" remotely.
+async function getKioskStatus() {
+  const since = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+  const result = await supabaseRequest('GET', '/kiosk_heartbeats', null, {
+    'order': 'seen_at.desc',
+    'limit': '1'
+  });
+
+  if (result.error || !result.data || result.data.length === 0) {
+    return json({ success: true, online: false, unavailable: true, message: 'No heartbeat received' });
+  }
+
+  const hb = result.data[0];
+  const ageMs = Date.now() - new Date(hb.seen_at).getTime();
+  const online = ageMs < 90 * 1000;
+
+  return json({
+    success: true,
+    online: online,
+    unavailable: false,
+    status: {
+      kiosk_id: hb.kiosk_id,
+      app_version: hb.app_version,
+      state: hb.state,
+      detail: hb.detail,
+      last_log: hb.last_log,
+      face_lib: hb.face_lib,
+      camera: hb.camera,
+      camera_size: hb.camera_size,
+      models_loaded: hb.models_loaded,
+      cam_label: hb.cam_label,
+      seen_at: hb.seen_at,
+      age_seconds: Math.round(ageMs / 1000)
+    }
+  });
+}
+
 async function getKioskSettingsAdmin() {
   const result = await supabaseRequest('GET', '/kiosk_settings', null, {
     'id': 'eq.default', 'select': '*', 'limit': '1'

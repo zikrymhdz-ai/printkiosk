@@ -20,6 +20,9 @@ exports.handler = async (event) => {
   if (event.httpMethod === 'POST' && action === 'log-face-detection') {
     return await handleLogFaceDetection(event);
   }
+  if (event.httpMethod === 'POST' && action === 'kiosk-heartbeat') {
+    return await handleKioskHeartbeat(event);
+  }
 
   switch (action) {
     case 'get-jobs': {
@@ -103,6 +106,34 @@ async function getKioskSettings() {
     };
   }
   return Object.assign({}, DEFAULT_KIOSK_SETTINGS);
+}
+
+// The kiosk posts a periodic heartbeat so the admin page can see whether the
+// screen is alive, which face lib it loaded and whether the camera opened.
+async function handleKioskHeartbeat(event) {
+  let body;
+  try { body = JSON.parse(event.body || '{}'); } catch (e) { return err('Bad JSON body'); }
+
+  const logs = Array.isArray(body.last_log) ? body.last_log.slice(-6).map(String).join(' | ') : '';
+
+  const result = await supabaseRequest('POST', '/kiosk_heartbeats', {
+    kiosk_id: String(body.kiosk_id || 'kiosk-1').slice(0, 40),
+    app_version: String(body.app_version || '').slice(0, 20),
+    state: String(body.state || '').slice(0, 120),
+    detail: String(body.detail || '').slice(0, 200),
+    last_log: logs.slice(0, 500),
+    face_lib: !!body.face_lib,
+    camera: !!body.camera,
+    camera_size: String(body.camera_size || '').slice(0, 20),
+    models_loaded: !!body.models_loaded,
+    cam_label: String(body.cam_label || '').slice(0, 80),
+    seen_at: new Date().toISOString()
+  });
+
+  if (result.error) {
+    return json({ success: false, logged: false, error: 'Heartbeat table unavailable' });
+  }
+  return json({ success: true, logged: true });
 }
 
 // The kiosk posts every face scan so the admin can audit who used face login.
