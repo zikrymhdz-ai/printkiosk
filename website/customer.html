@@ -49,8 +49,17 @@
   .rsx-navwrap {
     position: fixed; left: 14px; right: 14px;
     bottom: calc(14px + env(safe-area-inset-bottom));
-    max-width: 440px; margin: 0 auto; height: 70px; z-index: 300;
+    max-width: 440px; margin: 0 auto; height: 70px;
+    /* Above the upload overlay (.pk-overlay is z-index 900) on purpose. The
+       overlay is a full-screen modal, so at z-index 300 the nav was buried
+       underneath it and unreachable for exactly the whole time a customer
+       needed an escape hatch: mid-upload. Double-tapping the centre FAB
+       reloads the app and cancels, and that only works if the nav stays on
+       top. */
+    z-index: 950;
   }
+  /* Double-tapping the centre FAB cancels, so it must read as tappable. */
+  .rsx-item.rsx-fab { touch-action: manipulation; }
   .rsx-glass {
     position: absolute; inset: 0; border-radius: 28px;
     background: rgba(255,255,255,0.92);
@@ -2451,6 +2460,44 @@ init();
       setTimeout(function() { blob.classList.remove('squish'); }, 620);
     });
   });
+
+  /* ---- Double-tap the centre FAB to cancel and start over ----
+     The upload step has no cancel button and the full-screen overlay traps the
+     customer: there was no way out of a half-finished upload. Double-tapping the
+     middle Upload button reloads the app, which discards the in-progress upload
+     and returns them to a clean start.
+
+     dblclick is unreliable on touch screens (and browsers delay it ~300ms), so
+     this counts taps manually within a short window instead. A single tap must
+     still navigate normally, so the handler never blocks the first tap. */
+  var fab = document.querySelector('.rsx-item.rsx-fab');
+  if (fab) {
+    var lastTap = 0;
+    var DOUBLE_MS = 450;
+
+    fab.addEventListener('click', function(e) {
+      var now = Date.now();
+      if (now - lastTap < DOUBLE_MS) {
+        // Second tap: a deliberate double-tap, not navigation. Stop it here so
+        // the normal handler cannot also treat this tap as a page switch.
+        e.preventDefault();
+        e.stopPropagation();
+        lastTap = 0;
+
+        var ok = true;
+        try {
+          ok = window.confirm('Cancel this upload and start over?\n\nAnything you have selected or set up will be cleared.');
+        } catch (err) { ok = true; }
+        if (ok) {
+          // Hard reload: clears in-memory file lists, the cropper and any
+          // half-finished request so the next upload starts genuinely clean.
+          location.reload();
+        }
+        return;
+      }
+      lastTap = now;
+    }, true);
+  }
 
   window.addEventListener('load', function() {
     positionBlob(activeItem(), true);
