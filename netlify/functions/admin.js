@@ -590,7 +590,37 @@ async function setJobPaidStatus(event, session) {
       is_read: false
     });
 
-    return json({ success: true, job_id: job.job_id, paid: true, coins_earned: res.coinsEarned });
+    // Read the row back so the UI can report what was actually persisted rather
+    // than just echoing the request. Staff marking money by hand need to see the
+    // database state, not just that the request was accepted.
+    const after = await supabaseRequest('GET', '/print_jobs', null, {
+      'id': 'eq.' + job.id, 'select': 'job_id,paid,status,payment_ref,total_price,user_id', 'limit': '1'
+    });
+    const now = after.data && after.data.length ? after.data[0] : null;
+
+    let coinsNow = null;
+    if (job.user_id) {
+      const u = await supabaseRequest('GET', '/users', null, {
+        'id': 'eq.' + job.user_id, 'select': 'coins', 'limit': '1'
+      });
+      if (!u.error && u.data && u.data.length > 0) coinsNow = parseInt(u.data[0].coins, 10) || 0;
+    }
+
+    return json({
+      success: true,
+      job_id: job.job_id,
+      paid: true,
+      coins_earned: res.coinsEarned,
+      coins_balance: coinsNow,
+      database: now ? {
+        job_id: now.job_id,
+        paid: !!now.paid,
+        status: now.status,
+        payment_ref: now.payment_ref,
+        total_price: parseFloat(now.total_price)
+      } : null,
+      verified: !!(now && now.paid === true)
+    });
   }
 
   // ---- reversing a payment ----
@@ -638,7 +668,18 @@ async function setJobPaidStatus(event, session) {
     is_read: false
   });
 
-  return json({ success: true, job_id: job.job_id, paid: false });
+  const after = await supabaseRequest('GET', '/print_jobs', null, {
+    'id': 'eq.' + job.id, 'select': 'job_id,paid,status,payment_ref', 'limit': '1'
+  });
+  const now = after.data && after.data.length ? after.data[0] : null;
+
+  return json({
+    success: true,
+    job_id: job.job_id,
+    paid: false,
+    database: now ? { job_id: now.job_id, paid: !!now.paid, status: now.status, payment_ref: now.payment_ref } : null,
+    verified: !!(now && now.paid === false)
+  });
 }
 
 /* ===== DELETING JOBS AND TRANSACTION HISTORY ===== */

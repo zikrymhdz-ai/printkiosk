@@ -123,18 +123,6 @@
       </div>
 
       <div class="card animate-fade-in" style="margin-bottom:20px;">
-        <div class="card-header">
-          <span class="card-title">Payments Needing Manual Confirmation</span>
-          <span class="badge badge-gray" id="paymentReviewBadge">0</span>
-          <button class="btn btn-secondary btn-sm" onclick="loadPaymentReview()">Refresh</button>
-        </div>
-        <p class="text-sm text-muted" style="margin-bottom:12px;">
-          Only appears when a payment could not be matched to exactly one job. Choose the correct job to confirm it by hand.
-        </p>
-        <div id="paymentReviewBody"><p class="text-sm text-muted" style="padding:8px 0;">Loading...</p></div>
-      </div>
-
-      <div class="card animate-fade-in" style="margin-bottom:20px;">
         <div class="card-header" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
           <span class="card-title">Watcher Notification Log</span>
           <select id="payLogStatusFilter" class="input" style="width:auto;padding:6px 10px;font-size:13px;" onchange="loadPaymentLog()">
@@ -397,7 +385,7 @@ function showSection(name, el) {
   const ov = document.getElementById('sidebarOverlay');
   sb.classList.remove('open');
   ov.classList.remove('show');
-  if (name === 'transactions') { loadTransactions(); loadWatcherStatus(); loadPaymentReview(); loadPaymentLog(); }
+  if (name === 'transactions') { loadTransactions(); loadWatcherStatus(); loadPaymentLog(); }
   if (name === 'alerts') loadAlerts();
   if (name === 'coins') loadCoinTransactions();
   if (name === 'users') loadUsers();
@@ -549,7 +537,9 @@ function deleteSelectedJobs() {
 }
 
 // Toggle paid status on any transaction, including old ones the watcher missed.
-// Confirming money by hand is deliberate, so it is always confirmed twice.
+// Confirming money by hand is deliberate, so it is confirmed twice: once before,
+// and the resulting database row is read back and shown afterwards so staff can
+// see what was actually persisted rather than trusting the request.
 function setJobPaid(jobId, paid) {
   const verb = paid ? 'mark as PAID' : 'clear payment on';
   if (!confirm('Are you sure you want to ' + verb + ' ' + jobId + '?\n\n'
@@ -564,11 +554,35 @@ function setJobPaid(jobId, paid) {
   })
     .then(r => r.json())
     .then(d => {
-      if (d.success) {
-        if (d.unchanged) { /* nothing changed */ }
-        else loadTransactions();
-        loadStats();
-      } else alert(d.error || 'Failed');
+      if (!d.success) { alert('Failed: ' + (d.error || 'unknown error')); return; }
+
+      if (d.unchanged) {
+        alert(jobId + ' was already ' + (paid ? 'paid' : 'unpaid') + '. Nothing changed.');
+        return;
+      }
+
+      // Report what the database now holds.
+      const db = d.database;
+      if (db) {
+        const lines = [
+          'Database updated for ' + db.job_id + ':',
+          '  paid        : ' + (db.paid ? 'YES' : 'no'),
+          '  status      : ' + String(db.status || '-').replace(/_/g, ' '),
+          '  payment ref : ' + (db.payment_ref || '-'),
+          '  amount      : RM ' + Number(db.total_price || 0).toFixed(2)
+        ];
+        if (paid) {
+          lines.push('  coins       : +' + (d.coins_earned || 0)
+            + (d.coins_balance != null ? ' (balance now ' + d.coins_balance + ')' : ''));
+        }
+        if (d.verified === false) lines.push('\nWarning: the saved row did not read back as expected.');
+        alert(lines.join('\n'));
+      } else {
+        alert((paid ? 'Marked ' : 'Cleared ') + jobId + (paid ? ' as paid.' : '.'));
+      }
+
+      loadTransactions();
+      loadStats();
     })
     .catch(() => alert('Failed'));
 }
@@ -818,69 +832,6 @@ function loadWatcherStatus() {
       body.innerHTML = '<p class="text-sm text-muted">Failed to load</p>';
       if (banner) banner.style.display = 'block';
     });
-}
-
-/* ===== PAYMENTS WAITING FOR A HUMAN ===== */
-// Safety net for when the watcher is down. Without this, a missed payment means
-// the customer is stuck at the kiosk with no way to print until someone reads
-// the TnG app and knows to do it manually.
-function loadPaymentReview() {
-  const body = document.getElementById('paymentReviewBody');
-  const badge = document.getElementById('paymentReviewBadge');
-  if (!body) return;
-
-  fetch(API('admin', 'payment-review'), { headers: { 'X-Session-Token': token } })
-    .then(r => r.json())
-    .then(d => {
-      const items = (d.success && d.items) ? d.items : [];
-      badge.textContent = items.length;
-      badge.className = 'badge ' + (items.length ? 'badge-warning' : 'badge-gray');
-
-      if (!items.length) {
-        body.innerHTML = '<p class="text-sm text-muted" style="padding:8px 0;">Nothing waiting. Every payment matched a job automatically.</p>';
-        return;
-      }
-
-      body.innerHTML = items.map(function (it) {
-        let candidates = [];
-        try { candidates = JSON.parse(it.candidate_jobs || '[]'); } catch (e) {}
-        const opts = candidates.map(function (c) {
-          return '<tr><td><code>' + c.job_id + '</code></td>'
-            + '<td>RM ' + Number(c.total_price || 0).toFixed(2) + '</td>'
-            + '<td>' + (c.pages || '?') + 'p' + (c.copies > 1 ? ' x' + c.copies : '') + '</td>'
-            + '<td>' + (c.color_mode === 'color' ? 'Colour' : 'B&amp;W') + '</td>'
-            + '<td class="text-xs text-muted">' + String(c.file_name || '').slice(0, 40) + '</td>'
-            + '<td><button class="btn btn-primary btn-sm" onclick="manualConfirmPayment(\'' + c.id + '\',\'' + it.id + '\')">Confirm this job</button></td>'
-            + '</tr>';
-        }).join('');
-
-        return '<div style="border:1px solid var(--gray-200);border-radius:var(--radius);padding:14px;margin-bottom:14px;">'
-          + '<p style="font-size:16px;font-weight:700;margin-bottom:4px;">RM ' + Number(it.amount || 0).toFixed(2) + ' received</p>'
-          + '<p class="text-xs text-muted" style="margin-bottom:10px;">'
-          + (it.payer_name ? 'Payer: <strong>' + it.payer_name + '</strong> · ' : 'Payer name not in the notification · ')
-          + 'Received ' + fmtDateTime(it.created_at) + '</p>'
-          + '<p class="text-sm" style="margin-bottom:10px;color:#92400e;">' + (it.reason || 'Ambiguous match') + '</p>'
-          + '<table><thead><tr><th>Job</th><th>Total</th><th>Pages</th><th>Type</th><th>File</th><th></th></tr></thead>'
-          + '<tbody>' + opts + '</tbody></table>'
-          + '</div>';
-      }).join('');
-    })
-    .catch(() => { body.innerHTML = '<p class="text-sm text-muted">Failed to load</p>'; });
-}
-
-function manualConfirmPayment(jobUuid, reviewId) {
-  if (!confirm('Confirm this print job as paid by hand?')) return;
-  fetch(API('admin', 'payment-manual-confirm'), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Session-Token': token },
-    body: JSON.stringify({ job_id: jobUuid, review_id: reviewId })
-  })
-    .then(r => r.json())
-    .then(d => {
-      if (d.success) { alert('Job ' + d.job_id + ' confirmed'); loadPaymentReview(); loadStats(); }
-      else alert(d.error || 'Failed');
-    })
-    .catch(() => alert('Failed'));
 }
 
 /* ===== FULL NOTIFICATION LOG ===== */

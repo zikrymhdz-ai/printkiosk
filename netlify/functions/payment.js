@@ -292,7 +292,12 @@ async function parkForReview(amount, amountRaw, payerName, ref, rawText, candida
 
   await supabaseRequest('POST', '/alerts', {
     type: 'payment_received',
-    message: 'Payment RM ' + amount.toFixed(2) + ' needs manual confirmation (' + reason + ')',
+    // The admin review card is gone - Mark Paid on the Transactions table is the
+    // single way staff settle a job. So the alert has to say what to do, otherwise
+    // a parked payment becomes invisible and the customer is stuck at the kiosk.
+    message: 'Payment RM ' + amount.toFixed(2) + ' could not be matched automatically ('
+      + reason + '). Open Admin > Transactions, find the job, and click Mark Paid.'
+      + (candidates.length ? ' Candidates: ' + candidates.map(c => c.job_id).join(', ') + '.' : ''),
     severity: 'warning',
     is_read: false
   });
