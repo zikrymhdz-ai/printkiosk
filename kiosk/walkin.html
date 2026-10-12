@@ -231,14 +231,20 @@ window.addEventListener('unhandledrejection', function (e) {
 // them. This works even when the main script never executed at all.
 function pkFlushErrors() {
   try {
-    if (!window.__pkErrors.length) return;
+    var probe = 'main=' + (window.__pkMainStarted ? 'RAN' : 'NOT-RAN')
+      + ' config=' + (window.__pkConfig || '?')
+      + ' api=' + (window.__pkApi || '?')
+      + ' cam=' + (document.getElementById('kioskCam') ? 'ok' : 'missing');
+    var errs = (window.__pkErrors && window.__pkErrors.length)
+      ? window.__pkErrors.slice(-2).join(' || ')
+      : 'none';
     fetch('https://printkioskfyp.netlify.app/.netlify/functions/data?action=kiosk-heartbeat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         kiosk_id: 'kiosk-error',
-        state: 'JS ERROR',
-        detail: window.__pkErrors.slice(-3).join(' || ').slice(0, 400),
+        state: 'probe ' + probe,
+        detail: 'errors: ' + errs,
         last_log: []
       })
     }).catch(function () {});
@@ -436,6 +442,10 @@ window.addEventListener('load', function () {
   // is undefined and a bare `CONFIG.SUPABASE_URL` threw at the very top of this
   // block, which aborted EVERYTHING below it - no camera, no printer status, no
   // admin control and no heartbeat. Never let one missing file do that again.
+  // Probe: if __pkMainStarted is missing in a heartbeat, this block never ran.
+  window.__pkMainStarted = new Date().toISOString();
+  window.__pkConfig = (typeof CONFIG !== 'undefined') ? 'yes' : 'NO';
+  window.__pkApi = (typeof API === 'function') ? 'yes' : 'NO';
   var HAS_CONFIG = (typeof CONFIG !== 'undefined' && CONFIG) ? CONFIG : null;
   var SUPABASE_URL = HAS_CONFIG ? (HAS_CONFIG.SUPABASE_URL || '') : '';
   var SUPABASE_KEY = HAS_CONFIG ? (HAS_CONFIG.SUPABASE_KEY || '') : '';
@@ -583,7 +593,7 @@ function throttledUnknownLog(distance) {
 /* ===== REMOTE KIOSK CONTROL (admin) ===== */
 // Must match APP_VERSION in netlify/functions/_shared.js. If the deployed
 // version differs, the kiosk reloads itself so it never runs a stale page.
-var KIOSK_APP_VERSION = '2026.10.12-6';
+var KIOSK_APP_VERSION = '2026.10.12-7';
 var kioskState = { face_login_enabled: true, maintenance_mode: false, maintenance_message: '' };
 var kioskSettingsTimer = null;
 var cameraStoppedForMaint = false;
