@@ -27,8 +27,6 @@ exports.handler = async (event) => {
       case 'payment-log': return getPaymentLog(url);
       case 'payment-review': return getPaymentReview(url);
       case 'pending-payable': return getPendingPayableJobs();
-      case 'payment-manual-confirm': return manualConfirmPayment(event, session);
-      case 'set-job-paid': return setJobPaidStatus(event, session);
       default: return err('Invalid action');
     }
   } else if (event.httpMethod === 'POST') {
@@ -40,6 +38,10 @@ exports.handler = async (event) => {
       case 'delete-face-detections': return deleteFaceDetections(event);
       case 'set-kiosk-settings': return setKioskSettingsAdmin(event, session);
       case 'delete-payment-log': return deletePaymentLog(event);
+      // Both of these move money, so they must never run on a GET - a stray
+      // page visit or prefetch would otherwise confirm or reverse a payment.
+      case 'payment-manual-confirm': return manualConfirmPayment(event, session);
+      case 'set-job-paid': return setJobPaidStatus(event, session);
       default: return err('Invalid action');
     }
   }
