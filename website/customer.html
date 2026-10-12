@@ -1880,11 +1880,22 @@ function renderJobsList(jobs, list) {
         '<div><span class="text-xs text-muted">Color</span><p class="text-sm" style="font-weight:600;">' + (j.color_mode === 'color' ? 'Color' : j.color_mode === 'mixed' ? 'Mixed' : 'B&W') + '</p></div>' +
         '<div><span class="text-xs text-muted">Copies</span><p class="text-sm" style="font-weight:600;">' + j.copies + '</p></div>' +
         '<div><span class="text-xs text-muted">Amount</span><p class="text-sm" style="font-weight:700; color:var(--primary);">RM ' + parseFloat(j.total_price).toFixed(2) + '</p></div>' +
-        '<div><span class="text-xs text-muted">Date</span><p class="text-sm" style="font-weight:600;">' + new Date(j.created_at).toLocaleDateString() + '</p></div>' +
+        '<div><span class="text-xs text-muted">Uploaded</span><p class="text-sm" style="font-weight:600;">' + fmtDateTime(j.created_at) + '</p></div>' +
       '</div>' +
       pinBlock + completedBlock + paymentBlock +
     '</div>';
   }).join('');
+}
+
+// Shared by the job cards and the transaction list so both agree. The time of
+// day matters here: two jobs uploaded on the same day are otherwise
+// indistinguishable when a customer is checking which print they paid for.
+function fmtDateTime(v) {
+  if (!v) return '-';
+  var d = new Date(v);
+  if (isNaN(d.getTime())) return '-';
+  return d.toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' })
+       + ', ' + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
 }
 
 function deleteJob(jobId) {
@@ -1936,7 +1947,7 @@ function loadCoinHistory() {
       tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--gray-400);padding:24px;">No transactions yet</td></tr>';
       return;
     }
-    tbody.innerHTML = data.transactions.map(t => '<tr><td><span class="badge ' + (t.type === 'earned' ? 'badge-success' : t.type === 'spent' ? 'badge-warning' : 'badge-info') + '">' + t.type + '</span></td><td>' + t.amount + '</td><td>' + (t.description || '-') + '</td><td>' + t.balance_after + '</td><td>' + new Date(t.created_at).toLocaleDateString() + '</td></tr>').join('');
+    tbody.innerHTML = data.transactions.map(t => '<tr><td><span class="badge ' + (t.type === 'earned' ? 'badge-success' : t.type === 'spent' ? 'badge-warning' : 'badge-info') + '">' + t.type + '</span></td><td>' + t.amount + '</td><td>' + (t.description || '-') + '</td><td>' + t.balance_after + '</td><td>' + fmtDateTime(t.created_at) + '</td></tr>').join('');
   }).catch(() => {});
 }
 

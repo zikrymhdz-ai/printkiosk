@@ -124,26 +124,6 @@
 
       <div class="card animate-fade-in" style="margin-bottom:20px;">
         <div class="card-header">
-          <span class="card-title">Confirm a Payment Manually</span>
-        </div>
-        <p class="text-sm text-muted" style="margin-bottom:14px;">
-          Use this when the watcher missed a payment â€” the staff phone was off, out of signal, or notification access had been revoked.
-          Check the payment really arrived in TnG first, then confirm the matching job by hand.
-        </p>
-        <div class="grid-2" style="align-items:end;">
-          <div>
-            <label class="text-xs text-muted" style="display:block;margin-bottom:6px;">Pending jobs (newest first)</label>
-            <select id="manualJobSelect" class="input"><option value="">Loadingâ€¦</option></select>
-          </div>
-          <div>
-            <button class="btn btn-primary" onclick="manualConfirmByAmount()" style="width:100%;">Confirm selected job as paid</button>
-          </div>
-        </div>
-        <p class="text-xs text-muted" style="margin-top:10px;">This grants the customer a print coin, same as an automatic match.</p>
-      </div>
-
-      <div class="card animate-fade-in" style="margin-bottom:20px;">
-        <div class="card-header">
           <span class="card-title">Payments Needing Manual Confirmation</span>
           <span class="badge badge-gray" id="paymentReviewBadge">0</span>
           <button class="btn btn-secondary btn-sm" onclick="loadPaymentReview()">Refresh</button>
@@ -229,8 +209,8 @@
         <div class="card-header"><span class="card-title">Ready to Print Jobs</span></div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Job ID</th><th>File</th><th>Pages</th><th>Amount</th><th>Action</th></tr></thead>
-            <tbody id="readyJobsBody"><tr><td colspan="5" style="text-align:center;color:var(--gray-400);padding:24px;">Loading...</td></tr></tbody>
+            <thead><tr><th>Job ID</th><th>File</th><th>Pages</th><th>Amount</th><th>Uploaded</th><th>Action</th></tr></thead>
+            <tbody id="readyJobsBody"><tr><td colspan="6" style="text-align:center;color:var(--gray-400);padding:24px;">Loading...</td></tr></tbody>
           </table>
         </div>
       </div>
@@ -411,7 +391,7 @@ function showSection(name, el) {
   const ov = document.getElementById('sidebarOverlay');
   sb.classList.remove('open');
   ov.classList.remove('show');
-  if (name === 'transactions') { loadTransactions(); loadWatcherStatus(); loadPaymentReview(); loadPaymentLog(); loadPendingJobsForManualConfirm(); }
+  if (name === 'transactions') { loadTransactions(); loadWatcherStatus(); loadPaymentReview(); loadPaymentLog(); }
   if (name === 'alerts') loadAlerts();
   if (name === 'coins') loadCoinTransactions();
   if (name === 'users') loadUsers();
@@ -467,6 +447,19 @@ function showAllTransactions() {
   loadTransactions();
 }
 
+/* One formatter for every "when did this happen" in the dashboard, so the kiosk,
+   the customer screen and the admin tables all agree.
+   toLocaleDateString() alone hid the time of day, which made it impossible to
+   tell two jobs on the same day apart when settling a payment by hand. */
+function fmtDateTime(v, withTime) {
+  if (!v) return '-';
+  var d = new Date(v);
+  if (isNaN(d.getTime())) return '-';
+  var date = d.toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' });
+  if (withTime === false) return date;
+  return date + ', ' + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+}
+
 function loadTransactions() {
   const d = document.getElementById('txDate').value;
   const f = document.getElementById('txFilter') ? document.getElementById('txFilter').value : '';
@@ -496,7 +489,7 @@ function loadTransactions() {
             + (locked ? '' : '<button class="btn btn-sm btn-secondary" style="margin-left:4px;" onclick="setJobPaid(\'' + t.job_id + '\',false)">Undo</button>')
           : '<span class="badge badge-danger">No</span> '
             + (locked ? '' : '<button class="btn btn-sm btn-primary" style="margin-left:4px;" onclick="setJobPaid(\'' + t.job_id + '\',true)">Mark Paid</button>');
-        return '<tr><td><strong>' + t.job_id + '</strong></td><td>' + t.customer_name + '</td><td>' + t.file_name + '</td><td>' + t.pages + '</td><td>RM ' + parseFloat(t.total_price).toFixed(2) + '</td><td><span class="badge ' + statusClass + '">' + t.status.replace(/_/g, ' ') + '</span></td><td>' + paidCell + '</td><td>' + new Date(t.created_at).toLocaleDateString() + '</td></tr>';
+        return '<tr><td><strong>' + t.job_id + '</strong></td><td>' + t.customer_name + '</td><td>' + t.file_name + '</td><td>' + t.pages + '</td><td>RM ' + parseFloat(t.total_price).toFixed(2) + '</td><td><span class="badge ' + statusClass + '">' + t.status.replace(/_/g, ' ') + '</span></td><td>' + paidCell + '</td><td class="text-xs" style="white-space:nowrap;">' + fmtDateTime(t.created_at) + '</td></tr>';
       }).join('');
     }).catch(() => {});
 }
@@ -539,7 +532,7 @@ function loadAlerts() {
       }
       const unreadCount = data.alerts.filter(a => !a.is_read).length;
       document.getElementById('alertCount').textContent = unreadCount || '';
-      list.innerHTML = data.alerts.map(a => '<div class="alert alert-' + (a.severity === 'critical' ? 'critical' : a.severity) + '" style="' + (a.is_read ? 'opacity:0.6;' : '') + '"><span style="flex:1;">' + a.message + '</span><span class="text-xs text-muted">' + new Date(a.created_at).toLocaleString() + '</span>' + (!a.is_read ? '<button class="btn btn-sm btn-secondary" onclick="markAlertRead(\'' + a.id + '\')">Read</button>' : '') + '</div>').join('');
+      list.innerHTML = data.alerts.map(a => '<div class="alert alert-' + (a.severity === 'critical' ? 'critical' : a.severity) + '" style="' + (a.is_read ? 'opacity:0.6;' : '') + '"><span style="flex:1;">' + a.message + '</span><span class="text-xs text-muted">' + fmtDateTime(a.created_at) + '</span>' + (!a.is_read ? '<button class="btn btn-sm btn-secondary" onclick="markAlertRead(\'' + a.id + '\')">Read</button>' : '') + '</div>').join('');
     }).catch(() => {});
 }
 
@@ -556,7 +549,7 @@ function loadCoinTransactions() {
       }
       tbody.innerHTML = data.transactions.map(t => {
         const userName = t.users ? t.users.name : 'Deleted';
-        return '<tr><td>' + userName + '</td><td><span class="badge ' + (t.type === 'earned' ? 'badge-success' : t.type === 'spent' ? 'badge-warning' : 'badge-info') + '">' + t.type + '</span></td><td>' + t.amount + '</td><td>' + (t.description || '-') + '</td><td>' + t.balance_after + '</td><td>' + new Date(t.created_at).toLocaleDateString() + '</td></tr>';
+        return '<tr><td>' + userName + '</td><td><span class="badge ' + (t.type === 'earned' ? 'badge-success' : t.type === 'spent' ? 'badge-warning' : 'badge-info') + '">' + t.type + '</span></td><td>' + t.amount + '</td><td>' + (t.description || '-') + '</td><td>' + t.balance_after + '</td><td>' + fmtDateTime(t.created_at) + '</td></tr>';
       }).join('');
     }).catch(() => {});
 }
@@ -569,7 +562,7 @@ function loadUsers() {
         tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--gray-400);padding:24px;">No users</td></tr>';
         return;
       }
-      tbody.innerHTML = data.users.map(u => '<tr><td><strong>' + u.name + '</strong></td><td>' + u.email + '</td><td><span class="badge ' + (u.role === 'admin' ? 'badge-danger' : 'badge-info') + '">' + u.role + '</span></td><td>' + u.coins + '</td><td>' + new Date(u.created_at).toLocaleDateString() + '</td></tr>').join('');
+      tbody.innerHTML = data.users.map(u => '<tr><td><strong>' + u.name + '</strong></td><td>' + u.email + '</td><td><span class="badge ' + (u.role === 'admin' ? 'badge-danger' : 'badge-info') + '">' + u.role + '</span></td><td>' + u.coins + '</td><td>' + fmtDateTime(u.created_at) + '</td></tr>').join('');
     }).catch(() => {});
 }
 
@@ -578,10 +571,10 @@ function loadReadyJobs() {
     .then(r => r.json()).then(data => {
       const tbody = document.getElementById('readyJobsBody');
       if (!data.success || !data.jobs.length) {
-        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--gray-400);padding:24px;">No ready jobs</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--gray-400);padding:24px;">No ready jobs</td></tr>';
         return;
       }
-      tbody.innerHTML = data.jobs.map(j => '<tr><td><strong>' + j.job_id + '</strong></td><td>' + j.file_name + '</td><td>' + j.pages + '</td><td>RM ' + parseFloat(j.total_price).toFixed(2) + '</td><td><button class="btn btn-sm btn-primary" onclick="updateJobStatus(\'' + j.job_id + '\',\'printing\')">Print</button></td></tr>').join('');
+      tbody.innerHTML = data.jobs.map(j => '<tr><td><strong>' + j.job_id + '</strong></td><td>' + j.file_name + '</td><td>' + j.pages + '</td><td>RM ' + parseFloat(j.total_price).toFixed(2) + '</td><td class="text-xs" style="white-space:nowrap;">' + fmtDateTime(j.created_at) + '</td><td><button class="btn btn-sm btn-primary" onclick="updateJobStatus(\'' + j.job_id + '\',\'printing\')">Print</button></td></tr>').join('');
     }).catch(() => {});
 }
 
@@ -725,49 +718,6 @@ function loadWatcherStatus() {
 // Safety net for when the watcher is down. Without this, a missed payment means
 // the customer is stuck at the kiosk with no way to print until someone reads
 // the TnG app and knows to do it manually.
-function loadPendingJobsForManualConfirm() {
-  const sel = document.getElementById('manualJobSelect');
-  if (!sel) return;
-  fetch(API('admin', 'pending-payable'), { headers: { 'X-Session-Token': token } })
-    .then(r => r.json())
-    .then(d => {
-      const jobs = (d.success && d.jobs) ? d.jobs : [];
-      if (!jobs.length) {
-        sel.innerHTML = '<option value="">No jobs waiting for payment</option>';
-        return;
-      }
-      sel.innerHTML = jobs.map(function (j) {
-        const mins = j.age_minutes != null ? (j.age_minutes + 'm ago') : '';
-        return '<option value="' + j.id + '">' + j.job_id + ' â€” RM ' + Number(j.total_price).toFixed(2)
-             + ' (' + (j.pages || '?') + 'p' + (j.copies > 1 ? ' x' + j.copies : '') + ') â€” ' + mins + '</option>';
-      }).join('');
-    })
-    .catch(() => { sel.innerHTML = '<option value="">Failed to load</option>'; });
-}
-
-function manualConfirmByAmount() {
-  const sel = document.getElementById('manualJobSelect');
-  if (!sel || !sel.value) { alert('Select a job first'); return; }
-  const jobId = sel.value;
-  const label = sel.options[sel.selectedIndex].text.split('â€”')[0].trim();
-  if (!confirm('Confirm ' + label + ' as paid?\n\nOnly do this after checking the money actually arrived in your TnG app.')) return;
-
-  fetch(API('admin', 'payment-manual-confirm'), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Session-Token': token },
-    body: JSON.stringify({ job_id: jobId })
-  })
-    .then(r => r.json())
-    .then(d => {
-      if (d.success) {
-        alert('Job ' + d.job_id + ' confirmed as paid.');
-        loadPendingJobsForManualConfirm();
-        loadPaymentReview();
-      } else alert(d.error || 'Failed');
-    })
-    .catch(() => alert('Failed'));
-}
-
 function loadPaymentReview() {
   const body = document.getElementById('paymentReviewBody');
   const badge = document.getElementById('paymentReviewBadge');
@@ -802,7 +752,7 @@ function loadPaymentReview() {
           + '<p style="font-size:16px;font-weight:700;margin-bottom:4px;">RM ' + Number(it.amount || 0).toFixed(2) + ' received</p>'
           + '<p class="text-xs text-muted" style="margin-bottom:10px;">'
           + (it.payer_name ? 'Payer: <strong>' + it.payer_name + '</strong> Â· ' : 'Payer name not in the notification Â· ')
-          + 'Received ' + new Date(it.created_at).toLocaleString() + '</p>'
+          + 'Received ' + fmtDateTime(it.created_at) + '</p>'
           + '<p class="text-sm" style="margin-bottom:10px;color:#92400e;">' + (it.reason || 'Ambiguous match') + '</p>'
           + '<table><thead><tr><th>Job</th><th>Total</th><th>Pages</th><th>Type</th><th>File</th><th></th></tr></thead>'
           + '<tbody>' + opts + '</tbody></table>'
@@ -864,7 +814,7 @@ function loadPaymentLog() {
         const cls = tone[r.status] || 'badge-gray';
         return '<tr>'
           + '<td><input type="checkbox" onchange="togglePayLogRow(this, \'' + r.id + '\')"></td>'
-          + '<td class="text-xs">' + (r.seen_at ? new Date(r.seen_at).toLocaleString() : '-') + '</td>'
+          + '<td class="text-xs">' + fmtDateTime(r.seen_at) + '</td>'
           + '<td class="text-xs">' + String(r.package_name || '').split('.').pop() + '</td>'
           + '<td style="font-weight:600;">' + (r.amount != null ? 'RM ' + Number(r.amount).toFixed(2) : '-') + '</td>'
           + '<td><span class="badge ' + cls + '">' + (r.status || 'seen') + '</span>'
@@ -1018,7 +968,7 @@ function loadKioskSettings() {
       }
 
       const at = document.getElementById('kioskSavedAt');
-      at.textContent = s.updated_at ? ('Last updated ' + new Date(s.updated_at).toLocaleString() + (s.updated_by ? ' by ' + s.updated_by : '')) : '';
+      at.textContent = s.updated_at ? ('Last updated ' + fmtDateTime(s.updated_at) + (s.updated_by ? ' by ' + s.updated_by : '')) : '';
     })
     .catch(() => {});
 }
@@ -1091,7 +1041,7 @@ function loadFaceDetections() {
         const who = matched
           ? (r.user_name || (r.user_id ? r.user_id.slice(0, 8) + 'â€¦' : 'Unknown user'))
           : '<span style="color:var(--gray-400);">Not registered</span>';
-        const when = r.created_at ? new Date(r.created_at).toLocaleString() : '-';
+        const when = fmtDateTime(r.created_at);
         const face = r.has_snapshot
           ? '<img data-snap="' + r.id + '" alt="" class="face-thumb" ' +
             'style="width:52px;height:52px;border-radius:8px;object-fit:cover;display:block;background:#f1f5f9;cursor:zoom-in" ' +
