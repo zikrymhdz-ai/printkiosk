@@ -197,6 +197,21 @@
 
 <div id="pkError"></div>
 
+<!-- Canary: fires even if the main script block fails to parse. If the admin
+     page ever shows this kiosk as offline, this tiny inline snippet is the
+     proof that the page itself loaded and the backend was reachable. -->
+<script>
+window.addEventListener('load', function () {
+  try {
+    fetch('https://printkioskfyp.netlify.app/.netlify/functions/data?action=kiosk-heartbeat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kiosk_id: 'canary', state: 'page loaded', detail: 'inline canary' })
+    }).catch(function () {});
+  } catch (e) {}
+});
+</script>
+
 <div class="kiosk-layout">
 <div id="kioskApp" class="kiosk">
   <div class="cam-box pulse-ring" id="camBox">
@@ -449,27 +464,41 @@ function reportKioskStatus(msg) {
 
 function startKioskHeartbeat() {
   var send = function() {
-    var cam = document.getElementById('camStatus');
-    var vid = document.getElementById('kioskCam');
-    var faceapiOk = (typeof faceapi !== 'undefined');
     try {
-      fetch(API('data', 'kiosk-heartbeat'), {
+      var cam = document.getElementById('camStatus');
+      var vid = document.getElementById('kioskCam');
+      // Build the URL defensively - API() may be unavailable if
+      // frontend_config.js failed, and we still want to report that.
+      var url;
+      try {
+        url = (typeof API === 'function') ? API('data', 'kiosk-heartbeat') : null;
+      } catch (e) { url = null; }
+
+      var payload = {
+        kiosk_id: 'kiosk-1',
+        app_version: (typeof KIOSK_APP_VERSION !== 'undefined') ? KIOSK_APP_VERSION : '',
+        state: kioskHeartbeat.state,
+        detail: kioskHeartbeat.detail,
+        last_log: (typeof piLogHistory !== 'undefined') ? piLogHistory.slice(-6) : [],
+        face_lib: (typeof faceapi !== 'undefined'),
+        camera: !!(typeof faceStream !== 'undefined' && faceStream && vid && vid.videoWidth),
+        camera_size: (vid && vid.videoWidth) ? (vid.videoWidth + 'x' + vid.videoHeight) : '',
+        models_loaded: (typeof modelsLoaded !== 'undefined') ? !!modelsLoaded : false,
+        cam_label: cam ? cam.textContent : ''
+      };
+
+      if (!url) {
+        // API() unavailable: still report, straight at the known live backend.
+        url = 'https://printkioskfyp.netlify.app/.netlify/functions/data?action=kiosk-heartbeat';
+        payload.detail = (payload.detail ? payload.detail + ' | ' : '') + 'API() unavailable';
+      }
+
+      fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          kiosk_id: 'kiosk-1',
-          app_version: KIOSK_APP_VERSION,
-          state: kioskHeartbeat.state,
-          detail: kioskHeartbeat.detail,
-          last_log: piLogHistory.slice(-6),
-          face_lib: faceapiOk,
-          camera: !!(faceStream && vid && vid.videoWidth),
-          camera_size: (vid && vid.videoWidth) ? (vid.videoWidth + 'x' + vid.videoHeight) : '',
-          models_loaded: !!modelsLoaded,
-          cam_label: cam ? cam.textContent : ''
-        })
+        body: JSON.stringify(payload)
       }).catch(function() {});
-    } catch (e) { /* backend unreachable - ignore */ }
+    } catch (e) { /* never let the heartbeat throw */ }
   };
   send();
   setInterval(send, 20000);
@@ -508,7 +537,7 @@ function throttledUnknownLog(distance) {
 /* ===== REMOTE KIOSK CONTROL (admin) ===== */
 // Must match APP_VERSION in netlify/functions/_shared.js. If the deployed
 // version differs, the kiosk reloads itself so it never runs a stale page.
-var KIOSK_APP_VERSION = '2026.10.12-3';
+var KIOSK_APP_VERSION = '2026.10.12-4';
 var kioskState = { face_login_enabled: true, maintenance_mode: false, maintenance_message: '' };
 var kioskSettingsTimer = null;
 var cameraStoppedForMaint = false;
@@ -642,13 +671,21 @@ let lastInteraction = Date.now();
 });
 function isIdleFor(ms) { return (Date.now() - lastInteraction) > ms; }
 
-window.addEventListener('load', async () => {
-  if (window.IS_RPI) initPiKiosk();
-  // Let the admin pause the kiosk / disable face login remotely.
-  startKioskSettingsPolling();
-  updateStatusStrip();
-  startKioskHeartbeat();
+// Every step gets its own try/catch. They used to sit in one sequence, so a
+// single throw (a missing vendor file, an unsupported API) silently killed
+// everything after it - black camera, empty printer panel, no admin control and
+// no heartbeat all at once.
+window.addEventListener('load', function () {
+  // Heartbeat first and independent: the admin page must always be able to see
+  // that the screen is alive, even if everything else fails.
+  try { startKioskHeartbeat(); } catch (e) { /* nothing else works yet */ }
+  try { updateStatusStrip(); } catch (e) {}
+  try { if (window.IS_RPI) initPiKiosk(); } catch (e) { piLog('initPiKiosk failed: ' + e.message); }
+  try { startKioskSettingsPolling(); } catch (e) { piLog('settings polling failed: ' + e.message); }
+  try { bootKiosk(); } catch (e) { piLog('boot failed: ' + e.message); }
+});
 
+async function bootKiosk() {
   async function initBackend() {
     // Pi 4 runs ARMv7/A53 cores with no reliable WebGL in Chromium and no wasm SIMD,
     // so force the single-threaded non-SIMD WASM backend and skip the GPU attempts.
@@ -717,19 +754,27 @@ window.addEventListener('load', async () => {
     }
   }
 
-  // Finish wiring the kiosk UI first, then bring face AI up in the background.
-  document.getElementById('pinInput').addEventListener('input', function() {
-    this.value = this.value.replace(/\D/g, '').slice(0, 6);
-    if (this.value.length === 6) lookupPin();
-  });
+  // Wire the basic kiosk UI first so PIN entry and printer status work no
+  // matter what happens with face AI afterwards.
+  try {
+    document.getElementById('pinInput').addEventListener('input', function() {
+      this.value = this.value.replace(/\D/g, '').slice(0, 6);
+      if (this.value.length === 6) lookupPin();
+    });
+  } catch (e) { piLog('PIN wiring failed: ' + e.message); }
 
-  loadPrinterStatus();
-  setInterval(loadPrinterStatus, 30000);
+  try {
+    loadPrinterStatus();
+    setInterval(loadPrinterStatus, 30000);
+  } catch (e) { piLog('printer status failed: ' + e.message); }
 
+  // Face AI and the camera come last and must never block the above.
   await initFaceAI();
-  var camOk = await openCamera();
-  if (!camOk) scheduleCameraRetry();
-});
+  try {
+    var camOk = await openCamera();
+    if (!camOk) scheduleCameraRetry();
+  } catch (e) { piLog('camera start failed: ' + e.message); }
+}
 
 /**
  * Open the camera with a short list of constraints. Different Pi camera setups
