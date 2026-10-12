@@ -565,11 +565,8 @@ async function setJobPaidStatus(event, session) {
   const makePaid = !!body.paid;
   if (!jobId) return err('job_id required');
 
-  const jobResult = await supabaseRequest('GET', '/print_jobs', null, {
-    'id': 'eq.' + jobId, 'select': '*', 'limit': '1'
-  });
-  if (jobResult.error || !jobResult.data || !jobResult.data.length) return err('Print job not found', 404);
-  const job = jobResult.data[0];
+  const job = await findPrintJob(jobId);
+  if (!job) return err('Print job not found', 404);
 
   if (!!job.paid === makePaid) {
     return json({ success: true, job_id: job.job_id, paid: !!job.paid, unchanged: true });
@@ -680,6 +677,44 @@ async function setJobPaidStatus(event, session) {
     database: now ? { job_id: now.job_id, paid: !!now.paid, status: now.status, payment_ref: now.payment_ref } : null,
     verified: !!(now && now.paid === false)
   });
+}
+
+/**
+ * Resolve a print job from either identifier.
+ *
+ * The dashboard shows staff the human-readable job_id (PRN-2026...), while rows
+ * carry a UUID in `id`. Callers used to send one and look up the other, which
+ * silently produced "Print job not found". Accepting both keeps the API usable
+ * from the table, from the kiosk, and from anything holding a UUID.
+ */
+async function findPrintJob(ref) {
+  if (!ref) return null;
+
+  // print_jobs.id is a uuid column. Sending a job code like PRN-2026... to it is
+  // rejected by PostgREST with 400, not an empty result, so only try the uuid
+  // lookup when the value actually looks like a uuid.
+  const isUuid = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(ref);
+
+  if (isUuid) {
+    const byId = await supabaseRequest('GET', '/print_jobs', null, {
+      'id': 'eq.' + ref, 'select': '*', 'limit': '1'
+    });
+    if (!byId.error && byId.data && byId.data.length) return byId.data[0];
+    return null;
+  }
+
+  const byJobId = await supabaseRequest('GET', '/print_jobs', null, {
+    'job_id': 'eq.' + ref, 'select': '*', 'limit': '1'
+  });
+  if (!byJobId.error && byJobId.data && byJobId.data.length) return byJobId.data[0];
+
+  // Last resort: a uuid sent with odd casing or whitespace still failed isUuid.
+  const byId2 = await supabaseRequest('GET', '/print_jobs', null, {
+    'id': 'eq.' + ref, 'select': '*', 'limit': '1'
+  });
+  if (!byId2.error && byId2.data && byId2.data.length) return byId2.data[0];
+
+  return null;
 }
 
 /* ===== DELETING JOBS AND TRANSACTION HISTORY ===== */
@@ -804,13 +839,8 @@ async function manualConfirmPayment(event, session) {
   const reviewId = String(body.review_id || '');
   if (!jobId) return err('job_id required');
 
-  const jobResult = await supabaseRequest('GET', '/print_jobs', null, {
-    'id': 'eq.' + jobId, 'select': '*', 'limit': '1'
-  });
-  if (jobResult.error || !jobResult.data || !jobResult.data.length) {
-    return err('Print job not found');
-  }
-  const job = jobResult.data[0];
+  const job = await findPrintJob(jobId);
+  if (!job) return err('Print job not found', 404);
 
   if (job.paid) return err('That job is already confirmed as paid');
 
