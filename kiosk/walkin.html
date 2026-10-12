@@ -175,16 +175,28 @@ var ua = navigator.userAgent || '';
     body.pi-kiosk .pin-section { gap: 8px; }
     body.pi-kiosk #kioskPinHint { display: none; }
   }
-  /* Camera grows to fill leftover vertical space on any screen. */
-  body.pi-kiosk .kiosk { min-height: 0; }
-  body.pi-kiosk .cam-box { flex: 1 1 auto; min-height: 150px; aspect-ratio: auto; }
+  /* Centre the whole layout vertically on the standing display. The camera and
+     printer panel stay side by side - stacking them at 800px wide pushed
+     everything into the top of the screen. */
+  body.pi-kiosk .kiosk-layout {
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+  }
+  body.pi-kiosk .kiosk { min-height: 0; justify-content: center; }
+  body.pi-kiosk .printer-panel { height: fit-content; }
+  /* Viewport-relative height so the stack can be centred instead of filling. */
+  body.pi-kiosk .cam-box { flex: 0 0 auto; height: 46vh; min-height: 150px; aspect-ratio: auto; }
   body.pi-kiosk .cam-box video,
   body.pi-kiosk .cam-box canvas { height: 100%; }
   body.pi-kiosk .confirm-card { padding: 20px; }
-  body.pi-kiosk .confirm-overlay { align-items: flex-start; overflow-y: auto; }
+  /* Overlays sit in the middle of the screen; overflow only kicks in if a card
+     is ever taller than the panel. */
+  body.pi-kiosk .confirm-overlay { align-items: center; justify-content: center; overflow-y: auto; }
   /* Portrait / stacked displays */
   @media (max-width: 720px) {
-    body.pi-kiosk .kiosk-layout { flex-direction: column; }
+    body.pi-kiosk .kiosk-layout { flex-direction: column; align-items: center; justify-content: center; }
     body.pi-kiosk .printer-panel { width: auto; }
   }
   /* Minimal-chrome diagnostics overlay, toggled by the Pi flag */
@@ -643,7 +655,7 @@ function throttledUnknownLog(distance) {
 /* ===== REMOTE KIOSK CONTROL (admin) ===== */
 // Must match APP_VERSION in netlify/functions/_shared.js. If the deployed
 // version differs, the kiosk reloads itself so it never runs a stale page.
-var KIOSK_APP_VERSION = '2026.10.12-17';
+var KIOSK_APP_VERSION = '2026.10.12-18';
 var kioskState = { face_login_enabled: true, maintenance_mode: false, maintenance_message: '' };
 var kioskSettingsTimer = null;
 var cameraStoppedForMaint = false;
