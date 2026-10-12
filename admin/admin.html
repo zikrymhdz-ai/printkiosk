@@ -529,7 +529,19 @@ function loadKioskStatus() {
       const yn = (v) => v ? '<span style="color:#16a34a;font-weight:600;">Yes</span>'
                           : '<span style="color:#dc2626;font-weight:600;">No</span>';
 
-      const problems = [];
+      // Ignore the diagnostic probe rows (kiosk-error / canary). They are liveness
+// checks, not the kiosk's own status report.
+if (s.kiosk_id === 'kiosk-error' || s.kiosk_id === 'canary') {
+  const badgeProbe = document.getElementById('kioskOnlineBadge');
+  if (badgeProbe) { badgeProbe.textContent = 'No Status Yet'; badgeProbe.className = 'badge badge-warning'; }
+  body.innerHTML = '<p class="text-sm text-muted">The screen is alive but has not sent a status update yet.'
+    + ' Diagnostic probe: <code>' + (s.state || '') + '</code><br>'
+    + (s.detail ? ('<span class="text-xs">' + String(s.detail).slice(0, 300) + '</span>') : '')
+    + '</p>';
+  return;
+}
+
+const problems = [];
       if (s.detail && /ERR:|JS ERROR|PROMISE ERROR/.test(s.detail)) {
         problems.push('JavaScript error on the screen: ' + String(s.detail).split('|| ERR:').pop().slice(0, 200));
       }
@@ -539,9 +551,8 @@ function loadKioskStatus() {
 
       // A row with no version and no state fields is the liveness canary, which
       // means only the inline snippet ran and the main script never executed.
-      if (!s.app_version) {
-        problems.unshift('The main kiosk script never ran (only the inline liveness check fired). ' +
-          'The screen would be non-interactive. Check the error text below.');
+      if (!s.app_version && s.kiosk_id === 'kiosk-1') {
+        problems.unshift('The main kiosk script reported no version. Check the error text below.');
       }
 
       let html = '<div class="order-summary">'

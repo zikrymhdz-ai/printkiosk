@@ -235,6 +235,11 @@ function pkFlushErrors() {
       + ' config=' + (window.__pkConfig || '?')
       + ' api=' + (window.__pkApi || '?')
       + ' cam=' + (document.getElementById('kioskCam') ? 'ok' : 'missing');
+    var hb = window.__pkHb || {};
+    probe += ' hb=' + (hb.tried || 0) + 'try/' + (hb.ok || 0) + 'ok'
+      + ' st=' + (hb.lastStatus || '-')
+      + (hb.lastError ? ' ERR=' + hb.lastError : '')
+      + (hb.lastBody ? ' body=' + hb.lastBody : '');
     var errs = (window.__pkErrors && window.__pkErrors.length)
       ? window.__pkErrors.slice(-2).join(' || ')
       : 'none';
@@ -516,6 +521,8 @@ function reportKioskStatus(msg) {
   kioskHeartbeat.state = s ? s.textContent : '';
 }
 
+window.__pkHb = { tried: 0, ok: 0, lastUrl: '', lastStatus: '', lastBody: '', lastError: '' };
+
 function startKioskHeartbeat() {
   var send = function() {
     try {
@@ -539,7 +546,6 @@ function startKioskHeartbeat() {
         camera_size: (vid && vid.videoWidth) ? (vid.videoWidth + 'x' + vid.videoHeight) : '',
         models_loaded: (typeof modelsLoaded !== 'undefined') ? !!modelsLoaded : false,
         cam_label: cam ? cam.textContent : '',
-        config_ok: !window.__pkConfigError,
         js_errors: (window.__pkErrors || []).slice(-3)
       };
 
@@ -549,12 +555,25 @@ function startKioskHeartbeat() {
         payload.detail = (payload.detail ? payload.detail + ' | ' : '') + 'API() unavailable';
       }
 
+window.__pkHb.tried++;
+      window.__pkHb.lastUrl = url;
+
       fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
-      }).catch(function() {});
-    } catch (e) { /* never let the heartbeat throw */ }
+      }).then(function (r) {
+        window.__pkHb.lastStatus = String(r.status);
+        return r.text();
+      }).then(function (t) {
+        window.__pkHb.lastBody = String(t).slice(0, 140);
+        window.__pkHb.ok++;
+      }).catch(function (e) {
+        window.__pkHb.lastError = String((e && e.message) || e).slice(0, 140);
+      });
+    } catch (e) {
+      window.__pkHb.lastError = 'sync: ' + String(e.message || e).slice(0, 140);
+    }
   };
   send();
   setInterval(send, 20000);
@@ -593,7 +612,7 @@ function throttledUnknownLog(distance) {
 /* ===== REMOTE KIOSK CONTROL (admin) ===== */
 // Must match APP_VERSION in netlify/functions/_shared.js. If the deployed
 // version differs, the kiosk reloads itself so it never runs a stale page.
-var KIOSK_APP_VERSION = '2026.10.12-7';
+var KIOSK_APP_VERSION = '2026.10.12-8';
 var kioskState = { face_login_enabled: true, maintenance_mode: false, maintenance_message: '' };
 var kioskSettingsTimer = null;
 var cameraStoppedForMaint = false;
