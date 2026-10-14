@@ -8,5 +8,10 @@
   },
   "engines": {
     "node": ">=18.0.0"
+  },
+  "scripts": {
+    "version:sync": "node scripts/sync-version.js",
+    "check:version": "node scripts/sync-version.js",
+    "test": "node scripts/sync-version.js && node scripts/check-syntax.js"
   }
 }

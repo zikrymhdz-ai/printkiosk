@@ -807,7 +807,7 @@ function throttledUnknownLog(distance) {
 /* ===== REMOTE KIOSK CONTROL (admin) ===== */
 // Must match APP_VERSION in netlify/functions/_shared.js. If the deployed
 // version differs, the kiosk reloads itself so it never runs a stale page.
-var KIOSK_APP_VERSION = '2026.10.14-42';
+var KIOSK_APP_VERSION = '2026.10.14-43';
 var kioskState = { face_login_enabled: true, maintenance_mode: false, maintenance_message: '' };
 var kioskSettingsTimer = null;
 var cameraStoppedForMaint = false;
@@ -872,16 +872,35 @@ function startKioskSettingsPolling() {
       .then(function(d) {
         if (!d || !d.success) return;
 
-        // Self-heal: a newer build is deployed -> pick it up automatically.
-        if (d.app_version && d.app_version !== KIOSK_APP_VERSION) {
-          if (!reloading) {
-            reloading = true;
-            piLog('new kiosk version ' + d.app_version + ' - reloading');
-            try { localStorage.setItem('kiosk_reload_at', String(Date.now())); } catch (e) {}
-            location.reload();
-          }
-          return;
-        }
+// Self-heal: a newer build is deployed -> pick it up automatically.
+//
+// This MUST be rate limited. The comparison is between the version baked into
+// the HTML that was served and the version the backend reports, so any drift
+// between the two (e.g. _shared.js deployed without walkin.html) makes every
+// single page load reload itself. The kiosk then sits there flickering
+// forever and is completely unusable -- a stale-but-working kiosk is far
+// better than an endlessly reloading one. So: reload at most once per window,
+// and if we have already just reloaded, stay put and say so.
+var RELOAD_COOLDOWN_MS = 10 * 60 * 1000;
+
+if (d.app_version && d.app_version !== KIOSK_APP_VERSION) {
+  var lastReload = 0;
+  try { lastReload = parseInt(localStorage.getItem('kiosk_reload_at') || '0', 10) || 0; } catch (e) {}
+
+  if (Date.now() - lastReload < RELOAD_COOLDOWN_MS) {
+    piLog('version mismatch (page ' + KIOSK_APP_VERSION + ' vs server ' + d.app_version +
+          ') but already reloaded recently - staying on this build');
+    kioskHeartbeat.versionMismatch = d.app_version;
+  } else {
+    if (!reloading) {
+      reloading = true;
+      piLog('new kiosk version ' + d.app_version + ' - reloading');
+      try { localStorage.setItem('kiosk_reload_at', String(Date.now())); } catch (e) {}
+      location.reload();
+      return;
+    }
+  }
+}
 
         if (d.settings) applyKioskSettings(d.settings);
       })
