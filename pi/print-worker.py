@@ -162,25 +162,108 @@ def run_lp(args, timeout):
     )
 
 
-def wait_for_queue_empty(printer, timeout):
-    """lp returns as soon as the job is ACCEPTED, not when paper comes out.
-    Poll CUPS until our job leaves the queue so 'completed' means printed."""
+def cups_job_state(printer, job_id):
+    """Return the state of one specific CUPS job, or None if it has vanished.
+
+    'lp' only tells us the job was ACCEPTED into the queue. It says nothing
+    about whether paper ever came out, so relying on "the queue is empty now"
+    is not a success check at all: an aborted, cancelled or offline-rejected
+    job also leaves the queue, and a fast single-page job is already gone
+    before the first poll.
+
+    'lpstat -W all' reports per-job state:
+        completed  -> it really did print
+        aborted    -> the printer gave up (jam, no paper, offline)
+        canceled   -> removed before printing
+    """
+    try:
+        proc = subprocess.run(
+            ["lpstat", "-W", "all", "-o", job_id],
+            capture_output=True, text=True, timeout=30,
+        )
+    except Exception:
+        return None
+
+    out = proc.stdout
+    if not out.strip():
+        return None
+
+    # Line looks like: Brother-12  user  24576  Tue 14 Oct ... printing
+    for line in out.splitlines():
+        if job_id not in line:
+            continue
+        low = line.lower()
+        for state in ("completed", "aborted", "canceled", "cancelled"):
+            if state in low:
+                return state
+        for state in ("printing", "processing", "pending", "held"):
+            if state in low:
+                return state
+    return None
+
+
+def printer_alert(printer):
+    """Return the printer's stop reason (e.g. 'Paper jam'), or '' if healthy.
+
+    Useful both as a pre-flight check and to explain *why* a job aborted, so
+    staff see 'Paper jam' instead of a bare failure.
+    """
+    try:
+        proc = subprocess.run(
+            ["lpstat", "-p", printer, "-l"],
+            capture_output=True, text=True, timeout=30,
+        )
+    except Exception:
+        return ""
+    out = (proc.stdout or "") + (proc.stderr or "")
+    low = out.lower()
+
+    for reason in ("out of paper", "paper jam", "no paper", "printer stopped",
+                   "offline", "unable to connect", "error"):
+        if reason in low:
+            # Grab the trailing "(Reason)" text if CUPS supplies one.
+            m = re.search(r"\(([^)]*)\)", out)
+            return (m.group(1) if m else reason).strip()
+    return ""
+
+
+def wait_for_outcome(printer, job_id, timeout):
+    """Block until this specific job finishes. Returns (ok, reason)."""
     deadline = time.time() + timeout
+    last = ""
+
     while time.time() < deadline:
-        try:
-            out = subprocess.run(
-                ["lpstat", "-p", printer, "-o"],
-                capture_output=True, text=True, timeout=30,
-            ).stdout
-            if not out.strip():
+        state = cups_job_state(printer, job_id)
+
+        if state == "completed":
+            return True, ""
+        if state in ("aborted", "canceled", "cancelled"):
+            alert = printer_alert(printer)
+            return False, alert or ("job %s by the printer (%s)" % (state, alert or "no reason given"))
+
+        # CUPS can purge job history (PreserveJobHistory defaults to Off), so
+        # the job may disappear without us ever seeing 'completed'. Only treat
+        # that as success if the printer is healthy, otherwise report the
+        # printer's own stop reason.
+        if state is None and time.time() > deadline - timeout + 15:
+            alert = printer_alert(printer)
+            if not alert:
                 return True, ""
-        except Exception:
-            pass
+            return False, alert
+
+        if state is None:
+            alert = printer_alert(printer)
+            if alert:
+                return False, alert
+            last = alert
+
         time.sleep(2)
-    return False, "job still in queue after %ds" % timeout
+
+    return False, "printer did not confirm within %ds" % timeout
 
 
 def send_to_printer(pdf_path, job):
+    """Submit to CUPS. Returns (ok, job_id_or_error)."""
     printer = CONFIG["printer"]
     sides = (job.get("sides") or "single").lower()
     color = (job.get("color_mode") or "bw").lower()
@@ -208,6 +291,19 @@ def send_to_printer(pdf_path, job):
     proc = run_lp(args, timeout=CONFIG["queue_timeout"])
     if proc.returncode != 0:
         return False, (proc.stderr or proc.stdout or "lp exited %d" % proc.returncode).strip()[:400]
+
+    # 'request id is Brother-12 (1 file(s))' -- we need this to track the exact
+    # job instead of guessing from an empty queue.
+    out = (proc.stdout or "") + (proc.stderr or "")
+    m = re.search(r"request id is\s+(\S+?)\s*\(", out)
+    if m:
+        return True, m.group(1)
+
+    # Some lp builds print the id without the parenthesised suffix.
+    m = re.search(r"request id is\s+(\S+)", out)
+    if m:
+        return True, m.group(1)
+
     return True, ""
 
 
@@ -345,15 +441,29 @@ def process(job):
                 # file does not contain N pages -- stop and let staff decide.
                 raise ValueError("page count mismatch: file has %s, job says %s" % (actual, expected))
 
-        ok, err = send_to_printer(pdf, job)
+        # Refuse to submit at all if the printer is already reporting a stop
+        # reason. Better to fail now with a clear message than to hand CUPS a
+        # job it will silently drop.
+        alert = printer_alert(CONFIG["printer"])
+        if alert:
+            raise RuntimeError("printer unavailable: %s" % alert)
+
+        ok, result = send_to_printer(pdf, job)
         if not ok:
-            raise RuntimeError("lp rejected job: %s" % err)
+            raise RuntimeError("lp rejected job: %s" % result)
 
-        printed, qerr = wait_for_queue_empty(CONFIG["printer"], CONFIG["queue_timeout"])
+        job_id = result
+        log("%s: submitted to CUPS as %s" % (public_id, job_id or "(id unknown)"))
+
+        # Wait for THIS job to reach a terminal state. Only 'completed' counts
+        # as success -- an aborted or cancelled job means no paper came out.
+        printed, reason = wait_for_outcome(
+            CONFIG["printer"], job_id, CONFIG["queue_timeout"]
+        )
         if not printed:
-            raise RuntimeError(qerr)
+            raise RuntimeError(reason or "printer did not confirm the job")
 
-        log("%s: PRINTED" % public_id)
+        log("%s: PRINTED (cups job %s)" % (public_id, job_id or "n/a"))
         report(job["id"], public_id, "completed", None, attempts, page_verified)
 
     except urllib.error.URLError as e:
