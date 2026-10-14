@@ -410,6 +410,7 @@ def main():
             last_watchdog = now
 
         did_work = False
+        claim_ok = True
         try:
             res = api_post("claim-job", {})
             job = res.get("job")
@@ -418,6 +419,16 @@ def main():
                 process(job)
         except Exception as e:
             log("claim-job failed: %s" % e)
+            claim_ok = False
+
+        if once and not claim_ok:
+            # Without this the dry run would go on to announce "no job waiting",
+            # which reads like a successful safety check even though we never
+            # actually reached the backend. The first version of this script
+            # had exactly that bug and looked like it passed.
+            log("DRY RUN FAILED: could not talk to the backend. Fix this before"
+                " starting the service - it would never print anything.")
+            sys.exit(1)
 
         if once and did_work:
             break
