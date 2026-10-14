@@ -731,7 +731,19 @@ function startKioskHeartbeat() {
         // numbers from the device instead of guessed at from a desk.
         face_pass_ms: (typeof window.__pkFaceMs !== 'undefined') ? Math.round(window.__pkFaceMs) : null,
         face_gap_ms: (typeof window.__pkFaceGap !== 'undefined') ? Math.round(window.__pkFaceGap) : null,
-        js_errors: (window.__pkErrors || []).slice(-3)
+        js_errors: (window.__pkErrors || []).slice(-3),
+    // Why the last detected face was not accepted. A registered user seeing
+    // "unknown face" gives no clue whether the threshold, the size gate or
+    // the streak rejected them; these numbers make that answerable from the
+    // admin dashboard without attaching a debugger to the kiosk.
+    face_diag: window.__pkFaceDiag ? (function() {
+      var d = window.__pkFaceDiag;
+      return 'dist=' + d.distance + '/' + d.threshold
+        + ' face=' + d.facePx + 'px(' + d.ratio + ' of ' + d.frameW + ')'
+        + ' min=' + d.minRatio
+        + (d.tooSmall ? ' TOO_SMALL' : ' size_ok')
+        + ' streak=' + d.streak;
+    })() : ''
       };
 
       if (!url) {
@@ -826,7 +838,7 @@ function throttledUnknownLog(distance) {
 /* ===== REMOTE KIOSK CONTROL (admin) ===== */
 // Must match APP_VERSION in netlify/functions/_shared.js. If the deployed
 // version differs, the kiosk reloads itself so it never runs a stale page.
-var KIOSK_APP_VERSION = '2026.10.14-56';
+var KIOSK_APP_VERSION = '2026.10.14-57';
 var kioskState = { face_login_enabled: true, maintenance_mode: false, maintenance_message: '' };
 var kioskSettingsTimer = null;
 var cameraStoppedForMaint = false;
@@ -1412,10 +1424,12 @@ var FACE_MATCH_FRAMES = 6;
 // ...but a match that only just reached the streak is treated as a passer-by.
 var FACE_MIN_HOLD_FRAMES = 8;
 
-// A face narrower than this in the video frame is too small to match reliably.
-// 640px-wide feed => ~102px. Detects someone standing back rather than at the
-// kiosk.
-var FACE_MIN_FACE_PX = 102;
+// Smallest acceptable face, as a fraction of the detection frame width.
+// Expressed as a ratio because the frame is downscaled to FACE_DETECT_WIDTH
+// before detection; a pixel constant would mean something completely different
+// on the Pi than on a desktop. 0.12 of a 256px frame is ~31px, which still
+// rejects a face far off in the background but accepts someone at the kiosk.
+var FACE_MIN_FACE_RATIO = 0.12;
 
 var faceStreak = { count: 0, distance: null, box: null };
 
@@ -1579,8 +1593,16 @@ async function detect() {
           // Only the largest face in frame is considered: face-api's
           // detectSingleFace already returns just that one, so a passer-by
           // standing closer to the lens simply becomes the candidate.
+          // Measured as a fraction of the detection frame, NOT in raw pixels.
+          // The Pi downscales the feed to FACE_DETECT_WIDTH (256px) before
+          // detecting, so an absolute pixel minimum here was measured against
+          // a 256px canvas: a 102px minimum demanded a face 40% of the frame
+          // wide, which rejected almost everyone and made a registered user
+          // come up "unknown".
           const faceW = det.detection.box.width;
-          const bigEnough = faceW >= FACE_MIN_FACE_PX;
+          const frameW = srcW || 640;
+          const faceRatio = faceW / frameW;
+          const bigEnough = faceRatio >= FACE_MIN_FACE_RATIO;
 
           if (match.label !== 'unknown' && match.distance < FACE_MATCH_THRESHOLD
               && bigEnough) {
@@ -1627,6 +1649,21 @@ async function detect() {
               'Hold still - confirming (' + faceStreak.count + '/' + FACE_MATCH_FRAMES + ')';
           } else {
             if (faceStreak.count > 0) resetFaceStreak();
+            // Report WHY a face was not accepted. Without this, a registered user
+            // just sees "unknown face" and there is no way to tell whether the
+            // threshold, the size gate or the streak is rejecting them.
+            if (window.__pkFaceDiag && match.label !== 'unknown') {
+              window.__pkFaceDiag = {
+                distance: Math.round(match.distance * 1000) / 1000,
+                threshold: FACE_MATCH_THRESHOLD,
+                facePx: Math.round(faceW),
+                frameW: Math.round(frameW),
+                ratio: Math.round(faceRatio * 1000) / 1000,
+                minRatio: FACE_MIN_FACE_RATIO,
+                tooSmall: !bigEnough,
+                streak: faceStreak.count,
+              };
+            }
             // A face is present but nobody registered - record it (throttled).
             throttledUnknownLog(match.distance);
           }

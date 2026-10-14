@@ -122,12 +122,16 @@ async function handleKioskHeartbeat(event) {
 
   const logs = Array.isArray(body.last_log) ? body.last_log.slice(-12).map(String).join(' | ') : '';
   const errors = Array.isArray(body.js_errors) ? body.js_errors.slice(-3).map(String).join(' || ') : '';
+  // Why the last detected face was rejected (distance vs threshold, face size
+  // vs the minimum). Folded into the existing free-text `detail` column so
+  // this needs no migration and still shows up in the admin dashboard.
+  const faceDiag = body.face_diag ? ' FACE[' + String(body.face_diag).slice(0, 160) + ']' : '';
 
   const result = await supabaseRequest('POST', '/kiosk_heartbeats', {
     kiosk_id: String(body.kiosk_id || 'kiosk-1').slice(0, 40),
     app_version: String(body.app_version || '').slice(0, 20),
     state: String(body.state || '').slice(0, 120),
-    detail: (String(body.detail || '') + (errors ? ' || ERR: ' + errors : '')).slice(0, 600),
+    detail: (String(body.detail || '') + faceDiag + (errors ? ' || ERR: ' + errors : '')).slice(0, 600),
     last_log: logs.slice(0, 500),
     face_lib: !!body.face_lib,
     camera: !!body.camera,

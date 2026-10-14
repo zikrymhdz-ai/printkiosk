@@ -38,7 +38,7 @@ const REQUIRED_GLOBALS = [
 
 const REQUIRED_VALUES = [
   'FACE_MATCH_THRESHOLD', 'FACE_MATCH_FRAMES', 'FACE_MIN_HOLD_FRAMES',
-  'FACE_MIN_FACE_PX', 'faceStreak', 'cameraOn', 'KIOSK_APP_VERSION',
+  'FACE_MIN_FACE_RATIO', 'faceStreak', 'cameraOn', 'KIOSK_APP_VERSION',
 ];
 
 // Deliberately NOT required: detect() and overlayBlocking() are nested inside
