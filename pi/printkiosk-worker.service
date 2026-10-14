@@ -14,7 +14,11 @@ WorkingDirectory=/home/user/printkiosk
 EnvironmentFile=/home/user/printkiosk/pi/print-worker.env
 Environment=PRINTKIOSK_API=https://printkioskfyp.netlify.app
 Environment=PRINTER_NAME=Brother
-Environment=PRINTER_URI=ipp://Brother.local/ipp/print
+# Must match how the CUPS queue reaches the printer. The default here
+# deliberately matches the queue's static address rather than an mDNS name:
+# if these two disagree, printing still works but supply polling fails
+# silently.
+Environment=PRINTER_URI=ipp://10.100.131.48:631/ipp/print
 
 ExecStart=/usr/bin/python3 /home/user/printkiosk/pi/print-worker.py
 

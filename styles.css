@@ -256,6 +256,9 @@ tr:last-child td { border-bottom: none; }
 .progress-yellow { background: linear-gradient(90deg, #fbbf24, #f59e0b); }
 .progress-red { background: linear-gradient(90deg, #f87171, #dc2626); }
 .progress-blue { background: linear-gradient(90deg, #60a5fa, #2563eb); }
+/* "We do not know" must not look like any real level. A grey bar reads as
+   no reading; a coloured one reads as a measurement. */
+.progress-gray { background: var(--gray-300, #cbd5e1); }
 
 /* ===== ALERTS ===== */
 .alert {

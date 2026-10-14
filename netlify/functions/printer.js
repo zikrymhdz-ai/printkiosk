@@ -256,13 +256,19 @@ async function reportSupplies(event) {
   // A supply row should only ever show "OK" when all four toners are known.
   const known = [bw, c, m, y].every(v => v !== null);
   const lowest = known ? Math.min(bw, c, m, y) : null;
+  const unreadable = body.online === false || !known;
 
   const row = {
-    status: body.online === false ? 'offline' : (lowest !== null && lowest <= 15 ? 'low' : 'online'),
+    status: unreadable ? 'unknown' : (lowest <= 15 ? 'low' : 'online'),
+    // When the printer could not be read, store null rather than keeping the
+    // previous numbers. Leaving them in place made hand-entered 100%s sit
+    // there for days looking like live readings.
     toner_black: bw,
     toner_cyan: c,
     toner_magenta: m,
     toner_yellow: y,
+    // Recorded even when the read failed, so "checked recently but
+    // unreachable" is distinguishable from "never checked".
     last_checked: new Date().toISOString()
   };
 
@@ -279,13 +285,23 @@ async function reportSupplies(event) {
   });
   if (cur.error) return err('Failed to read printer status', 500);
 
+  let write;
   if (!cur.data || cur.data.length === 0) {
-    const ins = await supabaseRequest('POST', '/printer_status', row);
-    if (ins.error) return err('Failed to store supplies', 500);
+    write = await supabaseRequest('POST', '/printer_status', row);
   } else {
-    const upd = await supabaseRequest('PATCH', '/printer_status?id=eq.' + cur.data[0].id, row);
-    if (upd.error) return err('Failed to store supplies', 500);
+    write = await supabaseRequest('PATCH', '/printer_status?id=eq.' + cur.data[0].id, row);
+
+    // The toner columns were NOT NULL until migration 20261014 made them
+    // nullable. Without this fallback an unreadable printer would fail the
+    // whole write with a 23502, so the status could never even be recorded as
+    // "unknown" -- the exact case the null was added to represent.
+    if (write.error && JSON.stringify(write.data || '').includes('23502')) {
+      const fallback = { status: row.status, last_checked: row.last_checked };
+      if (row.paper_level !== undefined) fallback.paper_level = row.paper_level;
+      write = await supabaseRequest('PATCH', '/printer_status?id=eq.' + cur.data[0].id, fallback);
+    }
   }
+  if (write.error) return err('Failed to store supplies', 500);
 
   if (lowest !== null && lowest <= 15) {
     await supabaseRequest('POST', '/alerts', {

@@ -58,14 +58,36 @@ else
     *) warn "does not start with pk_print_ - double-check it matches Netlify" ;;
   esac
   umask 077
+  # PRINTER_URI must match how the CUPS queue reaches the printer. The default
+  # installer wrote an mDNS name (Brother.local) while the queue itself was
+  # created with the static address, so the supply poll silently failed while
+  # printing kept working -- which looks like "the printer status does not
+  # follow the printer" rather than a config mismatch.
+  PRINTER_ADDR="${PRINTER_ADDR:-10.100.131.48}"
   cat > "$ENV_FILE" <<EOF
 PRINT_WORKER_SECRET=$SECRET
 PRINTKIOSK_API=https://printkioskfyp.netlify.app
 PRINTER_NAME=$QUEUE
-PRINTER_URI=ipp://Brother.local/ipp/print
+PRINTER_URI=ipp://$PRINTER_ADDR:631/ipp/print
 EOF
   chmod 600 "$ENV_FILE"
   ok "written to $ENV_FILE"
+fi
+
+# Say out loud what the worker will actually poll, and prove it is reachable.
+echo
+echo "  Worker will poll: $(grep '^PRINTER_URI=' "$ENV_FILE" 2>/dev/null || echo '(not set)')"
+if command -v ipptool >/dev/null 2>&1; then
+  U=$(grep '^PRINTER_URI=' "$ENV_FILE" | cut -d= -f2-)
+  if ipptool -tv "$U" /usr/share/cups/ipptool/get-printer-attributes.test >/dev/null 2>&1; then
+    ok "printer reachable over IPP at $U - toner levels will be real"
+  else
+    warn "could not reach $U over IPP. Toner levels will show 'unknown'."
+    warn "try:  sudo apt install cups-ipp-utils"
+  fi
+else
+  warn "ipptool not installed -> toner levels will show 'unknown'."
+  warn "install it:  sudo apt install cups-ipp-utils"
 fi
 
 # ---------------------------------------------------------------- systemd

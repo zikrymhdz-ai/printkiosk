@@ -807,7 +807,7 @@ function throttledUnknownLog(distance) {
 /* ===== REMOTE KIOSK CONTROL (admin) ===== */
 // Must match APP_VERSION in netlify/functions/_shared.js. If the deployed
 // version differs, the kiosk reloads itself so it never runs a stale page.
-var KIOSK_APP_VERSION = '2026.10.14-44';
+var KIOSK_APP_VERSION = '2026.10.14-45';
 var kioskState = { face_login_enabled: true, maintenance_mode: false, maintenance_message: '' };
 var kioskSettingsTimer = null;
 var cameraStoppedForMaint = false;
@@ -1260,15 +1260,27 @@ function loadPrinterStatus() {
       setBar('ppTonerMagentaBar', 'ppTonerMagentaVal', magenta);
       setBar('ppTonerYellowBar', 'ppTonerYellowVal', yellow);
 
-      var dot = document.getElementById('ppDot');
-      var line = document.getElementById('ppStatusLine');
-      var status = (p.status || 'online').toLowerCase();
-      if (status === 'online') {
+    var dot = document.getElementById('ppDot');
+    var line = document.getElementById('ppStatusLine');
+    var status = (p.status || 'online').toLowerCase();
+
+    // If the worker has not reported recently the printer may be fine but we
+    // genuinely do not know, and saying "Online - ready to print" would be a
+    // guess presented to a customer as fact.
+    var checked = p.last_checked ? new Date(p.last_checked).getTime() : 0;
+    var minsAgo = checked ? Math.round((Date.now() - checked) / 60000) : null;
+
+    if (minsAgo !== null && minsAgo > 15) {
+      dot.className = 'dot dot-yellow';
+      line.textContent = 'Status unknown (' + (minsAgo > 1440 ? Math.round(minsAgo / 1440) + 'd'
+        : minsAgo > 60 ? Math.round(minsAgo / 60) + 'h' : minsAgo + 'm') + ' since last check)';
+    } else if (status === 'online') {
         dot.className = 'dot dot-green';
         line.textContent = 'Online - ready to print';
-      } else if (status === 'offline') {
+      } else if (status === 'offline' || status === 'unknown') {
         dot.className = 'dot dot-red';
-        line.textContent = 'Offline';
+        line.textContent = status === 'unknown' ? 'Status unknown - printer not reporting'
+          : 'Offline - please see staff';
       } else if (status.indexOf('jam') !== -1) {
         dot.className = 'dot dot-red';
         line.textContent = (p.jam_type === 'major' ? 'Major' : 'Minor') + ' paper jam - ' + (p.jam_type === 'major' ? 'refund issued' : 'auto reprint queued');
@@ -1288,8 +1300,13 @@ function loadPrinterStatus() {
 }
 
 function clampLevel(v) {
-  var n = parseInt(v);
-  if (isNaN(n)) return 100;
+  // Returns null when there is no reading. This used to return 100, which made
+  // "we have no idea" render as a full green bar -- the kiosk was telling
+  // customers the printer was healthy based on hand-entered numbers from days
+  // earlier.
+  if (v === null || v === undefined || v === '') return null;
+  var n = parseInt(v, 10);
+  if (isNaN(n)) return null;
   return Math.max(0, Math.min(100, n));
 }
 
@@ -1297,10 +1314,18 @@ function setBar(barId, valId, level) {
   var bar = document.getElementById(barId);
   var val = document.getElementById(valId);
   if (bar) {
-    bar.style.width = Math.max(level, 2) + '%';
-    bar.style.background = level <= 20 ? '#ef4444' : level <= 50 ? '#eab308' : '#22c55e';
+    if (level === null) {
+      bar.style.width = '100%';
+      bar.style.background = '#cbd5e1';   // grey: no reading, not a level
+    } else {
+      bar.style.width = Math.max(level, 2) + '%';
+      bar.style.background = level <= 20 ? '#ef4444' : level <= 50 ? '#eab308' : '#22c55e';
+    }
   }
-  if (val) val.textContent = level + '%';
+  if (val) {
+    val.textContent = level === null ? 'Not reported' : level + '%';
+    val.style.color = level === null ? '#94a3b8' : '';
+  }
 }
 
 function setPrinterStatusFallback() {

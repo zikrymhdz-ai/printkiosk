@@ -81,9 +81,10 @@
         <div class="card-header"><span class="card-title">Printer Status</span></div>
         <div id="printerOverview" class="grid-2">
           <div>
-            <p class="text-sm" style="margin-bottom:12px;">Status: <span id="printerStatusBadge" class="badge badge-success">Online</span></p>
+            <p class="text-sm" style="margin-bottom:4px;">Status: <span id="printerStatusBadge" class="badge badge-success">Online</span></p>
+            <p class="text-xs text-muted" style="margin-bottom:12px;" id="printerFreshness">Last checked: &mdash;</p>
             <div style="margin-bottom:12px;">
-              <div class="flex-between" style="margin-bottom:4px;"><span class="text-xs text-muted">Paper Level</span><span class="text-xs" id="paperLevelText">100%</span></div>
+              <div class="flex-between" style="margin-bottom:4px;"><span class="text-xs text-muted">Paper Level <span class="text-muted" style="font-style:italic;">(manual)</span></span><span class="text-xs" id="paperLevelText">Unknown</span></div>
               <div class="progress-bar"><div class="progress-fill" id="paperLevelBar" style="width:100%"></div></div>
             </div>
           </div>
@@ -439,20 +440,52 @@ function loadAll() {
 
 function updatePrinterDisplay(p) {
   const badge = document.getElementById('printerStatusBadge');
-  badge.textContent = p.status.replace('_', ' ').toUpperCase();
-  badge.className = 'badge ' + (p.status === 'online' ? 'badge-success' : p.status === 'offline' ? 'badge-danger' : 'badge-warning');
+  badge.textContent = (p.status || 'unknown').replace('_', ' ').toUpperCase();
+  badge.className = 'badge ' + (p.status === 'online' ? 'badge-success'
+    : (p.status === 'offline' || p.status === 'unknown') ? 'badge-danger' : 'badge-warning');
 
-  document.getElementById('paperLevelText').textContent = p.paper_level + '%';
+  // Freshness matters more than the numbers. The worker polls every 5 minutes,
+  // so anything older than 15 means it has not reported in and the levels
+  // below are leftovers, not readings. Saying so is the difference between
+  // "the printer is low on toner" and "we last heard from the printer 2 days
+  // ago and nothing has changed since".
+  const fresh = document.getElementById('printerFreshness');
+  if (fresh) {
+    const checked = p.last_checked ? new Date(p.last_checked).getTime() : 0;
+    const mins = checked ? Math.round((Date.now() - checked) / 60000) : null;
+    if (mins === null) {
+      fresh.textContent = 'Last checked: never (no readings from the printer)';
+      fresh.style.color = 'var(--danger)';
+    } else if (mins > 15) {
+      fresh.textContent = 'Last checked ' + (mins > 1440
+        ? Math.round(mins / 1440) + ' days ago'
+        : mins > 60 ? Math.round(mins / 60) + ' hours ago' : mins + ' min ago')
+        + ' — printer has not reported recently';
+      fresh.style.color = 'var(--danger)';
+    } else {
+      fresh.textContent = 'Last checked ' + mins + ' min ago';
+      fresh.style.color = '';
+    }
+  }
+
+  // A missing level is "unknown", not 0%. Rendering null as "null%" (or a
+  // zero-width bar) made an unread printer look exactly like an empty one.
+  const level = (v) => (v === null || v === undefined || v === '' ? null : parseInt(v, 10));
+  const show = (v) => (v === null ? 'Unknown' : v + '%');
+
+  const paper = level(p.paper_level);
+  document.getElementById('paperLevelText').textContent = show(paper);
   const paperFill = document.getElementById('paperLevelBar');
-  paperFill.style.width = p.paper_level + '%';
-  paperFill.className = 'progress-fill ' + (p.paper_level < 20 ? 'progress-red' : p.paper_level < 50 ? 'progress-yellow' : 'progress-green');
+  paperFill.style.width = (paper === null ? 0 : paper) + '%';
+  paperFill.className = 'progress-fill ' + (paper === null ? 'progress-gray'
+    : paper < 20 ? 'progress-red' : paper < 50 ? 'progress-yellow' : 'progress-green');
 
   for (const color of ['black', 'cyan', 'magenta', 'yellow']) {
-    const val = p['toner_' + color];
-    document.getElementById('toner' + color.charAt(0).toUpperCase() + color.slice(1) + 'Text').textContent = val + '%';
+    const val = level(p['toner_' + color]);
+    document.getElementById('toner' + color.charAt(0).toUpperCase() + color.slice(1) + 'Text').textContent = show(val);
     const bar = document.getElementById('toner' + color.charAt(0).toUpperCase() + color.slice(1) + 'Bar');
-    bar.style.width = val + '%';
-    bar.className = 'progress-fill progress-blue';
+    bar.style.width = (val === null ? 0 : val) + '%';
+    bar.className = 'progress-fill ' + (val === null ? 'progress-gray' : 'progress-blue');
   }
 
   // Keep the "Set Supply Levels" form in step with what the status card shows.

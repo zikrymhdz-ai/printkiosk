@@ -323,20 +323,28 @@ TONER_RE = {
 
 
 def read_supplies():
-    """Ask the printer what it actually has. Returns (levels, online)."""
+    """Ask the printer what it actually has. Returns (levels, online, why).
+
+    `why` exists so a failure is diagnosable from the journal. The first
+    version swallowed every error, so a printer that could never be reached
+    looked identical to a healthy one -- the levels simply never updated and
+    nothing said why.
+    """
     if not shutil_which("ipptool"):
-        return None, True
+        return None, True, "ipptool not installed (apt install cups-ipp-utils)"
 
     try:
         proc = subprocess.run(
             ["ipptool", "-tv", CONFIG["printer_uri"], get_printer_attrs_test()],
             capture_output=True, text=True, timeout=45,
         )
-    except Exception:
-        return None, True
+    except Exception as e:
+        return None, False, "ipptool could not run: %s" % e
 
     if proc.returncode != 0:
-        return None, False
+        detail = (proc.stderr or proc.stdout or "").strip().splitlines()
+        return None, False, "ipptool exit %d: %s" % (
+            proc.returncode, detail[0] if detail else "no output")
 
     text = proc.stdout
     levels = {}
@@ -346,11 +354,11 @@ def read_supplies():
             levels[key] = int(m.group(1))
 
     if not levels:
-        # Reachable but the driver gave us nothing usable -- treat as unknown
-        # rather than reporting a confident-looking 0% that would trigger a
-        # false "out of toner" page for staff.
-        return None, False
-    return levels, True
+        # Reachable but the driver gave us nothing usable -- report unknown
+        # rather than a confident-looking 0%, which would page staff for "out
+        # of toner" when the printer is actually fine.
+        return None, False, "reachable, but no toner attributes in the response"
+    return levels, True, ""
 
 
 def shutil_which(name):
@@ -501,12 +509,22 @@ def main():
 
         if now - last_supply >= CONFIG["supply_seconds"]:
             try:
-                levels, online = read_supplies()
+                levels, online, why = read_supplies()
                 if levels:
                     api_post("report-supplies", {
                         "levels": levels, "online": online, "printer_name": CONFIG["printer"],
                     })
                     log("supplies: %s (online=%s)" % (levels, online))
+                else:
+                    # Report the failure too. Otherwise the last-known levels sit
+                    # in admin forever looking like live readings, which is how a
+                    # 49-hour-old hand-entered value ended up being presented as
+                    # if the printer had reported it.
+                    api_post("report-supplies", {
+                        "levels": {}, "online": False,
+                        "printer_name": CONFIG["printer"], "error": why,
+                    })
+                    log("supplies unavailable (%s) via %s" % (why, CONFIG["printer_uri"]))
             except Exception as e:
                 log("supply report failed: %s" % e)
             last_supply = now

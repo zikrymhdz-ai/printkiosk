@@ -1,2 +1,8 @@
-﻿__pycache__/
+﻿node_modules/
+.netlify/
+__pycache__/
 *.pyc
+ngrok.exe
+start.bat
+start_ngrok.ps1
+Notification
