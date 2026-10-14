@@ -1,4 +1,11 @@
-const { json, err, supabaseRequest, validateSession } = require('./_shared');
+const { json, err, supabaseRequest, validateSession, PRINT_WORKER_SECRET, safeEqual } = require('./_shared');
+
+// Routes the Pi print worker calls. These authenticate with a shared secret
+// rather than an admin session, because the kiosk Pi has no logged-in user.
+const WORKER_ROUTES = ['claim-job', 'report-print', 'report-supplies', 'watchdog'];
+
+// Statuses the Pi print worker is allowed to leave a job in.
+const PRINT_OUTCOMES = ['completed', 'failed'];
 
 exports.handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') return json({});
@@ -11,15 +18,32 @@ exports.handler = async (event) => {
       case 'status': return getPrinterStatus();
       case 'pending-jobs': return getPendingJobs(event);
       case 'ready-jobs': return getReadyJobs(event);
+      case 'failed-jobs': return getFailedJobs(event);
+      case 'print-status': return getPrintStatus(event);
       default: return err('Invalid action');
     }
   } else if (event.httpMethod === 'POST') {
+    if (WORKER_ROUTES.includes(action)) {
+      if (!requireWorker(event)) return err('Print worker not authorised', 401);
+      switch (action) {
+        case 'claim-job': return claimJob(event);
+        case 'report-print': return reportPrint(event);
+        case 'report-supplies': return reportSupplies(event);
+        case 'watchdog': return watchdog(event);
+      }
+    }
+
+    // Fired by the kiosk the moment the customer taps "Done / Collect".
+    // This is the ONLY way a job reaches the printer.
+    if (action === 'request-print') return requestPrint(event);
+
     const session = await validateSession(event);
     if (!session || session.users.role !== 'admin') return err('Admin access required', 403);
 
     switch (action) {
       case 'update-status': return updatePrinterStatus(event);
       case 'update-job': return updateJobStatus(event);
+      case 'reprint': return reprintJob(event);
       case 'simulate-jam': return simulateJam(event);
       case 'clear-jam': return clearJam();
       case 'set-levels': return setSupplyLevels(event);
@@ -29,6 +53,314 @@ exports.handler = async (event) => {
 
   return err('Method not allowed', 405);
 };
+
+// ---------------------------------------------------------------------------
+// Print worker auth
+// ---------------------------------------------------------------------------
+
+// Fails closed: if PRINT_WORKER_SECRET was never set in the Netlify
+// environment, no worker request is ever accepted.
+function requireWorker(event) {
+  if (!PRINT_WORKER_SECRET) return false;
+  const token = event.headers['x-print-token'] || event.headers['X-Print-Token'] || '';
+  return safeEqual(token, PRINT_WORKER_SECRET);
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// ---------------------------------------------------------------------------
+// Customer-triggered printing
+// ---------------------------------------------------------------------------
+
+// The kiosk calls this when the customer taps "Done / Collect". Nothing else in
+// the system moves a job into the print queue, so a job can never print unless a
+// person physically present at the kiosk asked for it.
+async function requestPrint(event) {
+  let body;
+  try { body = JSON.parse(event.body || '{}'); } catch (e) { return err('Bad JSON body'); }
+
+  const id = String(body.job_id || '');
+  if (!UUID_RE.test(id)) return err('Invalid job');
+
+  const cur = await supabaseRequest('GET', '/print_jobs', null, {
+    'select': 'id,job_id,status,paid,print_attempts',
+    'id': 'eq.' + id
+  });
+  if (cur.error) return err('Lookup failed', 500);
+  if (!cur.data || cur.data.length === 0) return err('Job not found', 404);
+  const job = cur.data[0];
+
+  // Already queued, printing or done -- treat as success so a double tap on the
+  // kiosk cannot enqueue the same page twice.
+  if (job.status !== 'ready_to_print') {
+    return json({ success: true, already: true, status: job.status });
+  }
+  if (!job.paid) return err('Job has not been paid', 403);
+
+  const now = new Date().toISOString();
+
+  // The status filter makes this a compare-and-set: if two taps race, only one
+  // PATCH matches a row still sitting in ready_to_print and the loser gets an
+  // empty result back.
+  const upd = await supabaseRequest(
+    'PATCH', '/print_jobs?id=eq.' + id + '&status=eq.ready_to_print',
+    {
+      status: 'print_requested',
+      print_requested_at: now,
+      print_attempts: 0,
+      print_error: null,
+      updated_at: now
+    }
+  );
+
+  if (upd.error) return err('Failed to queue print', 500);
+  if (!upd.data || upd.data.length === 0) return json({ success: true, already: true });
+
+  return json({ success: true, job_id: job.job_id, status: 'print_requested' });
+}
+
+// ---------------------------------------------------------------------------
+// Worker endpoints
+// ---------------------------------------------------------------------------
+
+// Atomically claim the oldest job the customer actually asked for.
+async function claimJob() {
+  const pick = await supabaseRequest('GET', '/print_jobs', null, {
+    'select': 'id,job_id,file_path,file_name,file_type,pages,color_mode,paper_size,sides,copies,page_spec,print_attempts',
+    'status': 'eq.print_requested',
+    'order': 'print_requested_at.asc',
+    'limit': '1'
+  });
+
+  if (pick.error) return err('Claim lookup failed', 500);
+  if (!pick.data || pick.data.length === 0) return json({ success: true, job: null });
+
+  const job = pick.data[0];
+  const now = new Date().toISOString();
+
+  // Compare-and-set against print_requested so a second worker (or a retry
+  // racing the original request) cannot claim the same job.
+  const upd = await supabaseRequest(
+    'PATCH', '/print_jobs?id=eq.' + job.id + '&status=eq.print_requested',
+    {
+      status: 'printing',
+      print_claimed_at: now,
+      print_started_at: now,
+      print_error: null,
+      print_by: 'pi-worker',
+      updated_at: now
+    }
+  );
+
+  if (upd.error) return err('Claim failed', 500);
+  if (!upd.data || upd.data.length === 0) {
+    return json({ success: true, job: null, note: 'lost_race' });
+  }
+
+  return json({ success: true, job: upd.data[0] });
+}
+
+// The worker reports what actually came out of the printer.
+async function reportPrint(event) {
+  let body;
+  try { body = JSON.parse(event.body || '{}'); } catch (e) { return err('Bad JSON body'); }
+
+  const id = String(body.job_id || '');
+  const outcome = String(body.outcome || '');
+  if (!UUID_RE.test(id)) return err('Invalid job');
+  if (!PRINT_OUTCOMES.includes(outcome)) return err('Invalid outcome');
+
+  const patch = { status: outcome, updated_at: new Date().toISOString() };
+
+  if (outcome === 'completed') {
+    patch.print_completed_at = patch.updated_at;
+    patch.print_error = null;
+    patch.print_page_verified = body.page_verified === true;
+  } else {
+    const reason = String(body.error || 'unknown').slice(0, 500);
+    patch.print_error = reason;
+    // Retries left: put it back in the queue so the worker picks it up again.
+    const attempts = parseInt(body.attempts, 10);
+    const used = Number.isFinite(attempts) ? attempts : 1;
+    if (used < 3) {
+      patch.status = 'print_requested';
+      patch.print_claimed_at = null;
+      patch.print_started_at = null;
+    } else {
+      patch.print_completed_at = patch.updated_at;
+    }
+  }
+
+  const upd = await supabaseRequest('PATCH', '/print_jobs?id=eq.' + id, patch);
+  if (upd.error) return err('Failed to record result', 500);
+
+  if (outcome === 'failed') {
+    await supabaseRequest('POST', '/alerts', {
+      type: 'print_failed',
+      message: 'Print job ' + body.public_id + ' failed: ' + String(body.error || 'unknown').slice(0, 200),
+      severity: 'warning',
+      is_read: false
+    });
+  }
+
+  return json({ success: true, status: patch.status });
+}
+
+// Real toner / paper levels read from the printer over IPP.
+async function reportSupplies(event) {
+  let body;
+  try { body = JSON.parse(event.body || '{}'); } catch (e) { return err('Bad JSON body'); }
+
+  const levels = body.levels;
+  if (!levels || typeof levels !== 'object') return err('No levels supplied');
+
+  const num = (v) => (Number.isFinite(Number(v)) ? Math.max(0, Math.min(100, Math.round(Number(v)))) : null);
+  const bw = num(levels.toner_black);
+  const c  = num(levels.toner_cyan);
+  const m  = num(levels.toner_magenta);
+  const y  = num(levels.toner_yellow);
+
+  // A supply row should only ever show "OK" when all four toners are known.
+  const known = [bw, c, m, y].every(v => v !== null);
+  const lowest = known ? Math.min(bw, c, m, y) : null;
+
+  const row = {
+    status: body.online === false ? 'offline' : (lowest !== null && lowest <= 15 ? 'low' : 'online'),
+    toner_black: bw,
+    toner_cyan: c,
+    toner_magenta: m,
+    toner_yellow: y,
+    last_checked: new Date().toISOString()
+  };
+
+  // There is no standard IPP attribute for "how much paper is left in the
+  // tray" -- most drivers only report which trays are loaded. When the worker
+  // cannot measure it, leave the existing value untouched rather than
+  // blanking it to something that would read as an empty tray.
+  if (num(levels.paper) !== null) row.paper_level = num(levels.paper);
+
+  // printer_status is a singleton row with a generated id, so look it up
+  // rather than assuming a fixed value.
+  const cur = await supabaseRequest('GET', '/printer_status', null, {
+    'select': 'id', 'order': 'last_checked.desc', 'limit': '1'
+  });
+  if (cur.error) return err('Failed to read printer status', 500);
+
+  if (!cur.data || cur.data.length === 0) {
+    const ins = await supabaseRequest('POST', '/printer_status', row);
+    if (ins.error) return err('Failed to store supplies', 500);
+  } else {
+    const upd = await supabaseRequest('PATCH', '/printer_status?id=eq.' + cur.data[0].id, row);
+    if (upd.error) return err('Failed to store supplies', 500);
+  }
+
+  if (lowest !== null && lowest <= 15) {
+    await supabaseRequest('POST', '/alerts', {
+      type: 'supply_low',
+      message: 'Toner low on ' + (body.printer_name || 'kiosk printer') + ' (lowest ' + lowest + '%)',
+      severity: 'warning',
+      is_read: false
+    });
+  }
+
+  return json({ success: true, status: row.status });
+}
+
+// Anything stuck in printing for too long is marked failed so a staff member
+// sees it instead of it silently hanging forever.
+async function watchdog(event) {
+  let body = {};
+  try { body = JSON.parse(event.body || '{}'); } catch (e) { /* defaults below */ }
+
+  const stuckMin = Math.min(120, Math.max(5, parseInt(body.stuck_minutes, 10) || 30));
+  const cutoff = new Date(Date.now() - stuckMin * 60000).toISOString();
+
+  const stale = await supabaseRequest('GET', '/print_jobs', null, {
+    'select': 'id,job_id,print_claimed_at',
+    'status': 'eq.printing',
+    'print_claimed_at': 'lt.' + cutoff
+  });
+  if (stale.error) return err('Watchdog lookup failed', 500);
+
+  const stuck = stale.data || [];
+  if (stuck.length === 0) return json({ success: true, recovered: 0 });
+
+  const ids = stuck.map(j => j.id);
+  const now = new Date().toISOString();
+  await supabaseRequest('PATCH', '/print_jobs?id=in.(' + ids.join(',') + ')', {
+    status: 'failed',
+    print_error: 'Printer did not confirm completion within ' + stuckMin + ' minutes',
+    print_completed_at: now,
+    updated_at: now
+  });
+
+  await supabaseRequest('POST', '/alerts', {
+    type: 'print_stuck',
+    message: stuck.length + ' print job(s) stalled and were marked failed: ' +
+      stuck.map(j => j.job_id).join(', '),
+    severity: 'warning',
+    is_read: false
+  });
+
+  return json({ success: true, recovered: stuck.length });
+}
+
+// Staff reprint. Deliberately separate from requestPrint so a reprint always
+// goes through an admin, never through the kiosk endpoint.
+async function reprintJob(event) {
+  let body;
+  try { body = JSON.parse(event.body || '{}'); } catch (e) { return err('Bad JSON body'); }
+
+  const jobId = String(body.job_id || '');
+  if (!/^PRN-[A-Za-z0-9-]+$/.test(jobId)) return err('Invalid job');
+
+  const now = new Date().toISOString();
+  const upd = await supabaseRequest('PATCH', '/print_jobs?job_id=eq.' + jobId, {
+    status: 'print_requested',
+    print_requested_at: now,
+    print_claimed_at: null,
+    print_started_at: null,
+    print_completed_at: null,
+    print_error: null,
+    print_attempts: 0,
+    updated_at: now
+  });
+
+  if (upd.error) return err('Reprint failed', 500);
+  return json({ success: true, job_id: jobId, status: 'print_requested' });
+}
+
+// Jobs the printer could not complete. Staff need these surfaced separately
+// from the normal queue because the customer has already paid.
+async function getFailedJobs(event) {
+  const result = await supabaseRequest('GET', '/print_jobs', null, {
+    'select': 'id,job_id,file_name,pages,color_mode,sides,copies,status,print_error,print_attempts,total_price,paid,created_at,print_requested_at',
+    'status': 'eq.failed',
+    'order': 'print_requested_at.desc',
+    'limit': '100'
+  });
+
+  if (result.error) return err('Failed to load failed jobs', 500);
+  return json({ success: true, jobs: result.data || [] });
+}
+
+// Lets the kiosk tell the customer what is actually happening to their job
+// instead of guessing. Scoped to a single unguessable UUID, and returns no
+// customer or payment data.
+async function getPrintStatus(event) {
+  const qs = event.queryStringParameters || {};
+  const id = String(qs.id || '');
+  if (!UUID_RE.test(id)) return err('Invalid job');
+
+  const r = await supabaseRequest('GET', '/print_jobs', null, {
+    'select': 'id,job_id,status,print_error,pages,color_mode,sides,copies',
+    'id': 'eq.' + id
+  });
+  if (r.error) return err('Lookup failed', 500);
+  if (!r.data || r.data.length === 0) return err('Job not found', 404);
+
+  return json({ success: true, job: r.data[0] });
+}
 
 async function getPrinterStatus() {
   const result = await supabaseRequest('GET', '/printer_status', null, {
@@ -109,7 +441,7 @@ async function updateJobStatus(event) {
 
   if (!jobId || !newStatus) return err('Job ID and status required');
 
-  const allowed = ['pending', 'ready_to_print', 'printing', 'completed', 'refund_issued'];
+  const allowed = ['pending', 'ready_to_print', 'print_requested', 'printing', 'completed', 'failed', 'refund_issued'];
   if (!allowed.includes(newStatus)) return err('Invalid status');
 
   const result = await supabaseRequest('PATCH', '/print_jobs?job_id=eq.' + jobId, {

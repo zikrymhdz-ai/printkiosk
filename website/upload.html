@@ -105,6 +105,17 @@
           <option value="color">Color (RM 1.10/page)</option>
         </select>
       </div>
+      <div class="form-group" style="margin-bottom:20px;">
+        <label>Duplex</label>
+        <select id="pSides" class="input" onchange="onSettingChanged(); updatePhoneSummary()">
+          <option value="single">Single-sided (one side per sheet)</option>
+          <option value="double">Double-sided (both sides, 30% cheaper per sheet)</option>
+        </select>
+        <p class="text-xs text-muted" style="margin-top:4px;">
+          Double-sided uses the printer's auto duplex feeder. Use plain paper only &mdash;
+          glossy or heavy paper can jam.
+        </p>
+      </div>
       <div class="grid-2">
         <div class="form-group">
           <label>Copies</label>
@@ -465,6 +476,7 @@ function saveCurrentSettings() {
   if (!item) return;
   var sel = currentPhonePageSelection();
   item.settings.color = document.getElementById('pColorMode').value;
+    item.settings.sides = document.getElementById('pSides').value;
   item.settings.copies = parseInt(document.getElementById('pCopies').value) || 1;
   item.settings.pages = sel.ok ? (sel.isAll ? (item.pdfPages || 1) : sel.count) : (item.pdfPages || 1);
   item.settings.page_spec = (sel.ok && !sel.isAll) ? sel.pages.join(',') : 'all';
@@ -524,7 +536,10 @@ function updatePhoneSummary() {
     totalCopies += s.copies;
     if (s.color === 'color') hasColor = true;
     var pagePrice = s.color === 'color' ? 1.10 : 0.20;
-    totalPrice += s.pages * s.copies * pagePrice;
+    // Mirrors calculatePrice() in netlify/functions/_shared.js exactly, so the
+    // amount the customer sees always equals what the backend charges.
+    var sidesMult = s.sides === 'double' ? 0.7 : 1.0;
+    totalPrice += s.pages * s.copies * pagePrice * sidesMult;
   });
   phonePrice = Math.round(totalPrice * 100) / 100;
   document.getElementById('pSummaryFile').textContent = bulkFiles.length + ' file' + (bulkFiles.length > 1 ? 's' : '');
@@ -806,7 +821,7 @@ async function submitPhoneUpload() {
             print_pin: orderPin,
             color_mode: s.color || 'bw',
             paper_size: 'a4',
-            sides: 'single',
+            sides: s.sides || 'single',
             copies: s.copies || 1,
             pages: pagesCount,
             page_spec: pageSpec,
@@ -825,7 +840,7 @@ async function submitPhoneUpload() {
         formData.append('print_pin', orderPin);
         formData.append('color_mode', s.color || 'bw');
         formData.append('paper_size', 'a4');
-        formData.append('sides', 'single');
+        formData.append('sides', s.sides || 'single');
         formData.append('copies', s.copies || 1);
         formData.append('pages', pagesCount);
         formData.append('page_spec', pageSpec);

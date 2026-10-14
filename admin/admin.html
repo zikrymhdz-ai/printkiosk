@@ -211,6 +211,20 @@
           </table>
         </div>
       </div>
+
+      <div class="card animate-fade-in" style="margin-top:20px; border-color:rgba(239,68,68,0.35);">
+        <div class="card-header" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+          <span class="card-title">Failed Print Jobs</span>
+          <span class="text-xs text-muted">Paid jobs the printer could not complete &mdash; these need a reprint or a refund</span>
+          <span class="text-xs text-muted" id="failedCount"></span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Job ID</th><th>File</th><th>Pages</th><th>Amount</th><th>Reason</th><th>When</th><th>Action</th></tr></thead>
+            <tbody id="failedJobsBody"><tr><td colspan="7" style="text-align:center;color:var(--gray-400);padding:24px;">Loading...</td></tr></tbody>
+          </table>
+        </div>
+      </div>
     </div>
 
     <!-- Alerts -->
@@ -396,7 +410,7 @@ function showSection(name, el) {
   if (name === 'alerts') loadAlerts();
   if (name === 'coins') loadCoinTransactions();
   if (name === 'users') loadUsers();
-  if (name === 'printer') { loadReadyJobs(); }
+  if (name === 'printer') { loadReadyJobs(); loadFailedJobs(); }
   if (name === 'security') { loadKioskSettings(); loadFaceDetections(); loadKioskStatus(); }
 }
 
@@ -477,6 +491,12 @@ function showAllTransactions() {
    the customer screen and the admin tables all agree.
    toLocaleDateString() alone hid the time of day, which made it impossible to
    tell two jobs on the same day apart when settling a payment by hand. */
+function escHtml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
 function fmtDateTime(v, withTime) {
   if (!v) return '-';
   var d = new Date(v);
@@ -794,12 +814,81 @@ function renderReadyJobs() {
     + '<td>RM ' + parseFloat(j.total_price).toFixed(2) + '</td>'
     + '<td class="text-xs" style="white-space:nowrap;">' + fmtDateTime(j.created_at) + '</td>'
     + '<td style="white-space:nowrap;">'
-    + '<button class="btn btn-sm btn-primary" onclick="updateJobStatus(\'' + j.job_id + '\',\'printing\')">Print</button> '
+    + '<button class="btn btn-sm btn-primary" onclick="reprintJob(\'' + j.job_id + '\')">Print Now</button> '
     + '<button class="btn btn-sm btn-danger" onclick="deleteReadyJob(\'' + j.id + '\',\'' + j.job_id + '\')">Delete</button>'
     + '</td></tr>'
   ).join('');
 
   updateReadySelectionUI();
+}
+
+/* ===== FAILED PRINT JOBS =====
+   These are paid jobs that never made it out of the printer. They are shown in
+   their own card, separate from the ready queue, because the customer has
+   already paid and is waiting on them. */
+let failedRows = [];
+
+function loadFailedJobs() {
+  const token = sessionStorage.getItem('pk_admin_token') || '';
+  fetch(API('printer', 'failed-jobs'), { headers: { 'X-Session-Token': token } })
+    .then(r => r.json()).then(data => {
+      failedRows = (data.success && data.jobs) ? data.jobs : [];
+      renderFailedJobs();
+    }).catch(() => {
+      const tbody = document.getElementById('failedJobsBody');
+      if (tbody) tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--gray-400);padding:24px;">Failed to load</td></tr>';
+    });
+}
+
+function renderFailedJobs() {
+  const tbody = document.getElementById('failedJobsBody');
+  const count = document.getElementById('failedCount');
+  if (!tbody) return;
+
+  if (count) count.textContent = failedRows.length ? failedRows.length + ' waiting' : '';
+
+  if (!failedRows.length) {
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--gray-400);padding:24px;">No failed jobs</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = failedRows.map(j =>
+    '<tr>'
+    + '<td><strong>' + j.job_id + '</strong></td>'
+    + '<td>' + escHtml(j.file_name || '-') + '</td>'
+    + '<td>' + j.pages + '</td>'
+    + '<td>RM ' + parseFloat(j.total_price || 0).toFixed(2) + '</td>'
+    + '<td class="text-xs" style="max-width:260px;white-space:normal;">' + escHtml(j.print_error || 'Unknown error')
+    + '<br><span class="text-muted">attempts: ' + (j.print_attempts || 0) + '</span></td>'
+    + '<td class="text-xs" style="white-space:nowrap;">' + fmtDateTime(j.print_requested_at || j.created_at) + '</td>'
+    + '<td style="white-space:nowrap;">'
+    + '<button class="btn btn-sm btn-primary" onclick="reprintJob(\'' + j.job_id + '\')">Reprint</button> '
+    + '<button class="btn btn-sm btn-danger" onclick="deleteReadyJob(\'' + j.id + '\',\'' + j.job_id + '\')">Delete</button>'
+    + '</td></tr>'
+  ).join('');
+}
+
+/* Sends the job back to the print worker. This is what actually makes paper
+   come out -- the worker only ever picks up 'print_requested' jobs. */
+function reprintJob(jobId) {
+  if (!confirm('Reprint ' + jobId + '?\n\nThis sends the document to the printer again. Use this only if the customer is standing there and still needs the pages.')) return;
+
+  const token = sessionStorage.getItem('pk_admin_token') || '';
+  fetch(API('printer', 'reprint'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Session-Token': token },
+    body: JSON.stringify({ job_id: jobId })
+  })
+    .then(r => r.json()).then(data => {
+      if (data.success) {
+        alert(jobId + ' sent to printer.');
+        loadFailedJobs();
+        loadReadyJobs();
+      } else {
+        alert('Reprint failed: ' + (data.error || 'unknown error'));
+      }
+    })
+    .catch(() => alert('Reprint failed: network error'));
 }
 
 function toggleReadyRow(cb, id) {
@@ -948,7 +1037,7 @@ async function markAllAlertsRead() {
 }
 
 function statusCls(s) {
-  const m = { pending: 'badge-warning', ready_to_print: 'badge-info', printing: 'badge-info', completed: 'badge-success', refund_issued: 'badge-danger' };
+  const m = { pending: 'badge-warning', ready_to_print: 'badge-info', print_requested: 'badge-info', printing: 'badge-info', completed: 'badge-success', failed: 'badge-danger', refund_issued: 'badge-danger' };
   return m[s] || 'badge-gray';
 }
 

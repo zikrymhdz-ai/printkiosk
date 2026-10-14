@@ -1,4 +1,4 @@
-﻿const crypto = require('crypto');
+const crypto = require('crypto');
 
 const SUPABASE_URL = process.env.SUPABASE_URL || 'https://ninsrrallzwmkqyosqeu.supabase.co';
 const SUPABASE_KEY = process.env.SUPABASE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5pbnNycmFsbHp3bWtxeW9zcWV1Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4Mzg2MDk1MiwiZXhwIjoyMDk5NDM2OTUyfQ.JabQJz9kRWtZqY7FVJD14yOaKT0phfXTQekGUzYe5ZA';
@@ -16,6 +16,11 @@ const JOB_PAYABLE_WINDOW_MIN = 10;
 // used to sign server-side "payment detected" events (HMAC-SHA256).
 const NOTIFICATION_SECRET = process.env.NOTIFICATION_SECRET || 'pk_notif_v3_fd3877b903677547e567f1d1f0cc68770df89598a5c7d09fe229d81d8dc4d37c';
 
+// Shared secret between the Pi print worker and this backend. Deliberately has
+// NO hardcoded fallback: a secret committed to git is how the watcher secret
+// leaked before. If this is empty the worker endpoints refuse every request.
+const PRINT_WORKER_SECRET = process.env.PRINT_WORKER_SECRET || '';
+
 const PRICE_BW_PER_PAGE = 0.20;
 const PRICE_COLOR_PER_PAGE = 1.10;
 const PRICE_A3_MULTIPLIER = 2.0;
@@ -24,7 +29,7 @@ const PRICE_DOUBLE_SIDED_MULTIPLIER = 0.7;
 // Bumped whenever the kiosk front-end changes. The kiosk compares this against
 // the version it was loaded with and reloads itself, so an unattended screen
 // never keeps running a stale copy of walkin.html.
-const APP_VERSION = '2026.10.12-36';
+const APP_VERSION = '2026.10.14-37';
 
 const ALLOWED_EXTENSIONS = ['pdf', 'doc', 'docx', 'jpg', 'jpeg', 'png'];
 
@@ -442,14 +447,23 @@ function parseMultipartFormData(bodyOrBuffer, contentType) {
   return { fields, file };
 }
 
+// Constant-time string comparison. A plain `!==` lets an attacker recover a
+// secret one character at a time by measuring how long the rejection takes.
+function safeEqual(a, b) {
+  const x = Buffer.from(String(a == null ? '' : a), 'utf8');
+  const y = Buffer.from(String(b == null ? '' : b), 'utf8');
+  if (x.length !== y.length) return false;
+  try { return crypto.timingSafeEqual(x, y); } catch (e) { return false; }
+}
+
 module.exports = {
   SUPABASE_URL, SUPABASE_KEY, SUPABASE_REST_URL,
   SESSION_DURATION, PRICE_BW_PER_PAGE, PRICE_COLOR_PER_PAGE,
   PRICE_A3_MULTIPLIER, PRICE_DOUBLE_SIDED_MULTIPLIER, ALLOWED_EXTENSIONS,
-  NOTIFICATION_SECRET, APP_VERSION, JOB_PAYABLE_WINDOW_MIN,
+  NOTIFICATION_SECRET, PRINT_WORKER_SECRET, APP_VERSION, JOB_PAYABLE_WINDOW_MIN,
   SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM_NAME,
   VERIFICATION_CODE_LENGTH, VERIFICATION_CODE_TTL,
-  corsHeaders, json, err, supabaseRequest, generateJobId,
+  corsHeaders, json, err, supabaseRequest, generateJobId, safeEqual,
   generateSessionToken, validateSession, calculatePrice, assignUniqueMatchAmount,
   generateVerificationCode, isValidGmail, isValidMalaysianPhone,
   normalizePhone, sendVerificationEmail, smtpSend,

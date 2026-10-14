@@ -1,0 +1,34 @@
+[Unit]
+Description=PrintKiosk print worker (Brother HL-L3240CDW)
+Documentation=file:/home/user/printkiosk/pi/print-worker.py
+After=network-online.target cups.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=user
+WorkingDirectory=/home/user/printkiosk
+
+# The secret lives in this file (chmod 600), NOT in the repo -- the print-worker
+# secret must never be committed.
+EnvironmentFile=/home/user/printkiosk/pi/print-worker.env
+Environment=PRINTKIOSK_API=https://printkioskfyp.netlify.app
+Environment=PRINTER_NAME=Brother
+Environment=PRINTER_URI=ipp://Brother.local/ipp/print
+
+ExecStart=/usr/bin/python3 /home/user/printkiosk/pi/print-worker.py
+
+Restart=always
+RestartSec=10
+
+# Never print twice because the process was restarted mid-job: give it a
+# moment to notice the queue before giving up.
+TimeoutStopSec=30
+KillSignal=SIGINT
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=printkiosk-worker
+
+[Install]
+WantedBy=multi-user.target

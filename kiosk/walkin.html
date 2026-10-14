@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -482,7 +482,46 @@ window.addEventListener('load', function () {
     <div style="background:rgba(59,130,246,0.1); border-radius:10px; padding:10px 14px; text-align:center; margin-bottom:16px;" id="receiptCoinsRow">
       <span style="font-size:13px; color:#60a5fa;">You earned <strong id="receiptCoins">0</strong> coins</span>
     </div>
-    <button class="btn-kiosk btn-primary-kiosk" style="width:100%;" onclick="closeReceipt()">Done</button>
+    <button class="btn-kiosk btn-primary-kiosk" style="width:100%;" onclick="closeReceipt()" id="receiptDoneBtn">Print My Document</button>
+    <p style="color:#64748b; font-size:12px; text-align:center; margin-top:10px;" id="receiptHint">Tap below to send your document to the printer</p>
+  </div>
+</div>
+
+<div id="printingOverlay" class="confirm-overlay hidden">
+  <div class="confirm-card" style="max-width:400px; padding:30px 28px; text-align:center;">
+    <div style="width:64px; height:64px; margin:0 auto 18px;">
+      <svg id="printingSpinner" width="64" height="64" viewBox="0 0 50 50" style="display:block;">
+        <circle cx="25" cy="25" r="20" fill="none" stroke="#1e293b" stroke-width="4"/>
+        <circle cx="25" cy="25" r="20" fill="none" stroke="#3b82f6" stroke-width="4"
+                stroke-linecap="round" stroke-dasharray="31 94">
+          <animateTransform attributeName="transform" type="rotate" from="0 25 25" to="360 25 25"
+                            dur="0.9s" repeatCount="indefinite"/>
+        </circle>
+      </svg>
+      <svg id="printingDoneIcon" width="64" height="64" viewBox="0 0 24 24" fill="none"
+           stroke="#22c55e" stroke-width="2.5" style="display:none;">
+        <polyline points="20 6 9 17 4 12"/>
+      </svg>
+      <svg id="printingFailIcon" width="64" height="64" viewBox="0 0 24 24" fill="none"
+           stroke="#ef4444" stroke-width="2.5" style="display:none;">
+        <line x1="12" y1="7" x2="12" y2="13"/><circle cx="12" cy="17" r="0.6" fill="#ef4444"/>
+      </svg>
+    </div>
+
+    <h3 id="printingTitle" style="font-size:20px; font-weight:700; margin-bottom:6px;">Printing your document</h3>
+    <p id="printingSub" style="color:#94a3b8; font-size:14px; line-height:1.5;">Please wait and collect your pages from the tray.</p>
+
+    <div style="background:#f8fbff; border:1px solid #e2e8f0; border-radius:12px; padding:14px; margin:18px 0;">
+      <div style="display:flex; justify-content:space-between; padding:5px 0;"><span style="color:#7d90ad; font-size:13px;">Job ID</span><span style="font-size:13px; font-weight:600;" id="printingJobId">-</span></div>
+      <div style="display:flex; justify-content:space-between; padding:5px 0;"><span style="color:#7d90ad; font-size:13px;">Status</span><span style="font-size:13px; font-weight:600;" id="printingState">-</span></div>
+    </div>
+
+    <p id="printingHelp" style="display:none; background:rgba(239,68,68,0.1); border:1px solid rgba(239,68,68,0.35); border-radius:10px; padding:12px; color:#fca5a5; font-size:13px; line-height:1.5;">
+      Your document could not be printed. Please see a staff member &mdash; you will not be charged again.
+    </p>
+
+    <button class="btn-kiosk btn-primary-kiosk" style="width:100%; margin-top:16px; display:none;"
+            id="printingDoneBtn2" onclick="location.reload()">Done</button>
   </div>
 </div>
 
@@ -704,7 +743,7 @@ function throttledUnknownLog(distance) {
 /* ===== REMOTE KIOSK CONTROL (admin) ===== */
 // Must match APP_VERSION in netlify/functions/_shared.js. If the deployed
 // version differs, the kiosk reloads itself so it never runs a stale page.
-var KIOSK_APP_VERSION = '2026.10.12-36';
+var KIOSK_APP_VERSION = '2026.10.14-37';
 var kioskState = { face_login_enabled: true, maintenance_mode: false, maintenance_message: '' };
 var kioskSettingsTimer = null;
 var cameraStoppedForMaint = false;
@@ -1705,20 +1744,85 @@ async function confirmPayment() {
 
 function closeReceipt() {
   document.getElementById('receiptOverlay').classList.add('hidden');
+
   const jobs = currentPinJobId ? (currentPinJob ? [currentPinJob] : []) : (currentPinJobs || []);
-  if (jobs.length) {
-    let done = 0;
-    jobs.forEach(function(j) {
-      fetch(API('data', 'complete-job'), {
+  if (!jobs.length) { location.reload(); return; }
+
+  const btn = document.getElementById('receiptDoneBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Sending to printer...'; }
+
+  // Only the first job drives the on-screen progress; a multi-job collect all
+  // print from the same batch and the kiosk only has room to follow one.
+  const lead = jobs[0];
+
+  Promise.all(jobs.map(function(j) {
+    // This is the ONLY thing that puts a job in front of the printer. It runs
+    // here because the customer just tapped "Print My Document" -- nobody,
+    // including staff, can queue a print without that tap.
+    return fetch(API('printer', 'request-print'), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ job_id: j.id })
+    }).catch(function() { return null; }).then(function() {
+      return fetch(API('data', 'complete-job'), {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ job_id: j.job_id })
-      }).finally(function() {
-        done++;
-        if (done >= jobs.length) { location.reload(); }
-      });
+      }).catch(function() { return null; });
     });
+  })).then(function() {
+    showPrintingScreen(lead);
+  });
+}
+
+function showPrintingScreen(job) {
+  const ov = document.getElementById('printingOverlay');
+  document.getElementById('printingJobId').textContent = (job && job.job_id) || '-';
+  document.getElementById('printingState').textContent = 'Sending...';
+  ov.classList.remove('hidden');
+
+  const stateEl = document.getElementById('printingState');
+  const label = { print_requested: 'Waiting for printer', printing: 'Printing' };
+  let checks = 0;
+
+  const timer = setInterval(function() {
+    checks++;
+    // Never poll forever: after ~3 minutes fall back to "see a staff member"
+    // so a wedged printer cannot trap a customer at the screen.
+    if (checks > 45) { clearInterval(timer); finishPrintScreen(false, true); return; }
+
+    fetch(API('printer', 'print-status') + '&id=' + encodeURIComponent(job.id))
+      .then(function(r) { return r.ok ? r.json() : null; })
+      .then(function(d) {
+        if (!d || !d.job) return;
+        const st = d.job.status;
+        stateEl.textContent = label[st] || st;
+        if (st === 'completed') { clearInterval(timer); finishPrintScreen(true); }
+        else if (st === 'failed') { clearInterval(timer); finishPrintScreen(false); }
+      })
+      .catch(function() { /* transient: keep polling */ });
+  }, 2000);
+}
+
+function finishPrintScreen(ok, timedOut) {
+  document.getElementById('printingSpinner').style.display = 'none';
+  document.getElementById('printingDoneBtn2').style.display = 'block';
+
+  if (ok) {
+    document.getElementById('printingDoneIcon').style.display = 'block';
+    document.getElementById('printingState').textContent = 'Printed';
+    document.getElementById('printingTitle').textContent = 'All done!';
+    document.getElementById('printingSub').textContent = 'Please collect your document from the tray.';
   } else {
-    location.reload();
+    document.getElementById('printingFailIcon').style.display = 'block';
+    document.getElementById('printingState').textContent = 'Not printed';
+    document.getElementById('printingHelp').style.display = 'block';
+    if (timedOut) {
+      document.getElementById('printingTitle').textContent = 'Still printing';
+      document.getElementById('printingSub').textContent = 'This is taking longer than usual.';
+      document.getElementById('printingHelp').innerHTML =
+        'Your document may still print shortly. If nothing comes out, please see a staff member.';
+    } else {
+      document.getElementById('printingTitle').textContent = 'Print problem';
+    }
   }
 }
 

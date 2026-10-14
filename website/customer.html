@@ -290,6 +290,14 @@
               </select>
             </div>
             <div class="form-group">
+              <label>Duplex</label>
+              <select id="sidesMode" class="input" onchange="onSettingChange()">
+                <option value="single">Single-sided</option>
+                <option value="double">Double-sided (30% cheaper)</option>
+              </select>
+              <p class="text-xs text-muted" style="margin-top:4px;">Double-sided uses the printer's auto duplex feeder. Plain paper only &mdash; glossy or heavy paper can jam.</p>
+            </div>
+            <div class="form-group">
               <label>Copies</label>
               <input type="number" id="copies" class="input" value="1" min="1" max="99" onchange="onSettingChange()">
             </div>
@@ -382,6 +390,7 @@
                 <div class="row"><span>File</span><span id="summaryFile" style="font-weight:600;">-</span></div>
                 <div class="row"><span>Pages</span><span id="summaryPages" style="font-weight:600;">-</span></div>
                 <div class="row"><span>Color Mode</span><span id="summaryColor" style="font-weight:600;">-</span></div>
+                <div class="row"><span>Duplex</span><span id="summarySides" style="font-weight:600;">-</span></div>
                 <div class="row"><span>Copies</span><span id="summaryCopies" style="font-weight:600;">-</span></div>
                 <div class="row total"><span>Total</span><span id="summaryTotal" style="color:var(--primary); font-size:18px;">RM 0.00</span></div>
               </div>
@@ -860,6 +869,7 @@ function saveCurrentSettings() {
   var sel = currentPageSelection();
   item.settings = {
     color: document.getElementById('colorMode').value,
+    sides: document.getElementById('sidesMode').value,
     copies: parseInt(document.getElementById('copies').value) || 1,
     pages: sel.ok ? (sel.isAll ? (item.pdfPages || 1) : sel.count) : (item.pdfPages || 1),
     page_spec: (sel.ok && !sel.isAll) ? sel.pages.join(',') : 'all',
@@ -878,6 +888,7 @@ function loadSettingsToUI() {
   var s = bulkFiles[selectedFileIndex].settings;
   var f = bulkFiles[selectedFileIndex].file;
   document.getElementById('colorMode').value = s.color;
+  document.getElementById('sidesMode').value = s.sides || 'single';
   document.getElementById('copies').value = s.copies;
   document.getElementById('pages').value = (s.page_spec && s.page_spec !== 'all') ? PKPageRange.compress(s.page_spec.split(',').map(Number)) : 'all';
   document.getElementById('brightness').value = s.brightness;
@@ -1020,18 +1031,23 @@ function updateSummary() {
   var totalPages = 0;
   var totalCopies = 0;
   var hasColor = false;
+  var hasDouble = false;
   bulkFiles.forEach(function(item) {
     var s = item.settings;
     totalPages += s.pages;
     totalCopies += s.copies;
     if (s.color === 'color') hasColor = true;
+    if (s.sides === 'double') hasDouble = true;
     var filePrice = s.color === 'color' ? 1.10 : 0.20;
-    totalPrice += s.pages * s.copies * filePrice;
+    // Mirrors calculatePrice() in netlify/functions/_shared.js exactly.
+    var sidesMult = s.sides === 'double' ? 0.7 : 1.0;
+    totalPrice += s.pages * s.copies * filePrice * sidesMult;
   });
   currentPrice = Math.round(totalPrice * 100) / 100;
 
   document.getElementById('summaryPages').textContent = totalPages;
   document.getElementById('summaryColor').textContent = hasColor ? 'Mixed' : 'B&W';
+  document.getElementById('summarySides').textContent = hasDouble ? 'Double-sided' : 'Single-sided';
   document.getElementById('summaryCopies').textContent = totalCopies;
   document.getElementById('summaryFile').textContent = bulkFiles.length + ' file' + (bulkFiles.length > 1 ? 's' : '');
   document.getElementById('summaryTotal').textContent = 'RM ' + currentPrice.toFixed(2);
@@ -1446,7 +1462,7 @@ async function placeOrder() {
         print_pin: orderPin,
         color_mode: s.color || 'bw',
         paper_size: 'a4',
-        sides: 'single',
+        sides: s.sides || 'single',
         copies: s.copies || 1,
         pages: pagesCount || s.pages || 1,
         page_spec: pageSpec || 'all',
@@ -1507,7 +1523,7 @@ async function placeOrder() {
         fd.append('print_pin', orderPin);
         fd.append('color_mode', s.color || 'bw');
         fd.append('paper_size', 'a4');
-        fd.append('sides', 'single');
+        fd.append('sides', s.sides || 'single');
         fd.append('copies', s.copies || 1);
         fd.append('pages', pagesCount);
         fd.append('page_spec', pageSpec);
@@ -1719,8 +1735,8 @@ function getPayTargetIds() {
 }
 
 function isPaidStatus(s) {
-  return s === 'ready_to_print' || s === 'printing' || s === 'completed' ||
-         s === 'partially_completed' || s === 'refund_issued';
+return s === 'ready_to_print' || s === 'print_requested' || s === 'printing' || s === 'completed' ||
+    s === 'partially_completed' || s === 'refund_issued' || s === 'failed';
 }
 
 function checkPaymentStatus() {
@@ -1895,7 +1911,9 @@ function renderJobsList(jobs, list) {
     const isCompleted = j.status === 'completed';
     const status = j.status;
     const statusClass = isCompleted ? 'badge-success' : status === 'partially_completed' ? 'badge-warning' : statusBadge(status);
-    let statusLabel = isCompleted ? 'Printed' : status === 'partially_completed' ? 'Partially Printed' : status.charAt(0).toUpperCase() + status.slice(1).replace(/_/g, ' ');
+    const STATUS_LABELS = { print_requested: 'Queued for printing', printing: 'Printing now', failed: 'Print failed', ready_to_print: 'Ready to print' };
+    let statusLabel = isCompleted ? 'Printed' : status === 'partially_completed' ? 'Partially Printed'
+      : (STATUS_LABELS[status] || (status.charAt(0).toUpperCase() + status.slice(1).replace(/_/g, ' ')));
 
     let paymentBlock = '';
     if (!isPaid && status === 'pending') {
@@ -2007,7 +2025,7 @@ function loadCoinHistory() {
 }
 
 function statusBadge(s) {
-  const m = { pending: 'badge-warning', ready_to_print: 'badge-info', printing: 'badge-info', completed: 'badge-success', refund_issued: 'badge-danger' };
+  const m = { pending: 'badge-warning', ready_to_print: 'badge-info', print_requested: 'badge-info', printing: 'badge-info', completed: 'badge-success', failed: 'badge-danger', refund_issued: 'badge-danger' };
   return m[s] || 'badge-gray';
 }
 
