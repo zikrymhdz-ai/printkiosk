@@ -1,4 +1,4 @@
-const { json, err, supabaseRequest, supabaseStorageDelete, APP_VERSION } = require('./_shared');
+const { json, err, supabaseRequest, supabaseStorageDelete, validateSession, APP_VERSION } = require('./_shared');
 
 exports.handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') return json({});
@@ -11,9 +11,12 @@ exports.handler = async (event) => {
   if (event.httpMethod === 'POST' && action === 'complete-job') {
     return await handleCompleteJob(event);
   }
-  if (event.httpMethod === 'POST' && action === 'delete-job') {
-    return await handleDeleteJob(event);
-  }
+if (event.httpMethod === 'POST' && action === 'delete-job') {
+      return await handleDeleteJob(event);
+    }
+    if (event.httpMethod === 'POST' && action === 'clear-jobs') {
+      return await handleClearJobs(event);
+    }
   if (event.httpMethod === 'POST' && action === 'submit-report') {
     return await handleSubmitReport(event);
   }
@@ -333,17 +336,59 @@ async function handleCompleteJob(event) {
   return json({ success: true, message: 'Job completed and cleaned up' });
 }
 
+// What a customer is allowed to clear from their own list.
+//
+// Deliberately narrow. A PIN means the document is still collectable at the
+// kiosk, so clearing it would destroy a document someone can still legitimately
+// claim -- and it strips the PIN that is the only proof of entitlement. Jobs
+// that are paid but failed/refunded are excluded too: those are the ones a
+// customer may need staff to act on, and quietly removing them hides the record
+// of a problem.
+//
+// Only these are clearable:
+//   completed              - printed, nothing left to do
+//   cancelled              - already dead, shown to explain itself
+//   pending + not paid     - abandoned at checkout, no money involved
+function clearableReason(job) {
+  const status = job.status || '';
+  const paid = job.paid === true || job.paid === 'true';
+
+  // Checked before status: a PIN is the strongest signal regardless of state.
+  if (job.print_pin) return 'has a print PIN and can still be collected';
+
+  if (status === 'completed') return null;
+  if (status === 'cancelled') return null;
+  if (status === 'pending' && !paid) return null;
+
+  if (status === 'failed' || status === 'refund_issued') return 'needs staff to arrange a refund or reprint';
+  if (status === 'pending' && paid) return 'paid and awaiting print';
+  return 'status "' + status + '" is still active';
+}
+
 async function handleDeleteJob(event) {
   const body = JSON.parse(event.body || '{}');
   const jobId = body.job_id || '';
   if (!jobId) return err('job_id required');
 
+  // Ownership check. Previously this endpoint took any job_id and cleared it
+  // with no authentication at all, so anyone who learned or guessed an ID
+  // could wipe another customer's job.
+  const session = await validateSession(event);
+  if (!session || !session.users) return err('Sign in required', 403);
+
   const jobResult = await supabaseRequest('GET', '/print_jobs', null, {
     'job_id': 'eq.' + jobId,
-    'select': 'id,file_path'
+    'select': 'id,file_path,user_id,status,paid,print_pin'
   });
   const job = jobResult.data && jobResult.data[0];
   if (!job) return err('Job not found', 404);
+
+  if (!job.user_id || job.user_id !== session.users.id) return err('Not your job', 403);
+
+  // Enforced here, not just hidden in the UI. A client-side check is a
+  // suggestion; this is the rule.
+  const blocked = clearableReason(job);
+  if (blocked) return err('This job cannot be cleared: ' + blocked, 409);
 
   await supabaseRequest('PATCH', '/print_jobs?job_id=eq.' + jobId, {
     'status': 'completed',
@@ -368,6 +413,58 @@ async function handleDeleteJob(event) {
   }
 
   return json({ success: true, message: 'Job deleted' });
+}
+
+// Bulk clear: everything the customer is allowed to remove, in one action.
+// The per-job rules live in clearableReason() so both this and the single
+// delete path agree, and so the UI can be told exactly what will be kept.
+async function handleClearJobs(event) {
+  const session = await validateSession(event);
+  if (!session || !session.users) return err('Sign in required', 403);
+
+  const userId = session.users.id;
+
+  const result = await supabaseRequest('GET', '/print_jobs', null, {
+    'user_id': 'eq.' + userId,
+    'select': 'id,job_id,status,paid,print_pin'
+  });
+  if (result.error) return err('Failed to load jobs', 500);
+  const jobs = Array.isArray(result.data) ? result.data : [];
+
+  const clearable = [];
+  const kept = [];
+  for (const j of jobs) {
+    const reason = clearableReason(j);
+    if (reason === null) clearable.push(j);
+    else kept.push({ job_id: j.job_id, reason: reason });
+  }
+
+  // Nothing was asked for, so this was a dry run: report the split without
+  // deleting anything. Lets the UI say "3 will be cleared, 2 kept" accurately.
+  const body = JSON.parse(event.body || '{}');
+  if (body.confirm !== true) {
+    return json({
+      success: true,
+      dry_run: true,
+      clearable: clearable.map(j => j.job_id),
+      kept: kept
+    });
+  }
+
+  const cleared = [];
+  for (const j of clearable) {
+    const r = await handleDeleteJob(Object.assign({}, event, {
+      body: JSON.stringify({ job_id: j.job_id }),
+      headers: event.headers
+    }));
+    if (r && r.statusCode === 200) cleared.push(j.job_id);
+  }
+
+  return json({
+    success: true,
+    cleared: cleared,
+    kept: kept
+  });
 }
 
 async function handleSubmitReport(event) {

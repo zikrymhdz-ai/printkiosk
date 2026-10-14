@@ -500,7 +500,17 @@
     <!-- ===== JOBS PAGE ===== -->
     <div id="pageJobs" class="slide-section">
       <div class="card">
-        <div class="card-header"><span class="card-title">My Print Jobs</span></div>
+        <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+          <span class="card-title">My Print Jobs</span>
+          <button class="btn btn-sm" onclick="clearAllJobs()" id="clearAllBtn"
+                  style="background:#fff;color:var(--gray-600);border:1px solid var(--gray-200);">
+            Clear finished &amp; unpaid
+          </button>
+        </div>
+        <p class="text-xs text-muted" style="margin:0 0 12px 0;">
+          Clears jobs that printed successfully, were cancelled, or were never paid for.
+          Jobs with a Print PIN are always kept, since you can still collect them at the kiosk.
+        </p>
         <div id="jobsList"></div>
       </div>
     </div>
@@ -1970,9 +1980,19 @@ function renderJobsList(jobs, list) {
         '</div>' +
         '<div style="display:flex; align-items:center; gap:8px;">' +
           '<span class="badge ' + statusClass + '">' + statusLabel + '</span>' +
-          '<button onclick="deleteJob(\'' + j.job_id + '\')" style="background:none; border:none; cursor:pointer; padding:4px; color:var(--gray-400); transition:color 0.2s;" onmouseover="this.style.color=\'var(--danger)\'" onmouseout="this.style.color=\'var(--gray-400)\'">' +
-            '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>' +
-          '</button>' +
+          // Only offer the delete control for jobs the server will actually
+          // clear. A PIN job, or a paid job still awaiting print, is not
+          // clearable -- offering a button that always fails is worse than
+          // showing nothing.
+          (jobCanBeCleared(j)
+            ? '<button title="Clear this job" onclick="deleteJob(\'' + j.job_id + '\')" style="background:none; border:none; cursor:pointer; padding:4px; color:var(--gray-400); transition:color 0.2s;" onmouseover="this.style.color=\'var(--danger)\'" onmouseout="this.style.color=\'var(--gray-400)\'">' +
+                '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>' +
+              '</button>'
+            : '<span title="' + (j.print_pin
+                ? 'Kept: has a Print PIN and can still be collected at the kiosk'
+                : 'Kept: this job cannot be cleared yet') + '" style="padding:4px; color:var(--gray-300);">' +
+                '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>' +
+              '</span>') +
         '</div>' +
       '</div>' +
       '<div style="display:flex; gap:16px; margin-top:10px; flex-wrap:wrap;">' +
@@ -1998,20 +2018,96 @@ function fmtDateTime(v) {
        + ', ' + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
 }
 
+// Mirrors clearableReason() in data.js. The server enforces this regardless --
+// this exists so the button is not offered for a job that will be refused.
+function jobCanBeCleared(j) {
+  if (j.print_pin) return false;
+  var status = j.status || '';
+  var paid = j.paid === true || j.paid === 'true';
+  if (status === 'completed' || status === 'cancelled') return true;
+  if (status === 'pending' && !paid) return true;
+  return false;
+}
+
 function deleteJob(jobId) {
   if (!confirm('Delete this job?')) return;
+  var job = uploadedJobs.find(function (j) { return j.job_id === jobId; });
+  // Fail loudly rather than optimistically removing it from the list. The
+  // previous version filtered the job out whether or not the server accepted,
+  // so a refused delete still made the job vanish locally and reappear on the
+  // next load.
   fetch(API('data', 'delete-job'), {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Session-Token': token },
     body: JSON.stringify({ job_id: jobId })
-  }).then(function() {
-    uploadedJobs = uploadedJobs.filter(j => j.job_id !== jobId);
+  }).then(function (r) {
+    return r.json().then(function (d) { return { ok: r.ok, data: d }; });
+  }).then(function (res) {
+    if (!res.ok) {
+      alert(res.data && res.data.error ? res.data.error : 'Could not clear this job.');
+      return;
+    }
+    uploadedJobs = uploadedJobs.filter(function (j) { return j.job_id !== jobId; });
     localStorage.setItem('uploadedJobs', JSON.stringify(uploadedJobs));
     loadJobs();
-  }).catch(function() {
-    uploadedJobs = uploadedJobs.filter(j => j.job_id !== jobId);
-    localStorage.setItem('uploadedJobs', JSON.stringify(uploadedJobs));
-    loadJobs();
+  }).catch(function () {
+    alert('Could not reach the server. Nothing was cleared.');
   });
+}
+
+// Clear everything the customer is allowed to clear, in one go.
+//
+// Dry run first: the server is asked what it would remove and what it would
+// keep, so the confirmation can name the jobs being kept and why rather than
+// saying "are you sure?" and then silently keeping them.
+function clearAllJobs() {
+  fetch(API('data', 'clear-jobs'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Session-Token': token },
+    body: JSON.stringify({ confirm: false })
+  }).then(function (r) { return r.json(); })
+  .then(function (d) {
+    if (!d || !d.success) { alert('Could not check which jobs can be cleared.'); return; }
+
+    var clearable = d.clearable || [];
+    var kept = d.kept || [];
+
+    if (clearable.length === 0) {
+      var only = kept.length
+        ? '\n\nNothing can be cleared right now. All ' + kept.length + ' of your jobs are being kept:\n'
+          + kept.slice(0, 8).map(function (k) { return '  ' + k.job_id + ' - ' + k.reason; }).join('\n')
+        : '\n\nYou have no jobs to clear.';
+      alert('Nothing to clear.' + only);
+      return;
+    }
+
+    var msg = 'Clear ' + clearable.length + ' job' + (clearable.length === 1 ? '' : 's') + '?\n\n';
+    if (kept.length) {
+      msg += 'These will be KEPT:\n'
+        + kept.slice(0, 8).map(function (k) { return '  ' + k.job_id + ' - ' + k.reason; }).join('\n')
+        + (kept.length > 8 ? '\n  ...and ' + (kept.length - 8) + ' more' : '')
+        + '\n\n';
+    }
+    msg += 'Cleared files cannot be recovered.';
+
+    if (!confirm(msg)) return;
+
+    fetch(API('data', 'clear-jobs'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Session-Token': token },
+      body: JSON.stringify({ confirm: true })
+    }).then(function (r) { return r.json(); })
+    .then(function (res) {
+      if (!res || !res.success) { alert('Could not clear jobs.'); return; }
+      var cleared = res.cleared || [];
+      uploadedJobs = uploadedJobs.filter(function (j) { return cleared.indexOf(j.job_id) === -1; });
+      localStorage.setItem('uploadedJobs', JSON.stringify(uploadedJobs));
+      loadJobs();
+      alert('Cleared ' + cleared.length + ' job' + (cleared.length === 1 ? '' : 's') + '.');
+    })
+    .catch(function () { alert('Could not reach the server. Nothing was cleared.'); });
+  })
+  .catch(function () { alert('Could not reach the server. Nothing was cleared.'); });
 }
 
 function returnToPayment(jobId, price) {
