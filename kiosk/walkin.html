@@ -142,6 +142,21 @@ window.KIOSK_SETTINGS_POLL_MS = 30000;
   .btn-green-kiosk:hover:not(:disabled) { background: #15803d; box-shadow: 0 4px 12px rgba(22,163,74,0.3); }
   .status-bar { display: flex; align-items: center; gap: 8px; padding: 8px 0; font-size: 13px; color: #475569; }
   .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex-shrink:0; }
+  /* Camera is opt-in. Default off, so an unattended kiosk is not identifying
+     people who merely walk past it. */
+  .cam-toggle { width: 100%; margin-top: 4px; padding: 14px 0; border-radius: 12px;
+    border: 2px solid #bfdbfe; background: linear-gradient(135deg, #3b82f6, #2563eb);
+    color: #fff; font-size: 16px; font-weight: 700; cursor: pointer; font-family: inherit;
+    box-shadow: 0 4px 14px rgba(37,99,235,0.3); transition: transform 0.1s, background 0.2s, color 0.2s; }
+  .cam-toggle:active { transform: scale(0.97); }
+  .cam-toggle.cam-on { background: #ffffff; color: #1e3a8a; border-color: #94a3b8; box-shadow: none; }
+  .cam-toggle:disabled { opacity: 0.55; cursor: default; }
+  .cam-hint { font-size: 12px; color: #64748b; text-align: center; margin: 8px 0 0; line-height: 1.5; }
+  /* Camera off: deliberately inert rather than a black box that looks broken. */
+  .cam-box.cam-idle { background: #0b1220; border-color: #1e293b; box-shadow: none; }
+  .cam-box.cam-idle::after { content: 'Camera is off'; position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    color: #475569; font-size: 15px; font-weight: 600; letter-spacing: 0.02em; }
   .dot-green { background: #22c55e; }
   .dot-yellow { background: #eab308; }
   .dot-red { background: #ef4444; }
@@ -362,6 +377,11 @@ window.addEventListener('load', function () {
       <span class="dot dot-yellow" id="faceDot"></span>
       <span id="faceStatusText">Initializing face detection...</span>
     </div>
+
+    <!-- Camera is opt-in. Default off, so the kiosk is not identifying people
+         who merely walk past it. -->
+    <button class="cam-toggle" id="camToggleBtn" onclick="toggleCamera()">Turn on camera</button>
+    <p class="cam-hint" id="camHint">Face recognition is off. Turn the camera on to sign in with your face, or enter your PIN below.</p>
   </div>
 
   <!-- MIDDLE: OTP PIN + on-screen keypad -->
@@ -809,7 +829,7 @@ function throttledUnknownLog(distance) {
 /* ===== REMOTE KIOSK CONTROL (admin) ===== */
 // Must match APP_VERSION in netlify/functions/_shared.js. If the deployed
 // version differs, the kiosk reloads itself so it never runs a stale page.
-var KIOSK_APP_VERSION = '2026.10.14-50';
+var KIOSK_APP_VERSION = '2026.10.14-51';
 var kioskState = { face_login_enabled: true, maintenance_mode: false, maintenance_message: '' };
 var kioskSettingsTimer = null;
 var cameraStoppedForMaint = false;
@@ -1104,17 +1124,12 @@ async function bootKiosk() {
     setInterval(loadPrinterStatus, 30000);
   } catch (e) { piLog('printer status failed: ' + e.message); }
 
-  // Camera FIRST, and never behind face AI.
-  // initFaceAI() awaits ~12MB of model downloads plus the WASM backend, which
-  // on a Pi 4 takes a long time and can hang outright. Because it was awaited
-  // first, openCamera() was never reached and the camera stayed black with no
-  // error at all. The camera is fast and independent, so it goes first.
-  piLog('bootKiosk: opening camera');
-  try {
-    var camOk = await openCamera();
-    piLog('openCamera returned: ' + camOk);
-    if (!camOk) scheduleCameraRetry();
-  } catch (e) { piLog('camera start failed: ' + e.message); }
+  // The camera does NOT open automatically. An unattended kiosk that is always
+  // scanning matches whoever walks past, and people being logged in by accident
+  // is worse than them having to tap a button. Face AI still initialises in the
+  // background so the first tap is instant.
+  piLog('bootKiosk: camera off by default, waiting for user to enable it');
+  applyCameraUi();
 
   // Face AI runs afterwards in the background, hard time-limited so it can never
   // block the kiosk again.
@@ -1404,7 +1419,37 @@ async function startFaceDetection() {
     return false;
   }
 
-  async function detect() {
+  /* ===== FACE MATCHING GUARDS =====
+
+   An unattended kiosk that logs in strangers is worse than one that occasionally
+   asks for a PIN. These four together are what stopped the wrong person being
+   identified: the old code accepted a single frame at distance < 0.6. */
+
+// Descriptor distance below which two faces are the same person. face-api
+// returns ~0.3 for a confident match; 0.6 admits lookalikes and distant faces.
+var FACE_MATCH_THRESHOLD = 0.48;
+
+// Consecutive good frames required before anyone is signed in. A single frame
+// is not evidence of identity - it is a snapshot of whoever was there.
+var FACE_MATCH_FRAMES = 6;
+
+// ...but a match that only just reached the streak is treated as a passer-by.
+var FACE_MIN_HOLD_FRAMES = 8;
+
+// A face narrower than this in the video frame is too small to match reliably.
+// 640px-wide feed => ~102px. Detects someone standing back rather than at the
+// kiosk.
+var FACE_MIN_FACE_PX = 102;
+
+var faceStreak = { count: 0, distance: null, box: null };
+
+function resetFaceStreak() {
+  faceStreak.count = 0;
+  faceStreak.distance = null;
+  faceStreak.box = null;
+}
+
+async function detect() {
     animFrameId = requestAnimationFrame(detect);
     if (!modelsLoaded || !video.videoWidth) return;
 
@@ -1478,30 +1523,73 @@ async function startFaceDetection() {
 
         if (matcher && !matchCooldown) {
           const match = matcher.findBestMatch(det.descriptor);
-          if (match.label !== 'unknown' && match.distance < 0.6) {
-            matchCooldown = true;
-            document.getElementById('faceStatusText').textContent = 'Face matched!';
-            const r = await fetch(API('data', 'get-user&id=' + match.label));
-            const d = await r.json();
-            if (d.success && d.data) {
-              matchedUser = d.data;
-              // Audit: record the successful match, with a picture, for the admin
-              // security log. The snapshot MUST be taken before stopCamera() below -
-              // stopping the track clears videoWidth, and captureFaceSnapshot() bails
-              // out when videoWidth is 0, so capturing afterwards silently saved null.
-              var snapshot = captureFaceSnapshot(box);
-              stopCamera();
-              document.getElementById('confirmAvatar').textContent = matchedUser.name.charAt(0).toUpperCase();
-              document.getElementById('confirmName').textContent = matchedUser.name;
-              document.getElementById('confirmCoins').textContent = matchedUser.coins + ' coins';
-              document.getElementById('confirmOverlay').classList.remove('hidden');
-              logFaceDetection(matchedUser.id, match.distance, true, snapshot);
+
+          // Guard against identifying the wrong person.
+          //
+          // This used to accept a single frame at distance < 0.6, which logged
+          // in whoever happened to pass the camera: a 0.6 threshold is loose for
+          // 128-d descriptors, a distant face produces an unreliable one, and a
+          // passer-by standing nearer the lens than the real user would win on
+          // face size. Now a match must be
+          //   - close (strict threshold)
+          //   - on a face large enough in frame to be trustworthy
+          //   - sustained across consecutive frames
+          // and never for a face that only just appeared.
+          //
+          // Only the largest face in frame is considered: face-api's
+          // detectSingleFace already returns just that one, so a passer-by
+          // standing closer to the lens simply becomes the candidate.
+          const faceW = det.detection.box.width;
+          const bigEnough = faceW >= FACE_MIN_FACE_PX;
+
+          if (match.label !== 'unknown' && match.distance < FACE_MATCH_THRESHOLD
+              && bigEnough) {
+            faceStreak.count++;
+            faceStreak.distance = match.distance;
+            faceStreak.box = box;
+
+            if (faceStreak.count >= FACE_MATCH_FRAMES) {
+              matchCooldown = true;
+              document.getElementById('faceStatusText').textContent = 'Face matched!';
+
+              if (faceStreak.count < FACE_MIN_HOLD_FRAMES) {
+                // Too brief to be a deliberate sign-in. Most likely a passer-by.
+                piLog('face match too brief (' + faceStreak.count + ' frames) - ignored');
+                resetFaceStreak();
+                throttledUnknownLog(match.distance);
+                animFrameId = requestAnimationFrame(detect);
+                return;
+              }
+
+              const r = await fetch(API('data', 'get-user&id=' + match.label));
+              const d = await r.json();
+              if (d.success && d.data) {
+                matchedUser = d.data;
+                // Audit: record the successful match, with a picture, for the admin
+                // security log. The snapshot MUST be taken before stopCamera() below -
+                // stopping the track clears videoWidth, and captureFaceSnapshot() bails
+                // out when videoWidth is 0, so capturing afterwards silently saved null.
+                var snapshot = captureFaceSnapshot(faceStreak.box || box);
+                cameraOn = false;
+                applyCameraUi();
+                stopCamera();
+                document.getElementById('confirmAvatar').textContent = matchedUser.name.charAt(0).toUpperCase();
+                document.getElementById('confirmName').textContent = matchedUser.name;
+                document.getElementById('confirmCoins').textContent = matchedUser.coins + ' coins';
+                document.getElementById('confirmOverlay').classList.remove('hidden');
+                logFaceDetection(matchedUser.id, match.distance, true, snapshot);
+              }
+              animFrameId = requestAnimationFrame(detect);
+              return;
             }
-            animFrameId = requestAnimationFrame(detect);
-            return;
+            // Still counting down the streak: tell the user, do not log in yet.
+            document.getElementById('faceStatusText').textContent =
+              'Hold still - confirming (' + faceStreak.count + '/' + FACE_MATCH_FRAMES + ')';
+          } else {
+            if (faceStreak.count > 0) resetFaceStreak();
+            // A face is present but nobody registered - record it (throttled).
+            throttledUnknownLog(match.distance);
           }
-          // A face is present but nobody registered - record it (throttled).
-          throttledUnknownLog(match.distance);
           document.getElementById('faceStatusText').textContent = 'Scanning for registered face...';
         } else {
           document.getElementById('faceStatusText').textContent = matcher ? 'Scanning...' : 'Face detected (no registered users)';
@@ -1725,6 +1813,66 @@ function rejectFace() {
   location.reload();
 }
 
+/* ===== CAMERA ON/OFF ===== */
+var cameraOn = false;
+
+function applyCameraUi() {
+  var btn = document.getElementById('camToggleBtn');
+  var hint = document.getElementById('camHint');
+  var box = document.getElementById('camBox');
+  var cam = document.getElementById('kioskCam');
+
+  if (btn) {
+    btn.textContent = cameraOn ? 'Turn off camera' : 'Turn on camera';
+    btn.className = 'cam-toggle' + (cameraOn ? ' cam-on' : '');
+  }
+  if (hint) {
+    hint.textContent = cameraOn
+      ? 'Looking for you. Step closer and face the camera. Turn the camera off to stop.'
+      : 'Face recognition is off. Turn the camera on to sign in with your face, or enter your PIN below.';
+  }
+  if (box) box.classList.toggle('cam-idle', !cameraOn);
+  if (cam && !cameraOn) cam.style.visibility = 'hidden';
+  if (cam && cameraOn) cam.style.visibility = '';
+}
+
+async function toggleCamera() {
+  var btn = document.getElementById('camToggleBtn');
+  if (btn) btn.disabled = true;
+
+  try {
+    if (cameraOn) {
+      cameraOn = false;
+      resetFaceStreak();
+      stopCamera();
+      applyCameraUi();
+      setFaceStatus('Camera off', 'dot');
+    } else {
+      setFaceStatus('Starting camera...', 'dot-yellow');
+      var ok = await openCamera();
+      if (!ok) { scheduleCameraRetry(); return; }
+      cameraOn = true;
+      resetFaceStreak();
+      applyCameraUi();
+      setFaceStatus('Looking for you...', 'dot-yellow');
+    }
+  } catch (e) {
+    piLog('camera toggle failed: ' + e.message);
+    cameraOn = false;
+    applyCameraUi();
+    setFaceStatus('Camera unavailable - use your PIN', 'dot-red');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+function setFaceStatus(text, dotClass) {
+  var t = document.getElementById('faceStatusText');
+  var d = document.getElementById('faceDot');
+  if (t) t.textContent = text;
+  if (d) d.className = 'dot ' + (dotClass || 'dot-yellow');
+}
+
 function stopCamera() {
   if (animFrameId) cancelAnimationFrame(animFrameId);
   animFrameId = null;
@@ -1743,6 +1891,10 @@ function stopCamera() {
 // tracks were stopped, so this must call getUserMedia again.
 async function restartCamera() {
   if (kioskState && kioskState.maintenance_mode) return;
+  // Only if the user actually wants the camera on. Leaving maintenance mode
+  // must not silently switch the camera back on for someone who never
+  // enabled it -- that is the whole point of defaulting it to off.
+  if (!cameraOn) return;
   // No modelsLoaded check here: the camera must come back even when face
   // recognition is unavailable, otherwise leaving maintenance mode leaves a
   // permanently black camera.
