@@ -838,7 +838,7 @@ function throttledUnknownLog(distance) {
 /* ===== REMOTE KIOSK CONTROL (admin) ===== */
 // Must match APP_VERSION in netlify/functions/_shared.js. If the deployed
 // version differs, the kiosk reloads itself so it never runs a stale page.
-var KIOSK_APP_VERSION = '2026.10.14-57';
+var KIOSK_APP_VERSION = '2026.10.14-58';
 var kioskState = { face_login_enabled: true, maintenance_mode: false, maintenance_message: '' };
 var kioskSettingsTimer = null;
 var cameraStoppedForMaint = false;
@@ -1419,10 +1419,18 @@ var FACE_MATCH_THRESHOLD = 0.48;
 
 // Consecutive good frames required before anyone is signed in. A single frame
 // is not evidence of identity - it is a snapshot of whoever was there.
-var FACE_MATCH_FRAMES = 6;
-
-// ...but a match that only just reached the streak is treated as a passer-by.
-var FACE_MIN_HOLD_FRAMES = 8;
+//
+// This used to be two constants: FACE_MATCH_FRAMES = 6 to enter the match
+// branch and FACE_MIN_HOLD_FRAMES = 8 to leave it. The streak only ever
+// increments one frame at a time, so it entered at exactly 6, failed the
+// 'count < 8' check, and reset - a streak of 8 could never occur. The kiosk
+// logged "Face matched!" and then threw the match away every single time.
+//
+// One constant, used as both the trigger and the requirement, so the two can
+// never contradict each other again. At FACE_MIN_INTERVAL_MS = 400 that is
+// about 2 seconds of holding still, which is a natural amount of time to ask
+// someone to stand at a kiosk and is far longer than a passer-by glancing in.
+var FACE_HOLD_FRAMES = 5;
 
 // Smallest acceptable face, as a fraction of the detection frame width.
 // Expressed as a ratio because the frame is downscaled to FACE_DETECT_WIDTH
@@ -1610,18 +1618,10 @@ async function detect() {
             faceStreak.distance = match.distance;
             faceStreak.box = box;
 
-            if (faceStreak.count >= FACE_MATCH_FRAMES) {
-              matchCooldown = true;
-              document.getElementById('faceStatusText').textContent = 'Face matched!';
-
-              if (faceStreak.count < FACE_MIN_HOLD_FRAMES) {
-                // Too brief to be a deliberate sign-in. Most likely a passer-by.
-                piLog('face match too brief (' + faceStreak.count + ' frames) - ignored');
-                resetFaceStreak();
-                throttledUnknownLog(match.distance);
-                animFrameId = requestAnimationFrame(detect);
-                return;
-              }
+if (faceStreak.count >= FACE_HOLD_FRAMES) {
+            matchCooldown = true;
+            document.getElementById('faceStatusText').textContent = 'Face matched!';
+            piLog('face held ' + faceStreak.count + ' frames, signing in');
 
               const r = await fetch(API('data', 'get-user&id=' + match.label));
               const d = await r.json();
@@ -1646,7 +1646,7 @@ async function detect() {
             }
             // Still counting down the streak: tell the user, do not log in yet.
             document.getElementById('faceStatusText').textContent =
-              'Hold still - confirming (' + faceStreak.count + '/' + FACE_MATCH_FRAMES + ')';
+              'Hold still - confirming (' + faceStreak.count + '/' + FACE_HOLD_FRAMES + ')';
           } else {
             if (faceStreak.count > 0) resetFaceStreak();
             // Report WHY a face was not accepted. Without this, a registered user
