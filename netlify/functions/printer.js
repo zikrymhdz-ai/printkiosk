@@ -474,7 +474,7 @@ async function updateJobStatus(event) {
 
   if (!jobId || !newStatus) return err('Job ID and status required');
 
-  const allowed = ['pending', 'ready_to_print', 'print_requested', 'printing', 'completed', 'failed', 'refund_issued'];
+  const allowed = ['pending', 'ready_to_print', 'print_requested', 'printing', 'completed', 'failed', 'cancelled', 'refund_issued'];
   if (!allowed.includes(newStatus)) return err('Invalid status');
 
   const result = await supabaseRequest('PATCH', '/print_jobs?job_id=eq.' + jobId, {

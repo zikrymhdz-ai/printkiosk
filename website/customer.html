@@ -1736,7 +1736,7 @@ function getPayTargetIds() {
 
 function isPaidStatus(s) {
 return s === 'ready_to_print' || s === 'print_requested' || s === 'printing' || s === 'completed' ||
-    s === 'partially_completed' || s === 'refund_issued' || s === 'failed';
+    s === 'partially_completed' || s === 'refund_issued' || s === 'failed' || s === 'cancelled';
 }
 
 function checkPaymentStatus() {
@@ -1911,7 +1911,16 @@ function renderJobsList(jobs, list) {
     const isCompleted = j.status === 'completed';
     const status = j.status;
     const statusClass = isCompleted ? 'badge-success' : status === 'partially_completed' ? 'badge-warning' : statusBadge(status);
-    const STATUS_LABELS = { print_requested: 'Queued for printing', printing: 'Printing now', failed: 'Print failed', ready_to_print: 'Ready to print' };
+    const STATUS_LABELS = {
+      print_requested: 'Queued for printing',
+      printing: 'Printing now',
+      failed: 'Not printed',
+      ready_to_print: 'Ready to print',
+      // Plain wording on purpose. "superseded" was an internal placeholder and
+      // meant nothing to anyone reading it.
+      cancelled: 'Cancelled',
+      refund_issued: 'Refunded'
+    };
     let statusLabel = isCompleted ? 'Printed' : status === 'partially_completed' ? 'Partially Printed'
       : (STATUS_LABELS[status] || (status.charAt(0).toUpperCase() + status.slice(1).replace(/_/g, ' ')));
 
@@ -1924,7 +1933,9 @@ function renderJobsList(jobs, list) {
     }
 
     let pinBlock = '';
-    if (j.print_pin && isPaid && !isCompleted) {
+    // Never advertise a PIN for a job that cannot print: it sends the customer
+    // to the kiosk for nothing.
+    if (j.print_pin && isPaid && !isCompleted && status !== 'cancelled' && status !== 'failed') {
       pinBlock = '<div style="margin-top:8px; padding:8px 12px; background:var(--primary-light); border-radius:var(--radius); text-align:center;">' +
         '<span class="text-xs" style="color:var(--primary-dark);">Print PIN: <strong style="font-family:monospace; font-size:15px; letter-spacing:3px;">' + j.print_pin + '</strong></span></div>';
     }
@@ -1933,6 +1944,22 @@ function renderJobsList(jobs, list) {
     if (isCompleted) {
       completedBlock = '<div style="margin-top:8px; padding:8px 12px; background:#dcfce7; border:1px solid #86efac; border-radius:var(--radius); text-align:center;">' +
         '<span class="text-xs" style="color:#166534;">Printed successfully</span></div>';
+    }
+
+    // A job that will never print needs an explanation, not just a word. These
+    // are paid jobs, so silence here looks like we lost their money.
+    let problemBlock = '';
+    if (status === 'cancelled' || status === 'failed') {
+      const why = status === 'cancelled'
+        ? 'This job was cancelled and was not printed.'
+        : 'This job could not be printed.';
+      problemBlock = '<div style="margin-top:8px; padding:10px 12px; background:#fef2f2; border:1px solid #fecaca; border-radius:var(--radius);">' +
+        '<p class="text-xs" style="color:#991b1b; font-weight:600; margin:0;">' + why + '</p>' +
+        (isPaid && status !== 'refund_issued'
+          ? '<p class="text-xs" style="color:#991b1b; margin:4px 0 0;">You were charged RM ' +
+            parseFloat(j.total_price || 0).toFixed(2) + ' for this job. Please contact us to arrange a refund or a free reprint.</p>'
+          : '') +
+        '</div>';
     }
 
     return '<div class="job-card" style="padding:16px; border:1px solid var(--gray-200); border-radius:var(--radius); margin-bottom:12px;">' +
@@ -1955,7 +1982,7 @@ function renderJobsList(jobs, list) {
         '<div><span class="text-xs text-muted">Amount</span><p class="text-sm" style="font-weight:700; color:var(--primary);">RM ' + parseFloat(j.total_price).toFixed(2) + '</p></div>' +
         '<div><span class="text-xs text-muted">Uploaded</span><p class="text-sm" style="font-weight:600;">' + fmtDateTime(j.created_at) + '</p></div>' +
       '</div>' +
-      pinBlock + completedBlock + paymentBlock +
+      pinBlock + completedBlock + problemBlock + paymentBlock +
     '</div>';
   }).join('');
 }

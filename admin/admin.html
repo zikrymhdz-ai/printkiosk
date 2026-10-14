@@ -1038,7 +1038,7 @@ async function markAllAlertsRead() {
 }
 
 function statusCls(s) {
-  const m = { pending: 'badge-warning', ready_to_print: 'badge-info', print_requested: 'badge-info', printing: 'badge-info', completed: 'badge-success', failed: 'badge-danger', refund_issued: 'badge-danger' };
+  const m = { pending: 'badge-warning', ready_to_print: 'badge-info', print_requested: 'badge-info', printing: 'badge-info', completed: 'badge-success', failed: 'badge-danger', cancelled: 'badge-gray', refund_issued: 'badge-gray' };
   return m[s] || 'badge-gray';
 }
 

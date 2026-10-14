@@ -37,7 +37,7 @@ exports.handler = async (event) => {
       const result = await supabaseRequest('GET', '/print_jobs', null, {
         'user_id': 'eq.' + userId,
         'select': '*',
-        'status': 'not.in.(completed,refund_issued)',
+        'status': 'not.in.(completed,refund_issued,cancelled,failed)',
         'order': 'created_at.desc'
       });
       return json({ success: true, data: result.error ? [] : result.data });

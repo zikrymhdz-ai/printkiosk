@@ -807,7 +807,7 @@ function throttledUnknownLog(distance) {
 /* ===== REMOTE KIOSK CONTROL (admin) ===== */
 // Must match APP_VERSION in netlify/functions/_shared.js. If the deployed
 // version differs, the kiosk reloads itself so it never runs a stale page.
-var KIOSK_APP_VERSION = '2026.10.14-43';
+var KIOSK_APP_VERSION = '2026.10.14-44';
 var kioskState = { face_login_enabled: true, maintenance_mode: false, maintenance_message: '' };
 var kioskSettingsTimer = null;
 var cameraStoppedForMaint = false;
@@ -1922,6 +1922,13 @@ function showPrintingScreen(job) {
         stateEl.textContent = label[st] || st;
         if (st === 'completed') { clearInterval(timer); finishPrintScreen(true); }
         else if (st === 'failed') { clearInterval(timer); finishPrintScreen(false); }
+        // A job that will never print must not leave the customer watching a
+        // spinner for 90 seconds until the poll gives up.
+        else if (st === 'cancelled' || st === 'refund_issued') {
+          clearInterval(timer);
+          stateEl.textContent = 'Not printed';
+          finishPrintScreen(false);
+        }
       })
       .catch(function() { /* transient: keep polling */ });
   }, 2000);

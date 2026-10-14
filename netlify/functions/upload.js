@@ -68,7 +68,7 @@ async function handleLookupPin(url) {
   const result = await supabaseRequest('GET', '/print_jobs', null, {
     'print_pin': 'eq.' + pin,
     'select': '*',
-    'status': 'not.in.(completed,refund_issued)',
+    'status': 'not.in.(completed,refund_issued,cancelled,failed)',
     'order': 'created_at.asc'
   });
 
