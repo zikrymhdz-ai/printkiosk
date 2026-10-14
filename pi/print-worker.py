@@ -64,13 +64,6 @@ def today():
 # API helpers
 # --------------------------------------------------------------------------
 
-def api_get(action, timeout=20):
-    url = "%s/.netlify/functions/printer?action=%s" % (CONFIG["api"], action)
-    req = urllib.request.Request(url, headers={"User-Agent": "printkiosk-worker"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.loads(r.read().decode("utf-8"))
-
-
 def api_post(action, payload, timeout=25):
     url = "%s/.netlify/functions/printer?action=%s" % (CONFIG["api"], action)
     body = json.dumps(payload).encode("utf-8")
@@ -418,7 +411,7 @@ def main():
 
         did_work = False
         try:
-            res = api_get("claim-job")
+            res = api_post("claim-job", {})
             job = res.get("job")
             if job:
                 did_work = True
