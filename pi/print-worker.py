@@ -510,11 +510,25 @@ def main():
         if now - last_supply >= CONFIG["supply_seconds"]:
             try:
                 levels, online, why = read_supplies()
+
+                # Also report CUPS' own view of the printer. printer_alert()
+                # used to be consulted only at submit time and after an abort,
+                # so a jam or an empty tray never reached the kiosk: the screen
+                # said "Online" while the printer was unusable and the customer
+                # only found out at the machine.
+                try:
+                    alert = printer_alert(CONFIG["printer"])
+                except Exception as e:
+                    alert = ""
+                    log("printer_alert failed: %s" % e)
+
                 if levels:
                     api_post("report-supplies", {
                         "levels": levels, "online": online, "printer_name": CONFIG["printer"],
+                        "alert": alert,
                     })
-                    log("supplies: %s (online=%s)" % (levels, online))
+                    log("supplies: %s (online=%s)%s" % (
+                        levels, online, (" alert=%s" % alert) if alert else ""))
                 else:
                     # Report the failure too. Otherwise the last-known levels sit
                     # in admin forever looking like live readings, which is how a
@@ -523,8 +537,10 @@ def main():
                     api_post("report-supplies", {
                         "levels": {}, "online": False,
                         "printer_name": CONFIG["printer"], "error": why,
+                        "alert": alert,
                     })
-                    log("supplies unavailable (%s) via %s" % (why, CONFIG["printer_uri"]))
+                    log("supplies unavailable (%s) via %s%s" % (
+                        why, CONFIG["printer_uri"], (" alert=%s" % alert) if alert else ""))
             except Exception as e:
                 log("supply report failed: %s" % e)
             last_supply = now

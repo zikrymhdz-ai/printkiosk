@@ -47,6 +47,7 @@ exports.handler = async (event) => {
       case 'simulate-jam': return simulateJam(event);
       case 'clear-jam': return clearJam();
       case 'set-levels': return setSupplyLevels(event);
+    case 'refill-paper': return refillPaper(event);
       default: return err('Invalid action');
     }
   }
@@ -267,16 +268,21 @@ async function reportSupplies(event) {
     toner_cyan: c,
     toner_magenta: m,
     toner_yellow: y,
+    // Live stop reason from CUPS ("Paper jam", "Out of paper", "Printer
+    // stopped"). Previously only consulted at submit time and after an abort,
+    // so the kiosk kept saying "Online" while the printer was unusable. Empty
+    // string clears a previous alert once the printer is healthy again.
+    printer_alert: String(body.alert || '').slice(0, 160),
     // Recorded even when the read failed, so "checked recently but
     // unreachable" is distinguishable from "never checked".
     last_checked: new Date().toISOString()
   };
 
   // There is no standard IPP attribute for "how much paper is left in the
-  // tray" -- most drivers only report which trays are loaded. When the worker
-  // cannot measure it, leave the existing value untouched rather than
-  // blanking it to something that would read as an empty tray.
-  if (num(levels.paper) !== null) row.paper_level = num(levels.paper);
+  // tray" -- most drivers only report which trays are loaded. So paper_level is
+  // now DERIVED from completed jobs, never taken from the printer and never
+  // hand-edited. Any paper value in the payload is ignored on purpose; see
+  // computePaper().
 
   // printer_status is a singleton row with a generated id, so look it up
   // rather than assuming a fixed value.
@@ -423,6 +429,56 @@ async function getPrintStatus(event) {
   return json({ success: true, job: r.data[0] });
 }
 
+// ---------------------------------------------------------------------------
+// Paper remaining.
+//
+// printer_status.paper_level used to be a hand-entered number: nothing in the
+// worker measured it, because no standard IPP attribute reports sheets in the
+// tray. The only writer was the admin override, and the customer-facing bar
+// displayed it as if the printer had reported it.
+//
+// So derive it from what actually left the tray. pages and copies already exist
+// on print_jobs and print_completed_at is only set when CUPS confirmed the job
+// completed, so this counts real sheets. Deriving on read rather than
+// decrementing a stored counter means it self-corrects if a job is removed.
+//
+// Still an estimate, not a sensor: a jammed sheet leaves the tray without a
+// completed job, and manual-feed paper is never counted. That is why the
+// response carries paper_derived so the UI can label it honestly.
+// ---------------------------------------------------------------------------
+async function computePaper(statusRow) {
+  const capacity = (Number.isFinite(parseInt(statusRow.paper_capacity, 10)) && parseInt(statusRow.paper_capacity, 10) > 0)
+    ? parseInt(statusRow.paper_capacity, 10)
+    : 250;
+  const since = statusRow.paper_refilled_at || null;
+
+  let used = 0;
+  if (since) {
+    const r = await supabaseRequest('GET', '/print_jobs', null, {
+      'select': 'pages,copies',
+      'status': 'eq.completed',
+      'print_completed_at': 'gt.' + since
+    });
+    if (!r.error && Array.isArray(r.data)) {
+      used = r.data.reduce(function (sum, j) {
+        const pages = Math.max(0, parseInt(j.pages, 10) || 0);
+        const copies = Math.max(1, parseInt(j.copies, 10) || 1);
+        return sum + (pages * copies);
+      }, 0);
+    }
+  }
+
+  const remaining = Math.max(0, capacity - used);
+  return {
+    capacity: capacity,
+    used: used,
+    remaining: remaining,
+    level: Math.max(0, Math.min(100, Math.round((remaining / capacity) * 100))),
+    derived: true,
+    refilled_at: since
+  };
+}
+
 async function getPrinterStatus() {
   const result = await supabaseRequest('GET', '/printer_status', null, {
     'select': '*',
@@ -434,14 +490,75 @@ async function getPrinterStatus() {
     return json({
       success: true,
       printer: {
-        paper_level: 100, toner_black: 100, toner_cyan: 100,
-        toner_magenta: 100, toner_yellow: 100,
-        status: 'online', jam_type: null, last_checked: new Date().toISOString()
-      }
+        paper_level: null, toner_black: null, toner_cyan: null,
+        toner_magenta: null, toner_yellow: null,
+        status: 'unknown', jam_type: null, printer_alert: null,
+        last_checked: new Date().toISOString()
+      },
+      paper: null,
+      can_print: false,
+      blocked_reason: 'printer status unknown'
     });
   }
 
-  return json({ success: true, printer: result.data[0] });
+  const row = result.data[0];
+  const paper = await computePaper(row);
+
+  // A CUPS stop reason ("Paper jam", "Printer stopped") is the most actionable
+  // thing we know, and it outranks the toner-derived status for display.
+  const alert = row.printer_alert || null;
+
+  // Decide up front whether the kiosk should offer printing, so the customer
+  // finds out before they pay rather than at the printer. Low paper is a
+  // warning they can fix themselves; a hard stop is blocking.
+  const PAPER_LOW_PCT = 20;
+  const PAPER_LOW_SHEETS = 15;
+  let canPrint = true;
+  let blockedReason = null;
+  let warn = null;
+
+  if (alert) {
+    canPrint = false;
+    blockedReason = alert;
+  } else if (paper.derived && (paper.level <= PAPER_LOW_PCT || paper.remaining <= PAPER_LOW_SHEETS)) {
+    warn = 'paper low';
+  }
+
+  return json({
+    success: true,
+    printer: row,
+    paper: paper,
+    printer_alert: alert,
+    can_print: canPrint,
+    blocked_reason: blockedReason,
+    warn: warn,
+    // The customer-facing bar reads paper_level; keep it in step with the
+    // derived figure so nothing still renders the stale hand-entered value.
+    paper_level: paper.level
+  });
+}
+
+// Staff declares the tray has been refilled, which restarts the count.
+async function refillPaper(event) {
+  const session = await validateSession(event);
+  if (!session || !session.users || session.users.role !== 'admin') return err('Admin access required', 403);
+
+  const cur = await supabaseRequest('GET', '/printer_status', null, {
+    'select': 'id', 'order': 'last_checked.desc', 'limit': '1'
+  });
+  if (cur.error) return err('Failed to read printer status', 500);
+  if (!cur.data || cur.data.length === 0) return err('No printer status row', 404);
+
+  const body = (() => { try { return JSON.parse(event.body || '{}'); } catch (e) { return {}; } })();
+  const patch = { paper_refilled_at: new Date().toISOString() };
+  if (Number.isFinite(parseInt(body.paper_capacity, 10)) && parseInt(body.paper_capacity, 10) > 0) {
+    patch.paper_capacity = parseInt(body.paper_capacity, 10);
+  }
+
+  const write = await supabaseRequest('PATCH', '/printer_status?id=eq.' + cur.data[0].id, patch);
+  if (write.error) return err('Refill failed - has migration 20261014_paper_remaining run?', 500);
+
+  return json({ success: true, paper_refilled_at: patch.paper_refilled_at });
 }
 
 async function getPendingJobs(event) {

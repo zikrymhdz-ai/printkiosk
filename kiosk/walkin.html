@@ -565,7 +565,11 @@ window.addEventListener('load', function () {
     <div style="background:rgba(59,130,246,0.1); border-radius:10px; padding:10px 14px; text-align:center; margin-bottom:16px;" id="receiptCoinsRow">
       <span style="font-size:13px; color:#60a5fa;">You earned <strong id="receiptCoins">0</strong> coins</span>
     </div>
-    <button class="btn-kiosk btn-primary-kiosk" style="width:100%;" onclick="closeReceipt()" id="receiptDoneBtn">Print My Document</button>
+    <button class="btn-kiosk btn-primary-kiosk" style="width:100%;" onclick="printTapped()" id="receiptDoneBtn">Print My Document</button>
+    <div id="paperWarn" class="hidden" style="margin-top:12px; padding:12px 14px; border-radius:10px; background:#fff7ed; border:1px solid #fdba74; text-align:left;">
+      <div style="font-size:14px; font-weight:700; color:#c2410c;" id="paperWarnTitle">Paper running low</div>
+      <div style="font-size:13px; color:#9a3412; margin-top:4px;" id="paperWarnBody">Please top up the paper tray before printing.</div>
+    </div>
     <p style="color:#64748b; font-size:12px; text-align:center; margin-top:10px;" id="receiptHint">Tap below to send your document to the printer</p>
   </div>
 </div>
@@ -838,7 +842,13 @@ function throttledUnknownLog(distance) {
 /* ===== REMOTE KIOSK CONTROL (admin) ===== */
 // Must match APP_VERSION in netlify/functions/_shared.js. If the deployed
 // version differs, the kiosk reloads itself so it never runs a stale page.
-var KIOSK_APP_VERSION = '2026.10.14-58';
+var KIOSK_APP_VERSION = '2026.10.14-59';
+
+// Latest printer verdict from the backend: can we print, and if not why.
+// Refreshed by loadPrinterStatus() and consulted by printTapped() at the
+// moment of the tap, so a paper tray that empties while the customer is on the
+// receipt screen is still caught.
+var printerGate = { can_print: true, blocked_reason: null, warn: null, alert: null, paper: null };
 var kioskState = { face_login_enabled: true, maintenance_mode: false, maintenance_message: '' };
 var kioskSettingsTimer = null;
 var cameraStoppedForMaint = false;
@@ -1311,7 +1321,8 @@ function loadPrinterStatus() {
     .then(function(d) {
       var p = d && d.printer;
       if (!p) { setPrinterStatusFallback(); return; }
-      var paper = clampLevel(p.paper_level);
+      var pap = d.paper || null;
+      var paper = clampLevel(pap && pap.level !== undefined ? pap.level : p.paper_level);
       var black = clampLevel(p.toner_black);
       var cyan = clampLevel(p.toner_cyan);
       var magenta = clampLevel(p.toner_magenta);
@@ -1323,9 +1334,35 @@ function loadPrinterStatus() {
       setBar('ppTonerMagentaBar', 'ppTonerMagentaVal', magenta);
       setBar('ppTonerYellowBar', 'ppTonerYellowVal', yellow);
 
+      // Paper is derived from completed jobs, not sensed, so say what it
+      // actually is. Claiming a measured "50%" was how a hand-entered number
+      // ended up on a customer screen looking authoritative.
+      var paperVal = document.getElementById('ppPaperVal');
+      if (paperVal) {
+        if (pap && pap.derived) {
+          paperVal.textContent = '~' + pap.remaining + ' sheets';
+          paperVal.title = 'Estimated from ' + pap.used + ' sheets printed since the last refill. '
+            + 'Not measured by a sensor.';
+        } else {
+          paperVal.textContent = '--';
+          paperVal.title = 'Paper level is not reported by this printer.';
+        }
+      }
+
+      // Record what the backend says about printing, so the payment/print step
+      // can warn BEFORE the customer pays rather than after.
+      printerGate = {
+        can_print: d.can_print !== false,
+        blocked_reason: d.blocked_reason || null,
+        warn: d.warn || null,
+        alert: d.printer_alert || null,
+        paper: pap
+      };
+
     var dot = document.getElementById('ppDot');
     var line = document.getElementById('ppStatusLine');
     var status = (p.status || 'online').toLowerCase();
+    var alert = d.printer_alert || p.printer_alert || null;
 
     // If the worker has not reported recently the printer may be fine but we
     // genuinely do not know, and saying "Online - ready to print" would be a
@@ -1333,7 +1370,13 @@ function loadPrinterStatus() {
     var checked = p.last_checked ? new Date(p.last_checked).getTime() : 0;
     var minsAgo = checked ? Math.round((Date.now() - checked) / 60000) : null;
 
-    if (minsAgo !== null && minsAgo > 15) {
+    if (alert) {
+        // A real CUPS stop reason beats any status we inferred from toner.
+        // "Online" used to be derived purely from toner reachability, so a
+        // jammed printer still read Online.
+        dot.className = 'dot dot-red';
+        line.textContent = 'Printer problem: ' + alert + ' - please see staff';
+      } else if (minsAgo !== null && minsAgo > 15) {
       dot.className = 'dot dot-yellow';
       line.textContent = 'Status unknown (' + (minsAgo > 1440 ? Math.round(minsAgo / 1440) + 'd'
         : minsAgo > 60 ? Math.round(minsAgo / 60) + 'h' : minsAgo + 'm') + ' since last check)';
@@ -2156,6 +2199,43 @@ async function confirmPayment() {
         + 'wait a moment and press "Check again". Otherwise please pay the exact amount shown above.';
     }
   }
+}
+
+function printTapped() {
+  // Checked here, at the moment of tapping, rather than only when the page
+  // loaded: a customer can sit on the receipt screen while the tray empties.
+  var g = printerGate || {};
+  var warn = document.getElementById('paperWarn');
+  var btn = document.getElementById('receiptDoneBtn');
+
+  if (g.can_print === false && g.blocked_reason) {
+    // Hard stop reported by the printer itself. Do not send the job.
+    if (warn) {
+      warn.classList.remove('hidden');
+      document.getElementById('paperWarnTitle').textContent = 'Printer unavailable';
+      document.getElementById('paperWarnBody').textContent =
+        'The printer is reporting: ' + g.blocked_reason +
+        '. Please see staff - your document has not been sent.';
+    }
+    if (btn) { btn.disabled = true; btn.style.opacity = '0.5'; }
+    return;
+  }
+
+  if (g.warn === 'paper low' && g.paper) {
+    if (warn) {
+      warn.classList.remove('hidden');
+      document.getElementById('paperWarnTitle').textContent = 'Paper running low';
+      document.getElementById('paperWarnBody').textContent =
+        'About ' + g.paper.remaining + ' sheets left. Please top up the paper tray, then tap print again.';
+    }
+    // Self-service paper, so this is a warning rather than a block: staff or
+    // the customer can load more and carry on.
+    return;
+  }
+
+  if (warn) warn.classList.add('hidden');
+  if (btn) { btn.disabled = false; btn.style.opacity = '1'; }
+  closeReceipt();
 }
 
 function closeReceipt() {
