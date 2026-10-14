@@ -7,4 +7,4 @@
 //
 // Bump APP_VERSION here, run `npm run version`, commit both files.
 
-module.exports = { APP_VERSION: '2026.10.14-45' };
+module.exports = { APP_VERSION: '2026.10.14-46' };
