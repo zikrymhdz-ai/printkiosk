@@ -102,6 +102,15 @@ window.KIOSK_SETTINGS_POLL_MS = 30000;
   .pin-section input { flex: 1; background: #ffffff; border: 2px solid #bfdbfe; color: #0f2a4a; font-size: 28px; text-align: center; letter-spacing: 12px; padding: 12px; border-radius: 12px; outline: none; font-weight: 700; font-family: monospace; transition: border-color 0.2s, box-shadow 0.2s; }
   .pin-section input:focus { border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37,99,235,0.18); }
   .pin-section input::placeholder { color: #b6c6de; font-size: 18px; letter-spacing: 4px; }
+  /* readonly so a stray tap can never summon the Pi's software keyboard */
+  .pin-section input[readonly] { cursor: pointer; }
+  .pin-keypad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 12px; }
+  .pk-key { padding: 16px 0; border-radius: 14px; border: 2px solid #bfdbfe; background: #ffffff;
+            color: #0f2a4a; font-size: 26px; font-weight: 700; cursor: pointer; font-family: inherit;
+            transition: transform 0.08s, background 0.15s, border-color 0.15s; min-height: 56px; }
+  .pk-key:hover { background: #f2f7ff; border-color: #93b8f5; }
+  .pk-key:active { transform: scale(0.94); background: #dbeafe; border-color: #2563eb; }
+  .pk-key-alt { font-size: 16px; font-weight: 600; color: #5b7295; background: #f4f7fb; }
   .btn-kiosk { padding: 12px 24px; border-radius: 12px; font-size: 16px; font-weight: 600; cursor: pointer; border: none; transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); }
   .btn-kiosk:active { transform: scale(0.97); }
   .btn-kiosk:disabled { opacity:0.4; cursor:default; transform:none; }
@@ -157,6 +166,7 @@ window.KIOSK_SETTINGS_POLL_MS = 30000;
   body.pi-kiosk .btn-kiosk { padding: 16px 28px; font-size: 19px; min-height: 56px; }
   body.pi-kiosk .pin-section input { font-size: 40px; padding: 18px; min-height: 72px; }
   body.pi-kiosk .pin-section { gap: 12px; }
+  body.pi-kiosk .pk-key { padding: 24px 0; font-size: 34px; min-height: 84px; }
   body.pi-kiosk .confirm-card button { min-height: 64px; font-size: 20px; }
   body.pi-kiosk #qrCanvas { width: 190px; height: 190px; display: block; }
   body.pi-kiosk .confirm-avatar { width: 92px; height: 92px; font-size: 40px; }
@@ -191,6 +201,11 @@ window.KIOSK_SETTINGS_POLL_MS = 30000;
     body.pi-kiosk .pin-section input { font-size: 30px; padding: 12px; min-height: 46px; }
     body.pi-kiosk .pin-section { gap: 8px; }
     body.pi-kiosk #kioskPinHint { display: none; }
+    /* Short screens lose the keypad height first: a mis-sized key is a
+       mistyped PIN, which is worse than a slightly tighter layout. */
+    body.pi-kiosk .pin-keypad { gap: 6px; margin-top: 8px; }
+    body.pi-kiosk .pk-key { padding: 9px 0; font-size: 20px; min-height: 38px; border-radius: 11px; }
+    body.pi-kiosk .pk-key-alt { font-size: 13px; }
   }
   /* Centre the whole layout vertically on the standing display. The camera and
      printer panel stay side by side - stacking them at 800px wide pushed
@@ -325,10 +340,29 @@ window.addEventListener('load', function () {
 
   <p id="kioskPinHint" style="font-size:13px; color:#64748b; text-align:center; margin:0;">Enter OTP PIN from website upload</p>
   <div class="pin-section">
-    <input type="text" id="pinInput" placeholder="000000" maxlength="6" inputmode="numeric">
+    <input type="password" id="pinInput" placeholder="------" maxlength="6" inputmode="numeric"
+           autocomplete="off" readonly onclick="pkKeypadFocus()">
     <button class="btn-kiosk btn-primary-kiosk" onclick="lookupPin()">Go</button>
   </div>
   <p id="pinFeedback" style="font-size:13px; color:#ef4444; margin-top:4px; display:none;"></p>
+
+  <!-- On-screen keypad. The PIN box is readonly so tapping it can never raise
+       the Pi's software keyboard across half the screen; every digit arrives
+       through these buttons instead. -->
+  <div class="pin-keypad" id="pinKeypad">
+    <button class="pk-key" onclick="pkKeypadPress('1')">1</button>
+    <button class="pk-key" onclick="pkKeypadPress('2')">2</button>
+    <button class="pk-key" onclick="pkKeypadPress('3')">3</button>
+    <button class="pk-key" onclick="pkKeypadPress('4')">4</button>
+    <button class="pk-key" onclick="pkKeypadPress('5')">5</button>
+    <button class="pk-key" onclick="pkKeypadPress('6')">6</button>
+    <button class="pk-key" onclick="pkKeypadPress('7')">7</button>
+    <button class="pk-key" onclick="pkKeypadPress('8')">8</button>
+    <button class="pk-key" onclick="pkKeypadPress('9')">9</button>
+    <button class="pk-key pk-key-alt" onclick="pkKeypadClear()">Clear</button>
+    <button class="pk-key" onclick="pkKeypadPress('0')">0</button>
+    <button class="pk-key pk-key-alt" onclick="pkKeypadBack()">&larr;</button>
+  </div>
 
   <button class="btn-kiosk btn-secondary-kiosk" style="width:100%; margin-top:14px;" id="guestBtn" onclick="startGuest()">
     <span style="opacity:0.85;">I don&rsquo;t have an account &mdash;</span> <strong>Scan as Guest</strong>
@@ -743,7 +777,7 @@ function throttledUnknownLog(distance) {
 /* ===== REMOTE KIOSK CONTROL (admin) ===== */
 // Must match APP_VERSION in netlify/functions/_shared.js. If the deployed
 // version differs, the kiosk reloads itself so it never runs a stale page.
-var KIOSK_APP_VERSION = '2026.10.14-37';
+var KIOSK_APP_VERSION = '2026.10.14-38';
 var kioskState = { face_login_enabled: true, maintenance_mode: false, maintenance_message: '' };
 var kioskSettingsTimer = null;
 var cameraStoppedForMaint = false;
@@ -1635,6 +1669,46 @@ async function restartCamera() {
   // permanently black camera.
   var ok = await openCamera();
   if (!ok) scheduleCameraRetry();
+}
+
+/* ===== ON-SCREEN KEYPAD =====
+   The PIN box is readonly, so these buttons are the only way a digit gets in.
+   That is deliberate: on a Pi, tapping a focused text box raises a software
+   keyboard that covers half the screen, which is miserable on a kiosk touch
+   screen and easy to mis-tap. */
+function pkKeypadFocus() {
+  var el = document.getElementById('pinInput');
+  if (el) el.classList.add('pk-active');
+}
+
+function pkKeypadPress(digit) {
+  var el = document.getElementById('pinInput');
+  if (!el) return;
+  if (el.value.length >= 6) return;
+
+  // Clear any stale "no job found" message as soon as they start again.
+  var fb = document.getElementById('pinFeedback');
+  if (fb) fb.style.display = 'none';
+
+  el.value += digit;
+
+  // Six digits is a complete PIN (backend requires /^\d{6}$/), so submit it
+  // rather than making them also find the Go button.
+  if (el.value.length === 6) {
+    setTimeout(function() { lookupPin(); }, 140);
+  }
+}
+
+function pkKeypadBack() {
+  var el = document.getElementById('pinInput');
+  if (el) el.value = el.value.slice(0, -1);
+}
+
+function pkKeypadClear() {
+  var el = document.getElementById('pinInput');
+  if (el) el.value = '';
+  var fb = document.getElementById('pinFeedback');
+  if (fb) fb.style.display = 'none';
 }
 
 async function lookupPin() {
