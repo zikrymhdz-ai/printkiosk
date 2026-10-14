@@ -522,7 +522,9 @@ window.addEventListener('load', function () {
     <p style="color:#94a3b8; margin-bottom:4px; font-size:14px;">Scan to pay</p>
     <p style="font-size:28px; font-weight:700; margin-bottom:8px;" id="payAmount">RM 0.00</p>
     <img src="../payment_qr.jpeg" alt="DuitNow QR - Touch &apos;n Go eWallet" style="width:180px; border-radius:12px; margin:12px 0; border:1px solid #374151;">
-    <button class="btn-kiosk btn-primary-kiosk" style="width:100%;" onclick="confirmPayment()" id="payBtn">Confirm Payment</button>
+    <p style="font-size:14px; color:#94a3b8; text-align:center; margin:0 0 6px;">Pay the exact amount above, then press the button.</p>
+    <p id="payWaitingTip" style="display:none; margin-top:12px; padding:12px; background:rgba(239,68,68,0.1); border:1px solid rgba(239,68,68,0.35); border-radius:10px; color:#fca5a5; font-size:13px; line-height:1.5; text-align:center;"></p>
+    <button class="btn-kiosk btn-primary-kiosk" style="width:100%;" onclick="confirmPayment()" id="payBtn">I have paid</button>
     <p id="paySuccess" style="display:none; margin-top:12px; font-size:16px; color:#22c55e; font-weight:600;">Payment Successful</p>
     <button class="btn-kiosk btn-secondary-kiosk" style="width:100%; margin-top:8px;" onclick="closePayment()">Close</button>
   </div>
@@ -807,7 +809,7 @@ function throttledUnknownLog(distance) {
 /* ===== REMOTE KIOSK CONTROL (admin) ===== */
 // Must match APP_VERSION in netlify/functions/_shared.js. If the deployed
 // version differs, the kiosk reloads itself so it never runs a stale page.
-var KIOSK_APP_VERSION = '2026.10.14-48';
+var KIOSK_APP_VERSION = '2026.10.14-49';
 var kioskState = { face_login_enabled: true, maintenance_mode: false, maintenance_message: '' };
 var kioskSettingsTimer = null;
 var cameraStoppedForMaint = false;
@@ -1865,32 +1867,47 @@ async function confirmPayment() {
   const jobs = currentPinJobId ? (currentPinJob ? [currentPinJob] : []) : (currentPinJobs || []);
   if (!jobs.length) return;
   const btn = document.getElementById('payBtn');
-  btn.disabled = true; btn.textContent = 'Processing...';
-  var paidAll = true;
-  let coins = 0;
-  try {
+  btn.disabled = true;
+
+  // Ask whether payment has been detected -- do NOT tell the backend a payment
+  // happened. This used to POST to payment?action=confirm, which marked the
+  // job paid outright and credited a coin without checking anything, so
+  // tapping this button skipped payment entirely.
+  var deadline = Date.now() + 120000;
+  var paidAll = false;
+  var coins = 0;
+
+  while (Date.now() < deadline) {
+    btn.textContent = 'Waiting for payment...';
+    paidAll = true;
     for (let i = 0; i < jobs.length; i++) {
-      const r = await fetch(API('payment', 'confirm'), {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ job_id: jobs[i].job_id })
-      });
-      const d = await r.json();
-      if (d.success) {
-        coins += (d.coins_earned || 0);
-        jobs[i].paid = true;
-      } else {
-        paidAll = false;
-        break;
-      }
+      var paid = false;
+      try {
+        const r = await fetch(API('payment', 'check-status') + '&job_id=' + encodeURIComponent(jobs[i].job_id));
+        const d = await r.json();
+        paid = !!(d && d.success && d.job && d.job.paid);
+      } catch (e) { /* transient: keep looking */ }
+      if (!paid) { paidAll = false; break; }
     }
-    if (paidAll) {
-      document.getElementById('paymentOverlay').classList.add('hidden');
-      showReceiptFromJobs(jobs, coins);
-      document.getElementById('receiptOverlay').classList.remove('hidden');
-      btn.disabled = false; btn.textContent = 'Confirm Payment'; btn.style.display = '';
-      document.getElementById('paySuccess').style.display = 'none';
-    } else { alert('Payment failed'); btn.disabled = false; btn.textContent = 'Confirm Payment'; }
-  } catch(e) { alert('Payment failed'); btn.disabled = false; btn.textContent = 'Confirm Payment'; }
+    if (paidAll) break;
+    await new Promise(function(res) { setTimeout(res, 3000); });
+  }
+
+  if (paidAll) {
+    document.getElementById('paymentOverlay').classList.add('hidden');
+    showReceiptFromJobs(jobs, coins);
+    document.getElementById('receiptOverlay').classList.remove('hidden');
+    btn.disabled = false; btn.textContent = 'Confirm Payment'; btn.style.display = '';
+    document.getElementById('paySuccess').style.display = 'none';
+  } else {
+    btn.disabled = false; btn.textContent = 'Check again';
+    var tip = document.getElementById('payWaitingTip');
+    if (tip) {
+      tip.style.display = 'block';
+      tip.textContent = 'We cannot see your payment yet. If you have already paid, '
+        + 'wait a moment and press "Check again". Otherwise please pay the exact amount shown above.';
+    }
+  }
 }
 
 function closeReceipt() {

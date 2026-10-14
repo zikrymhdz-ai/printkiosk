@@ -1,5 +1,14 @@
 const crypto = require('crypto');
-const { json, err, supabaseRequest, NOTIFICATION_SECRET, JOB_PAYABLE_WINDOW_MIN } = require('./_shared');
+const { json, err, supabaseRequest, NOTIFICATION_SECRET, validateSession, safeEqual } = require('./_shared');
+
+// How long after upload a payment can still settle the job. Generous on
+// purpose: this is the difference between "customer paid" and "customer paid
+// and was never credited".
+const MATCH_WINDOW_MIN = 60;
+
+// Development convenience only. Off unless explicitly switched on, because a
+// public "mark this job paid" endpoint is a free-print button for anyone.
+const SIMULATE_ENABLED = process.env.PAYMENT_ALLOW_SIMULATE === 'true';
 
 exports.handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') return json({});
@@ -8,6 +17,19 @@ exports.handler = async (event) => {
 
   const url = new URL(event.rawUrl);
   const action = url.searchParams.get('action');
+
+  // Both of these settle money, so both require a logged-in staff session.
+  // They used to be open to the internet: anyone could POST a job id and get
+  // it marked paid -- and credited a coin -- without paying anything.
+  if (action === 'confirm' || action === 'simulate') {
+    const session = await validateSession(event);
+    if (!session || session.users.role !== 'admin') {
+      return err('Payment settlement requires staff sign-in', 403);
+    }
+    if (action === 'simulate' && !SIMULATE_ENABLED) {
+      return err('Payment simulation is disabled', 403);
+    }
+  }
 
   switch (action) {
     case 'confirm': return handlePaymentConfirm(event);
@@ -106,8 +128,9 @@ async function handlePaymentConfirm(event) {
   });
 }
 
-// JOB_PAYABLE_WINDOW_MIN is imported from _shared so the amount allocator and the
-// matcher can never drift apart: a slot is only held while its job is payable.
+// The amount allocator (_shared) holds a unique match fee only while a job is
+// still payable. That window stays short so the ten cent-slots do not run out;
+// matching below uses a much longer window of its own.
 async function handleNlsReceived(event) {
   let body;
   try { body = JSON.parse(event.body || '{}'); } catch (e) { return err('Bad JSON body'); }
@@ -126,7 +149,22 @@ async function handleNlsReceived(event) {
   const expected = crypto.createHmac('sha256', NOTIFICATION_SECRET).update(message).digest('hex');
   if (!hmac || expected !== hmac) return err('Invalid signature', 401);
 
-  const cutoff = new Date(Date.now() - JOB_PAYABLE_WINDOW_MIN * 60 * 1000).toISOString();
+  // Two different windows, deliberately.
+  //
+  // JOB_PAYABLE_WINDOW_MIN decides which jobs compete for a unique match fee,
+  // so it stays short: only ten cent-slots exist, and if it were long enough to
+  // collect abandoned jobs there would not be enough slots to go round.
+  //
+  // MATCH_WINDOW_MIN decides which jobs a payment may settle. That has to be
+  // far more forgiving. Someone who uploads, opens their banking app, and pays
+  // fifteen minutes later has handed over real money, and under the old single
+  // ten-minute window that payment was recorded as "no matching pending job"
+  // while their job sat unpaid forever. The customer paid and got nothing.
+  //
+  // Widening this is safe because the total still has to match exactly, and any
+  // genuine ambiguity is parked for staff review rather than guessed at.
+  const matchCutoff = new Date(Date.now() - MATCH_WINDOW_MIN * 60 * 1000).toISOString();
+  const cutoff = matchCutoff;
 
   const jobsResult = await supabaseRequest('GET', '/print_jobs', null, {
     'paid': 'eq.false',
@@ -135,7 +173,6 @@ async function handleNlsReceived(event) {
     'created_at': 'gte.' + cutoff,
     'order': 'created_at.desc'
   });
-
   const jobs = jobsResult.error ? [] : (jobsResult.data || []);
 
   // AMOUNT IS PRIMARY. The unique match fee (0.00-0.09) makes each live job's

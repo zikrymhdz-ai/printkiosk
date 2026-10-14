@@ -907,33 +907,47 @@ async function confirmPhonePayment() {
   if (!phoneCurrentJobId) return;
   var btn = document.getElementById('phoneConfirmPayBtn');
   btn.disabled = true;
-  btn.textContent = 'Processing...';
+  btn.textContent = 'Waiting for payment...';
 
+  // This does NOT tell the backend that a payment happened. It asks whether one
+  // has been detected yet, and keeps asking.
+  //
+  // It used to call payment?action=confirm, which marked the job paid outright
+  // -- and silently fell through to ?action=simulate if that failed. Both were
+  // open to anyone, so the whole "pay then confirm" step could be skipped. A
+  // job only becomes paid when the payment watcher sees real money arrive.
   var ids = String(phoneCurrentJobId).split(',').map(function(s) { return s.trim(); }).filter(Boolean);
-  var paidAll = true;
-  for (let i = 0; i < ids.length; i++) {
-    var paid = false;
-    try {
-      var r = await fetch(API('payment', 'confirm'), {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ job_id: ids[i] })
-      });
-      var d = await r.json();
-      paid = !!(d && d.success);
-    } catch(e) {}
-    if (!paid) {
+  var deadline = Date.now() + 120000;   // two minutes of looking
+  var paidAll = false;
+
+  while (Date.now() < deadline) {
+    paidAll = true;
+    for (let i = 0; i < ids.length; i++) {
+      var paid = false;
       try {
-        var r2 = await fetch(API('payment', 'simulate'), {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ job_id: ids[i] })
+        var r = await fetch(API('payment', 'check-status') + '&job_id=' + encodeURIComponent(ids[i]), {
+          headers: { 'X-Session-Token': sessionStorage.getItem('pk_token') || '' }
         });
-        var d2 = await r2.json();
-        paid = !!(d2 && d2.success);
-      } catch(e) {}
+        var d = await r.json();
+        paid = !!(d && d.success && d.job && d.job.paid);
+      } catch (e) { /* transient: keep looking */ }
+      if (!paid) { paidAll = false; break; }
     }
-    if (!paid) paidAll = false;
+    if (paidAll) break;
+    btn.textContent = 'Waiting for payment...';
+    await new Promise(function(res) { setTimeout(res, 3000); });
   }
 
+  if (!paidAll) {
+    btn.disabled = false;
+    btn.textContent = 'Check again';
+    alert('We could not see your payment yet.\n\n'
+      + 'If you have already paid, wait a minute and press "Check again".\n'
+      + 'If you have not paid yet, please pay the exact amount shown above.');
+    return;
+  }
+
+  btn.textContent = 'Payment received';
   var uploadedJobs = JSON.parse(localStorage.getItem('uploadedJobs') || '[]');
   var job = uploadedJobs.find(j => j.job_id === phoneCurrentJobId);
   var totalPrice = phoneUploadedJobs.reduce(function(sum, j) { return sum + (parseFloat(j.total_price) || 0); }, 0);
