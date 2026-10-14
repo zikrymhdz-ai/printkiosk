@@ -78,22 +78,40 @@ window.KIOSK_SETTINGS_POLL_MS = 30000;
 <script>if (window.pdfjsLib) { pdfjsLib.GlobalWorkerOptions.workerSrc = '../vendor/pdf.worker.min.js'; }</script>
 <style>
   body { background: #eef4ff; color: #0f2a4a; margin:0; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
-  .kiosk-layout { max-width: 1100px; margin: 0 auto; display: flex; gap: 16px; padding: 16px; min-height: 100vh; align-items: stretch; }
-  .kiosk { flex: 1; min-width: 0; max-width: 640px; margin: 0 auto; padding: 0; display: flex; flex-direction: column; }
-  .printer-panel { width: 260px; flex-shrink: 0; background: #ffffff; border: 1px solid #dbeafe; border-radius: 20px; padding: 18px; height: fit-content; box-shadow: 0 4px 16px rgba(37,99,235,0.08); }
+  .kiosk-layout { max-width: 1420px; margin: 0 auto; display: flex; gap: 16px; padding: 16px; min-height: 100vh; align-items: stretch; }
+  /* Three columns on the standing kiosk display:
+       LEFT   camera + face recognition
+       MIDDLE OTP PIN + on-screen keypad
+       RIGHT  printer status
+     The camera keeps its own aspect ratio and the printer panel gets a fixed,
+     larger share of the width so its bars and labels are readable at arm's
+     length. */
+  .kiosk { flex: 1; min-width: 0; padding: 0; display: flex; flex-direction: column; }
+  .kiosk-cols { display: grid; grid-template-columns: minmax(0,1.15fr) minmax(300px,0.85fr); gap: 18px; align-items: start; }
+  .kiosk-col { min-width: 0; display: flex; flex-direction: column; }
+  .kiosk-col-cam { gap: 12px; }
+  .kiosk-col-pin { justify-content: center; }
+  .printer-panel { width: 330px; flex-shrink: 0; background: #ffffff; border: 1px solid #dbeafe; border-radius: 20px; padding: 20px; height: fit-content; box-shadow: 0 4px 16px rgba(37,99,235,0.08); }
   .pp-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
-  .pp-title { font-size: 15px; font-weight: 700; display: flex; align-items: center; gap: 8px; color: #1e3a8a; }
-  .pp-status-line { font-size: 12px; color: #64748b; margin-bottom: 14px; }
-  .pp-section { margin-top: 12px; }
-  .pp-section-title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: #93a5bd; margin-bottom: 8px; }
-  .pp-row { margin-bottom: 8px; }
-  .pp-row-top { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 3px; }
+  .pp-title { font-size: 17px; font-weight: 700; display: flex; align-items: center; gap: 8px; color: #1e3a8a; }
+  .pp-status-line { font-size: 13px; color: #64748b; margin-bottom: 16px; }
+  .pp-section { margin-top: 14px; }
+  .pp-section-title { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: #93a5bd; margin-bottom: 9px; }
+  .pp-row { margin-bottom: 11px; }
+  .pp-row-top { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 5px; }
   .pp-row-label { color: #475569; font-weight: 500; }
   .pp-row-value { color: #1e40af; font-weight: 600; }
-  .pp-bar { height: 8px; background: #e8effb; border-radius: 6px; overflow: hidden; }
+  .pp-bar { height: 10px; background: #e8effb; border-radius: 6px; overflow: hidden; }
   .pp-bar-fill { height: 100%; border-radius: 6px; transition: width 0.6s ease, background-color 0.4s; min-width: 2px; }
-  .pp-foot { margin-top: 16px; font-size: 11px; color: #93a5bd; border-top: 1px solid #e6eefb; padding-top: 10px; display: flex; justify-content: space-between; }
-  @media (max-width: 900px) { .kiosk-layout { flex-direction: column; } .printer-panel { width: auto; } }
+  .pp-foot { margin-top: 18px; font-size: 12px; color: #93a5bd; border-top: 1px solid #e6eefb; padding-top: 12px; display: flex; justify-content: space-between; }
+  /* Below ~1180px the three columns get too cramped to trust with a PIN entry,
+     so fall back to camera on top and PIN beneath, panel last. */
+  @media (max-width: 1180px) {
+    .kiosk-layout { flex-direction: column; align-items: center; }
+    .kiosk { width: 100%; max-width: 640px; }
+    .printer-panel { width: auto; max-width: 640px; }
+  }
+  @media (max-width: 760px) { .kiosk-cols { grid-template-columns: minmax(0,1fr); } }
   .cam-box { width: 100%; aspect-ratio: 4/3; border-radius: 20px; overflow: hidden; background: #0f172a; position: relative; border: 3px solid #2563eb; transition: border-color 0.3s; box-shadow: 0 6px 20px rgba(37,99,235,0.15); }
   .cam-box video { width: 100%; height: 100%; object-fit: cover; display: block; transform: scaleX(-1); }
   .cam-box canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; transform: scaleX(-1); }
@@ -191,7 +209,7 @@ window.KIOSK_SETTINGS_POLL_MS = 30000;
   @media (max-height: 560px) {
     .kiosk-layout { padding: 8px; gap: 8px; min-height: 100vh; }
     .kiosk-layout { max-width: 100%; }
-    .printer-panel { width: 168px; padding: 10px; border-radius: 14px; }
+    .printer-panel { width: 220px; padding: 10px; border-radius: 14px; }
     .kiosk { max-width: none; min-height: 0; }
     .kiosk-divider { margin: 8px 0; }
     .pp-section { margin-top: 6px; }
@@ -207,30 +225,34 @@ window.KIOSK_SETTINGS_POLL_MS = 30000;
     body.pi-kiosk .pk-key { padding: 9px 0; font-size: 20px; min-height: 38px; border-radius: 11px; }
     body.pi-kiosk .pk-key-alt { font-size: 13px; }
   }
-  /* Centre the whole layout vertically on the standing display. The camera and
-     printer panel stay side by side - stacking them at 800px wide pushed
-     everything into the top of the screen. */
-  body.pi-kiosk .kiosk-layout {
-    flex-direction: row;
-    align-items: center;
-    justify-content: center;
-    min-height: 100vh;
-  }
-  body.pi-kiosk .kiosk { min-height: 0; justify-content: center; }
-  body.pi-kiosk .printer-panel { height: fit-content; }
-  /* Viewport-relative height so the stack can be centred instead of filling. */
-  body.pi-kiosk .cam-box { flex: 0 0 auto; height: 60vh; min-height: 150px; aspect-ratio: auto; }
-  body.pi-kiosk .cam-box video,
-  body.pi-kiosk .cam-box canvas { height: 100%; }
-  body.pi-kiosk .confirm-card { padding: 20px; }
+    /* Centre the whole layout vertically on the standing display. The three
+       columns stay side by side - stacking them pushed everything into the top
+       of the screen. */
+    body.pi-kiosk .kiosk-layout {
+      flex-direction: row;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+    }
+    body.pi-kiosk .kiosk { min-height: 0; justify-content: center; }
+    body.pi-kiosk .printer-panel { height: fit-content; }
+    /* Viewport-relative height so the stack can be centred instead of filling. */
+    body.pi-kiosk .cam-box { flex: 0 0 auto; height: 58vh; min-height: 150px; aspect-ratio: auto; }
+    body.pi-kiosk .cam-box video,
+    body.pi-kiosk .cam-box canvas { height: 100%; }
+    /* The PIN column is bounded by the camera column's height, otherwise the
+       keypad stretches to the full 58vh+ and the keys become enormous. */
+    body.pi-kiosk .kiosk-col-pin { align-self: stretch; justify-content: center; }
+    body.pi-kiosk .confirm-card { padding: 20px; }
   /* Overlays sit in the middle of the screen; overflow only kicks in if a card
      is ever taller than the panel. */
   body.pi-kiosk .confirm-overlay { align-items: center; justify-content: center; overflow-y: auto; }
-  /* Portrait / stacked displays */
-  @media (max-width: 720px) {
-    body.pi-kiosk .kiosk-layout { flex-direction: column; align-items: center; justify-content: center; }
-    body.pi-kiosk .printer-panel { width: auto; }
-  }
+    /* Portrait / stacked displays */
+    @media (max-width: 720px) {
+      body.pi-kiosk .kiosk-layout { flex-direction: column; align-items: center; justify-content: center; }
+      body.pi-kiosk .printer-panel { width: auto; }
+      body.pi-kiosk .cam-box { height: 34vh; }
+    }
   /* Minimal-chrome diagnostics overlay, toggled by the Pi flag */
   #piDiag {
     position: fixed; left: 8px; bottom: 8px; z-index: 999;
@@ -324,25 +346,29 @@ window.addEventListener('load', function () {
 </script>
 
 <div class="kiosk-layout">
-<div id="kioskApp" class="kiosk">
-  <div class="cam-box pulse-ring" id="camBox">
-    <video id="kioskCam" autoplay muted playsinline></video>
-    <canvas id="kioskCanvas"></canvas>
-    <div class="overlay-text" id="camStatus"><span class="dot dot-yellow"></span> Starting...</div>
+ <div id="kioskApp" class="kiosk kiosk-cols">
+
+  <!-- LEFT: camera + face recognition -->
+  <div class="kiosk-col kiosk-col-cam">
+    <div class="cam-box pulse-ring" id="camBox">
+      <video id="kioskCam" autoplay muted playsinline></video>
+      <canvas id="kioskCanvas"></canvas>
+      <div class="overlay-text" id="camStatus"><span class="dot dot-yellow"></span> Starting...</div>
+    </div>
+
+    <div class="status-bar">
+      <span class="dot dot-yellow" id="faceDot"></span>
+      <span id="faceStatusText">Initializing face detection...</span>
+    </div>
   </div>
 
-  <div class="status-bar">
-    <span class="dot dot-yellow" id="faceDot"></span>
-    <span id="faceStatusText">Initializing face detection...</span>
-  </div>
-
-  <hr class="kiosk-divider">
-
-  <p id="kioskPinHint" style="font-size:13px; color:#64748b; text-align:center; margin:0;">Enter OTP PIN from website upload</p>
-  <div class="pin-section">
-    <input type="text" id="pinInput" placeholder="------" maxlength="6" inputmode="numeric"
-           autocomplete="off" readonly onclick="pkKeypadFocus()">
-    <button class="btn-kiosk btn-primary-kiosk" onclick="lookupPin()">Go</button>
+  <!-- MIDDLE: OTP PIN + on-screen keypad -->
+  <div class="kiosk-col kiosk-col-pin">
+    <p id="kioskPinHint" style="font-size:13px; color:#64748b; text-align:center; margin:0 0 4px;">Enter OTP PIN from website upload</p>
+    <div class="pin-section">
+      <input type="text" id="pinInput" placeholder="------" maxlength="6" inputmode="numeric"
+             autocomplete="off" readonly onclick="pkKeypadFocus()">
+      <button class="btn-kiosk btn-primary-kiosk" onclick="lookupPin()">Go</button>
   </div>
   <p id="pinFeedback" style="font-size:13px; color:#ef4444; margin-top:4px; display:none;"></p>
 
@@ -368,8 +394,10 @@ window.addEventListener('load', function () {
     <span style="opacity:0.85;">I don&rsquo;t have an account &mdash;</span> <strong>Scan as Guest</strong>
   </button>
 
-  <div class="bottom-links">Face recognition for kiosk auto-login</div>
-</div>
+    <div class="bottom-links">Face recognition for kiosk auto-login</div>
+  </div><!-- /kiosk-col-pin -->
+
+</div><!-- /kioskApp -->
 
 <div id="piDiag"></div>
 
@@ -1833,15 +1861,17 @@ function closeReceipt() {
     // This is the ONLY thing that puts a job in front of the printer. It runs
     // here because the customer just tapped "Print My Document" -- nobody,
     // including staff, can queue a print without that tap.
+    //
+    // Do NOT call complete-job here. That endpoint marks the job 'completed'
+    // and deletes its file from storage, which was designed for the old flow
+    // where printing happened elsewhere. Doing it at this point raced the
+    // worker: the job flipped to 'completed' before the worker could claim it
+    // and the PDF was deleted before anything could print. The worker now owns
+    // the terminal transition and only reports completed once paper is out.
     return fetch(API('printer', 'request-print'), {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ job_id: j.id })
-    }).catch(function() { return null; }).then(function() {
-      return fetch(API('data', 'complete-job'), {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ job_id: j.job_id })
-      }).catch(function() { return null; });
-    });
+    }).catch(function() { return null; });
   })).then(function() {
     showPrintingScreen(lead);
   });

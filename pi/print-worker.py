@@ -17,6 +17,7 @@ to the backend so admin stops showing made-up numbers.
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import tempfile
@@ -550,4 +551,13 @@ def main():
 
 
 if __name__ == "__main__":
+    # systemd sends SIGINT on stop (KillSignal=SIGINT in the unit). Without this
+    # every restart and every reboot buried a 30-line KeyboardInterrupt
+    # traceback in the journal, which trains you to ignore real errors.
+    def _bye(signum, frame):
+        log("stopping (signal %d)" % signum)
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, _bye)
+    signal.signal(signal.SIGTERM, _bye)
     main()

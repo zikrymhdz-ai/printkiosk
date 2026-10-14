@@ -1,4 +1,4 @@
-const { json, err, supabaseRequest, validateSession, PRINT_WORKER_SECRET, safeEqual } = require('./_shared');
+const { json, err, supabaseRequest, validateSession, PRINT_WORKER_SECRET, safeEqual, supabaseStorageDelete } = require('./_shared');
 
 // Routes the Pi print worker calls. These authenticate with a shared secret
 // rather than an admin session, because the kiosk Pi has no logged-in user.
@@ -194,6 +194,13 @@ async function reportPrint(event) {
   const upd = await supabaseRequest('PATCH', '/print_jobs?id=eq.' + id, patch);
   if (upd.error) return err('Failed to record result', 500);
 
+  if (outcome === 'completed') {
+    // Only now, with the printer confirming the pages are out, is it safe to
+    // discard the stored file. Cleaning up earlier (as complete-job used to)
+    // destroyed the PDF before the worker had fetched it.
+    await deleteJobFile(id);
+  }
+
   if (outcome === 'failed') {
     await supabaseRequest('POST', '/alerts', {
       type: 'print_failed',
@@ -204,6 +211,32 @@ async function reportPrint(event) {
   }
 
   return json({ success: true, status: patch.status });
+}
+
+// Remove the stored file for a job, once it is safe to do so (i.e. after the
+// printer confirmed the pages are out). Failures here are swallowed: the
+// customer already has their print, and leaving an orphaned file is far less
+// bad than failing the whole completion report.
+async function deleteJobFile(jobUuid) {
+  try {
+    const r = await supabaseRequest('GET', '/print_jobs', null, {
+      'select': 'file_path', 'id': 'eq.' + jobUuid
+    });
+    const filePath = (r.data && r.data[0] && r.data[0].file_path) || '';
+    if (!filePath.includes('/storage/v1/object/')) return;
+
+    const rest = filePath.split('/storage/v1/object/')[1];
+    const parts = rest.split('/');
+    let bucket, path;
+    if (parts[0] === 'public') {
+      bucket = parts[1];
+      path = parts.slice(2).join('/');
+    } else {
+      bucket = parts[0];
+      path = parts.slice(1).join('/');
+    }
+    if (bucket && path) await supabaseStorageDelete(bucket, path);
+  } catch (e) { /* leave the file for the retention sweep */ }
 }
 
 // Real toner / paper levels read from the printer over IPP.

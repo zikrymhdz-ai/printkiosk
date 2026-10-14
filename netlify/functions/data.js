@@ -291,10 +291,18 @@ async function handleCompleteJob(event) {
 
   const jobResult = await supabaseRequest('GET', '/print_jobs', null, {
     'job_id': 'eq.' + jobId,
-    'select': 'id,file_path'
+    'select': 'id,file_path,status,paid'
   });
   const job = jobResult.data && jobResult.data[0];
   if (!job) return err('Job not found', 404);
+
+  // Jobs in the print lifecycle are owned by the Pi worker, which marks them
+  // completed only after the printer confirms the job actually finished.
+  // Letting this endpoint touch them would skip the print entirely AND delete
+  // the source file before the worker had a chance to fetch it.
+  if (['print_requested', 'printing', 'failed'].includes(job.status)) {
+    return err('Job is owned by the print worker and cannot be completed from here', 409);
+  }
 
   await supabaseRequest('PATCH', '/print_jobs?job_id=eq.' + jobId, {
     'status': 'completed',
