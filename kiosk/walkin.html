@@ -143,10 +143,10 @@ window.KIOSK_SETTINGS_POLL_MS = 30000;
   .status-bar { display: flex; align-items: center; gap: 8px; padding: 8px 0; font-size: 13px; color: #475569; }
   .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex-shrink:0; }
   /* Camera is opt-in. Default off, so an unattended kiosk is not identifying
-     people who merely walk past it. Uses the same button classes as every
-     other control here. */
+     people who merely walk past it. White with a blue border and blue label,
+     matching the other kiosk buttons exactly. */
   .cam-toggle { width: 100%; margin-top: 4px; }
-  .cam-toggle.cam-on { background: #ffffff; color: #1e3a8a; border-color: #94a3b8; }
+  .cam-toggle.cam-on { background: #eff6ff; color: #1d4ed8; border-color: #3b82f6; }
   .cam-toggle:disabled { opacity: 0.55; cursor: default; }
   .cam-hint { font-size: 12px; color: #64748b; text-align: center; margin: 8px 0 0; line-height: 1.5; }
   /* Camera off: deliberately inert rather than a black box that looks broken. */
@@ -826,7 +826,7 @@ function throttledUnknownLog(distance) {
 /* ===== REMOTE KIOSK CONTROL (admin) ===== */
 // Must match APP_VERSION in netlify/functions/_shared.js. If the deployed
 // version differs, the kiosk reloads itself so it never runs a stale page.
-var KIOSK_APP_VERSION = '2026.10.14-53';
+var KIOSK_APP_VERSION = '2026.10.14-54';
 var kioskState = { face_login_enabled: true, maintenance_mode: false, maintenance_message: '' };
 var kioskSettingsTimer = null;
 var cameraStoppedForMaint = false;
@@ -1160,8 +1160,20 @@ function withTimeout(promise, ms, label) {
 // screen flicker.
 var __camOpening = false;
 async function openCamera() {
-  if (__camOpening) return false;
   if (faceStream) return true; // already open - never stack a second stream
+
+  if (__camOpening) {
+    // An open is already in flight -- usually a background retry started just
+    // before the user tapped. Returning false here made the kiosk report "no
+    // camera" while that in-flight attempt went on to succeed: the preview ran,
+    // face detection announced itself, and the UI still said the camera was
+    // off. Wait for the attempt instead, then report what actually happened.
+    for (var i = 0; i < 60 && __camOpening; i++) {
+      await new Promise(function (r) { setTimeout(r, 250); });
+    }
+    return !!faceStream;
+  }
+
   __camOpening = true;
   try {
     return await openCameraInner();
@@ -1224,7 +1236,11 @@ async function openCameraInner() {
       var canvas = document.getElementById('kioskCanvas');
       canvas.width = video.videoWidth || camW;
       canvas.height = video.videoHeight || 480;
-      document.getElementById('camStatus').innerHTML = '<span class="dot dot-green"></span> Face AI active';
+      // No "Face AI active" label here. The live preview already shows the
+      // camera is working, the status line under it says the same thing, and
+      // the text sat across the middle of the image. This overlay is reserved
+      // for states the user has to act on.
+      document.getElementById('camStatus').innerHTML = '';
       document.getElementById('faceStatusText').textContent = 'Looking for face...';
       piLog('camera OK (' + canvas.width + 'x' + canvas.height + ') attempt ' + (i + 1));
       startFaceDetection();
@@ -1842,7 +1858,10 @@ function applyCameraUi() {
 
   if (btn) {
     btn.textContent = cameraOn ? 'Turn off camera' : 'Turn on camera';
-    btn.className = 'cam-toggle' + (cameraOn ? ' cam-on' : '');
+    // Only toggle cam-on. Assigning btn.className wholesale wiped
+    // btn-kiosk / btn-secondary-kiosk, so the button lost the standard white
+    // and blue styling every other control here uses.
+    btn.classList.toggle('cam-on', !!cameraOn);
   }
   if (hint) {
     hint.textContent = cameraOn ? 'Looking for you. Step closer and face the camera.' : 'Camera is off';
