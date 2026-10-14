@@ -453,6 +453,7 @@ async function computePaper(statusRow) {
   const since = statusRow.paper_refilled_at || null;
 
   let used = 0;
+  let known = false;
   if (since) {
     const r = await supabaseRequest('GET', '/print_jobs', null, {
       'select': 'pages,copies',
@@ -465,16 +466,18 @@ async function computePaper(statusRow) {
         const copies = Math.max(1, parseInt(j.copies, 10) || 1);
         return sum + (pages * copies);
       }, 0);
+      known = true;
     }
   }
 
   const remaining = Math.max(0, capacity - used);
   return {
     capacity: capacity,
-    used: used,
-    remaining: remaining,
-    level: Math.max(0, Math.min(100, Math.round((remaining / capacity) * 100))),
+    used: known ? used : null,
+    remaining: known ? remaining : null,
+    level: known ? Math.max(0, Math.min(100, Math.round((remaining / capacity) * 100))) : null,
     derived: true,
+    known: known,
     refilled_at: since
   };
 }
@@ -520,6 +523,12 @@ async function getPrinterStatus() {
   if (alert) {
     canPrint = false;
     blockedReason = alert;
+  } else if (paper.known === false) {
+    // The count query itself failed. Reporting used=0 would show a full tray,
+    // which is the dangerous direction: the customer is told paper is fine when
+    // in fact we simply could not ask. Say nothing is known.
+    canPrint = true;
+    warn = 'paper unknown';
   } else if (paper.derived && (paper.level <= PAPER_LOW_PCT || paper.remaining <= PAPER_LOW_SHEETS)) {
     warn = 'paper low';
   }

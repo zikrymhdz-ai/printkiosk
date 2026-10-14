@@ -74,5 +74,30 @@ ok(/if \(alert\)/.test(walkin),
 ok(!/status:\s*unreadable\s*\?\s*'unknown'\s*:\s*\(lowest\s*<=\s*15/.test(walkin),
   'kiosk no longer treats toner reachability alone as "Online"');
 
+// --- a failed count query must NOT read as a full tray ---------------------
+// Failing the count query must leave used/remaining/level null and surface
+// known:false, because the default of 0 sheets used means "tray is full" --
+// telling a customer paper is fine when it is actually empty.
+ok(/let known = false/.test(printer), 'computePaper tracks whether the count query succeeded');
+const cp = printer.match(/async function computePaper[\s\S]*?\n\}/);
+ok(!!cp, 'computePaper body found');
+if (cp) {
+  // cp[0], not cp[1]: the pattern has no capture group, so cp[1] is undefined
+  // and testing against it silently passes or fails on the string "undefined".
+  const body = cp[0];
+  ok(!/used = 0;\s*\n\s*if \(since\)/.test(body),
+    'used is not silently left at 0 when the query errors');
+  ok(/known:\s*known/.test(body), 'computePaper reports known explicitly');
+  ok(/remaining:\s*known\s*\?\s*remaining\s*:\s*null/.test(body),
+    'remaining is null, not 0/capacity, when the count is unknown');
+  ok(/level:\s*known\s*\?/.test(body),
+    'level is null too when the count is unknown');
+}
+ok(/paper unknown/.test(printer), 'backend distinguishes "paper unknown" from "paper low"');
+ok(/pap\.known\s*!==\s*false/.test(walkin) && /paperVal\.textContent = '--'/.test(walkin),
+  'kiosk shows "--" rather than a number when the count is unknown');
+ok(/known !== false/.test(admin),
+  'admin does not render a paper figure it could not compute');
+
 if (failed) process.exit(1);
 console.log('  ok      printer status is real where it can be, honest where it cannot');

@@ -842,7 +842,7 @@ function throttledUnknownLog(distance) {
 /* ===== REMOTE KIOSK CONTROL (admin) ===== */
 // Must match APP_VERSION in netlify/functions/_shared.js. If the deployed
 // version differs, the kiosk reloads itself so it never runs a stale page.
-var KIOSK_APP_VERSION = '2026.10.14-59';
+var KIOSK_APP_VERSION = '2026.10.14-60';
 
 // Latest printer verdict from the backend: can we print, and if not why.
 // Refreshed by loadPrinterStatus() and consulted by printTapped() at the
@@ -1322,7 +1322,7 @@ function loadPrinterStatus() {
       var p = d && d.printer;
       if (!p) { setPrinterStatusFallback(); return; }
       var pap = d.paper || null;
-      var paper = clampLevel(pap && pap.level !== undefined ? pap.level : p.paper_level);
+      var paper = clampLevel(pap && pap.known !== false && pap.level !== null && pap.level !== undefined ? pap.level : null);
       var black = clampLevel(p.toner_black);
       var cyan = clampLevel(p.toner_cyan);
       var magenta = clampLevel(p.toner_magenta);
@@ -1339,13 +1339,16 @@ function loadPrinterStatus() {
       // ended up on a customer screen looking authoritative.
       var paperVal = document.getElementById('ppPaperVal');
       if (paperVal) {
-        if (pap && pap.derived) {
+        if (pap && pap.derived && pap.known !== false && pap.remaining !== null) {
           paperVal.textContent = '~' + pap.remaining + ' sheets';
           paperVal.title = 'Estimated from ' + pap.used + ' sheets printed since the last refill. '
             + 'Not measured by a sensor.';
         } else {
+          // The count itself could not be computed. Never fall back to a number:
+          // showing a confident "250 sheets" because a query failed is how a
+          // full tray gets reported when the tray is empty.
           paperVal.textContent = '--';
-          paperVal.title = 'Paper level is not reported by this printer.';
+          paperVal.title = 'Paper count unavailable right now.';
         }
       }
 

@@ -494,7 +494,7 @@ function updatePrinterDisplay(p) {
   const level = (v) => (v === null || v === undefined || v === '' ? null : parseInt(v, 10));
   const show = (v) => (v === null ? 'Unknown' : v + '%');
 
-const paperInfo = (window.__printerPaper && window.__printerPaper.derived) ? window.__printerPaper : null;
+const paperInfo = (window.__printerPaper && window.__printerPaper.derived && window.__printerPaper.known !== false) ? window.__printerPaper : null;
 const paper = paperInfo ? paperInfo.level : level(p.paper_level);
 // Show sheets, not a bare percentage: this is a count of what left the tray,
 // and "42%" of 250 is not something anyone can act on when topping up.
