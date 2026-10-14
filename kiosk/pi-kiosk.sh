@@ -30,7 +30,7 @@ sync_from_live() {
   command -v curl >/dev/null 2>&1 || { log "curl not found; using local files"; return 0; }
   local tmp
   local ok=0
-  for f in kiosk/walkin.html kiosk/README-PI.md frontend_config.js; do
+  for f in kiosk/walkin.html kiosk/kiosk-serve.py kiosk/README-PI.md frontend_config.js; do
     tmp="${APP_DIR}/$(basename "$f").new.$$"
     if curl -fsS --max-time 20 "${LIVE_BASE}/${f}" -o "$tmp" 2>/dev/null && [ -s "$tmp" ]; then
       if ! cmp -s "$tmp" "${APP_DIR}/${f}" 2>/dev/null; then
@@ -38,6 +38,16 @@ sync_from_live() {
         # written walkin.html would be fetched by a reload and fail to parse.
         if mv -f "$tmp" "${APP_DIR}/${f}" 2>/dev/null; then
           log "updated ${f} from live site"
+          # Only for the kiosk page: a truncated copy that still parses is worse
+          # than the stale one, because the kiosk will happily run it. Other
+          # synced files have no version marker to check for.
+          case "$f" in
+            kiosk/walkin.html)
+              if ! grep -q "KIOSK_APP_VERSION" "${APP_DIR}/${f}" 2>/dev/null; then
+                log "WARNING: fetched ${f} looks incomplete"
+              fi
+              ;;
+          esac
         else
           rm -f "$tmp"
         fi
@@ -101,9 +111,20 @@ fi
 if curl -fsS "http://localhost:${PORT}/frontend_config.js" >/dev/null 2>&1; then
   log "reusing server already on port ${PORT}"
 else
-  log "starting static server on port ${PORT}"
-  ( cd "$APP_DIR" && nohup python3 -m http.server "$PORT" --bind 127.0.0.1 \
-      >/tmp/printkiosk-http.log 2>&1 & )
+  # kiosk-serve.py, not `python3 -m http.server`. The stdlib server sends no
+  # Cache-Control header, so Chromium heuristically cached walkin.html and the
+  # screen could keep running a stale copy from disk after a deploy -- which
+  # showed up as a page calling helpers that did not exist in that copy.
+  SERVE_SCRIPT="${APP_DIR}/kiosk/kiosk-serve.py"
+  if [ -f "$SERVE_SCRIPT" ] && command -v python3 >/dev/null 2>&1; then
+    log "starting no-cache static server on port ${PORT}"
+    ( cd "$APP_DIR" && nohup python3 "$SERVE_SCRIPT" "$APP_DIR" "$PORT" \
+        >/tmp/printkiosk-http.log 2>&1 & )
+  else
+    log "kiosk-serve.py missing; falling back to python3 -m http.server (may cache)"
+    ( cd "$APP_DIR" && nohup python3 -m http.server "$PORT" --bind 127.0.0.1 \
+        >/tmp/printkiosk-http.log 2>&1 & )
+  fi
   sleep 1
   curl -fsS "http://localhost:${PORT}/frontend_config.js" >/dev/null 2>&1 \
     || log "WARNING: server did not come up; see /tmp/printkiosk-http.log"

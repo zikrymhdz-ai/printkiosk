@@ -826,7 +826,7 @@ function throttledUnknownLog(distance) {
 /* ===== REMOTE KIOSK CONTROL (admin) ===== */
 // Must match APP_VERSION in netlify/functions/_shared.js. If the deployed
 // version differs, the kiosk reloads itself so it never runs a stale page.
-var KIOSK_APP_VERSION = '2026.10.14-54';
+var KIOSK_APP_VERSION = '2026.10.14-55';
 var kioskState = { face_login_enabled: true, maintenance_mode: false, maintenance_message: '' };
 var kioskSettingsTimer = null;
 var cameraStoppedForMaint = false;
@@ -1478,10 +1478,15 @@ var FACE_MIN_FACE_PX = 102;
 var faceStreak = { count: 0, distance: null, box: null };
 
 function resetFaceStreak() {
+  // Defensive: the kiosk can briefly run a copy of this file from the Pi's
+  // disk that predates the streak helpers, and an unguarded ReferenceError here
+  // aborts the whole camera toggle before the camera is ever started.
+  if (typeof faceStreak === 'undefined') return;
   faceStreak.count = 0;
   faceStreak.distance = null;
   faceStreak.box = null;
 }
+if (typeof window !== 'undefined') window.resetFaceStreak = resetFaceStreak;
 
 async function detect() {
     animFrameId = requestAnimationFrame(detect);
