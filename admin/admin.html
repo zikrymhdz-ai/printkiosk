@@ -829,7 +829,9 @@ function renderReadyJobs() {
 let failedRows = [];
 
 function loadFailedJobs() {
-  const token = sessionStorage.getItem('pk_admin_token') || '';
+  // Uses the module-level `token` set at login. Declaring a local `token` here
+  // shadows it and silently sends an empty session, which the backend rejects
+  // with 'Admin access required'.
   fetch(API('printer', 'failed-jobs'), { headers: { 'X-Session-Token': token } })
     .then(r => r.json()).then(data => {
       failedRows = (data.success && data.jobs) ? data.jobs : [];
@@ -873,7 +875,6 @@ function renderFailedJobs() {
 function reprintJob(jobId) {
   if (!confirm('Reprint ' + jobId + '?\n\nThis sends the document to the printer again. Use this only if the customer is standing there and still needs the pages.')) return;
 
-  const token = sessionStorage.getItem('pk_admin_token') || '';
   fetch(API('printer', 'reprint'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Session-Token': token },
