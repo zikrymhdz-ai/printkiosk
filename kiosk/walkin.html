@@ -87,10 +87,12 @@ window.KIOSK_SETTINGS_POLL_MS = 30000;
      larger share of the width so its bars and labels are readable at arm's
      length. */
   .kiosk { flex: 1; min-width: 0; padding: 0; display: flex; flex-direction: column; }
-  .kiosk-cols { display: grid; grid-template-columns: minmax(0,1.15fr) minmax(300px,0.85fr); gap: 18px; align-items: start; }
+  .kiosk-cols { display: grid; grid-template-columns: minmax(0,1.25fr) minmax(250px,0.75fr); gap: 18px; align-items: start; }
   .kiosk-col { min-width: 0; display: flex; flex-direction: column; }
   .kiosk-col-cam { gap: 12px; }
-  .kiosk-col-pin { justify-content: center; }
+  /* The PIN column must never be able to widen itself: an intrinsically sized
+     input here would push the printer panel off the right edge. */
+  .kiosk-col-pin { min-width: 0; overflow: hidden; justify-content: center; }
   .printer-panel { width: 330px; flex-shrink: 0; background: #ffffff; border: 1px solid #dbeafe; border-radius: 20px; padding: 20px; height: fit-content; box-shadow: 0 4px 16px rgba(37,99,235,0.08); }
   .pp-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
   .pp-title { font-size: 17px; font-weight: 700; display: flex; align-items: center; gap: 8px; color: #1e3a8a; }
@@ -117,7 +119,7 @@ window.KIOSK_SETTINGS_POLL_MS = 30000;
   .cam-box canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; transform: scaleX(-1); }
   .cam-box .overlay-text { position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.75); padding: 6px 16px; border-radius: 20px; font-size: 13px; white-space: nowrap; z-index: 2; }
   .pin-section { margin-top: 16px; display: flex; gap: 8px; }
-  .pin-section input { flex: 1; background: #ffffff; border: 2px solid #bfdbfe; color: #0f2a4a; font-size: 28px; text-align: center; letter-spacing: 12px; padding: 12px; border-radius: 12px; outline: none; font-weight: 700; font-family: monospace; transition: border-color 0.2s, box-shadow 0.2s; }
+  .pin-section input { flex: 1 1 0; min-width: 0; background: #ffffff; border: 2px solid #bfdbfe; color: #0f2a4a; font-size: 22px; text-align: center; letter-spacing: 8px; padding: 10px; border-radius: 12px; outline: none; font-weight: 700; font-family: monospace; transition: border-color 0.2s, box-shadow 0.2s; }
   .pin-section input:focus { border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37,99,235,0.18); }
   .pin-section input::placeholder { color: #b6c6de; font-size: 18px; letter-spacing: 4px; }
   /* readonly so a stray tap can never summon the Pi's software keyboard */
@@ -182,9 +184,9 @@ window.KIOSK_SETTINGS_POLL_MS = 30000;
   body.pi-kiosk button { cursor: pointer; touch-action: manipulation; }
   /* Generous tap targets: this is a standing user, not a phone user. */
   body.pi-kiosk .btn-kiosk { padding: 16px 28px; font-size: 19px; min-height: 56px; }
-  body.pi-kiosk .pin-section input { font-size: 40px; padding: 18px; min-height: 72px; }
+  body.pi-kiosk .pin-section input { font-size: 26px; letter-spacing: 7px; padding: 10px 6px; min-height: 48px; }
   body.pi-kiosk .pin-section { gap: 12px; }
-  body.pi-kiosk .pk-key { padding: 24px 0; font-size: 34px; min-height: 84px; }
+  body.pi-kiosk .pk-key { padding: 16px 0; font-size: 26px; min-height: 60px; }
   body.pi-kiosk .confirm-card button { min-height: 64px; font-size: 20px; }
   body.pi-kiosk #qrCanvas { width: 190px; height: 190px; display: block; }
   body.pi-kiosk .confirm-avatar { width: 92px; height: 92px; font-size: 40px; }
@@ -805,7 +807,7 @@ function throttledUnknownLog(distance) {
 /* ===== REMOTE KIOSK CONTROL (admin) ===== */
 // Must match APP_VERSION in netlify/functions/_shared.js. If the deployed
 // version differs, the kiosk reloads itself so it never runs a stale page.
-var KIOSK_APP_VERSION = '2026.10.14-41';
+var KIOSK_APP_VERSION = '2026.10.14-42';
 var kioskState = { face_login_enabled: true, maintenance_mode: false, maintenance_message: '' };
 var kioskSettingsTimer = null;
 var cameraStoppedForMaint = false;
