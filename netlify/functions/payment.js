@@ -13,10 +13,15 @@ const SIMULATE_ENABLED = process.env.PAYMENT_ALLOW_SIMULATE === 'true';
 exports.handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') return json({});
 
-  if (event.httpMethod !== 'POST') return err('Method not allowed', 405);
-
   const url = new URL(event.rawUrl);
   const action = url.searchParams.get('action');
+
+  // check-status is a read-only "has the payment landed yet" poll that the
+  // customer page calls repeatedly, so it has to accept GET. Everything else
+  // here settles money and is POST-only.
+  if (action !== 'check-status' && event.httpMethod !== 'POST') {
+    return err('Method not allowed', 405);
+  }
 
   // Both of these settle money, so both require a logged-in staff session.
   // They used to be open to the internet: anyone could POST a job id and get
