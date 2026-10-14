@@ -291,14 +291,26 @@ async function reportSupplies(event) {
   } else {
     write = await supabaseRequest('PATCH', '/printer_status?id=eq.' + cur.data[0].id, row);
 
-    // The toner columns were NOT NULL until migration 20261014 made them
-    // nullable. Without this fallback an unreadable printer would fail the
-    // whole write with a 23502, so the status could never even be recorded as
-    // "unknown" -- the exact case the null was added to represent.
-    if (write.error && JSON.stringify(write.data || '').includes('23502')) {
+    const errText = JSON.stringify(write.data || '');
+
+    // Fallback 1: the supply columns were NOT NULL until migration
+    // 20261014_printer_status_nullable made them nullable. Record the status
+    // on its own so "no reading" is still visible even before that runs.
+    if (write.error && errText.includes('23502')) {
       const fallback = { status: row.status, last_checked: row.last_checked };
       if (row.paper_level !== undefined) fallback.paper_level = row.paper_level;
       write = await supabaseRequest('PATCH', '/printer_status?id=eq.' + cur.data[0].id, fallback);
+    }
+
+    // Fallback 2: the status CHECK constraint originally allowed only
+    // ('online','offline','jam_minor','jam_major'), so both 'low' and
+    // 'unknown' were rejected. Degrade to 'offline', which is truthful --
+    // a printer we cannot read or that is low on toner is not available.
+    if (write.error && JSON.stringify(write.data || '').includes('23514')) {
+      write = await supabaseRequest('PATCH', '/printer_status?id=eq.' + cur.data[0].id, {
+        status: 'offline', last_checked: row.last_checked
+      });
+      if (!write.error) row.status = 'offline';
     }
   }
   if (write.error) return err('Failed to store supplies', 500);

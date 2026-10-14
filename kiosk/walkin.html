@@ -1281,6 +1281,9 @@ function loadPrinterStatus() {
         dot.className = 'dot dot-red';
         line.textContent = status === 'unknown' ? 'Status unknown - printer not reporting'
           : 'Offline - please see staff';
+      } else if (status === 'low') {
+        dot.className = 'dot dot-yellow';
+        line.textContent = 'Low on toner - please see staff';
       } else if (status.indexOf('jam') !== -1) {
         dot.className = 'dot dot-red';
         line.textContent = (p.jam_type === 'major' ? 'Major' : 'Minor') + ' paper jam - ' + (p.jam_type === 'major' ? 'refund issued' : 'auto reprint queued');
