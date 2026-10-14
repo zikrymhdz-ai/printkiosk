@@ -70,9 +70,29 @@ EOF
 # customer's document to the wrong machine is worse than printing nothing.
 discover_printer_uri() {
   local candidates c name match=""
-  candidates="$(lpinfo -v 2>/dev/null | awk '/^network/{print $2}')"
 
-  # 1. The queue CUPS already uses, if it answers.
+  # 1. A matching device advertised over mDNS, preferred. It survives the
+  #    printer being given a different IP, which a bare ipp://address cannot.
+  candidates="$(lpinfo -v 2>/dev/null | awk '/^network/{print $2}')"
+  for c in $candidates; do
+    case "$c" in
+      dnssd://*|ipps://*) ;;
+      *) continue ;;
+    esac
+    ipp_answers "$c" || continue
+    name="$(printer_name "$c")"
+    if [ -z "$EXPECTED_MODEL" ] || printf '%s' "$name" | grep -qi "$EXPECTED_MODEL"; then
+      if [ -n "$match" ]; then
+        warn "two printers match '$EXPECTED_MODEL'; not guessing. Refusing to choose."
+        return 1
+      fi
+      match="$c"
+    fi
+  done
+  [ -n "$match" ] && { echo "$match"; return 0; }
+
+  # 2. Otherwise fall back to whatever the CUPS queue already uses, which is
+  #    the URI printing is proven to work over.
   if command -v lpstat >/dev/null 2>&1 && [ -n "$QUEUE" ]; then
     local q
     q="$(lpstat -v "$QUEUE" 2>/dev/null | head -1 | awk '{print $3}')"
@@ -84,7 +104,7 @@ discover_printer_uri() {
     fi
   fi
 
-  # 2. Anything advertised, keeping only real matches.
+  # 3. Any other advertised device matching the model.
   for c in $candidates; do
     ipp_answers "$c" || continue
     name="$(printer_name "$c")"
@@ -119,11 +139,29 @@ show_printers
 Q_URI="$(lpstat -v "$QUEUE" 2>/dev/null | head -1 | awk '{print $3}')"
 if [ -n "$Q_URI" ] && ipp_answers "$Q_URI"; then
   ok "printer answers at $Q_URI"
-elif ipp_answers "ipp://Brother.local/ipp/print"; then
-  ok "printer answers at ipp://Brother.local/ipp/print (mDNS)"
 else
-  warn "NO PRINTER RESPONDING over IPP at all."
-  warn "  If '$EXPECTED_MODEL' is not listed above, it is powered off or off WiFi."
+  # Brother.local is not this printer's hostname -- that name never resolves,
+  # which is why a poll against it failed with "Name or service not known"
+  # even though the printer was on the network the whole time. Prefer the mDNS
+  # dnssd:// URI instead: it does not need to know the hostname or the IP.
+  DISCOVERED="$(discover_printer_uri)"
+  if [ -n "$DISCOVERED" ]; then
+    ok "printer answers at $DISCOVERED"
+    # The queue itself is also pointed at the dead address, so printing would
+    # fail even once supply polling works. Repoint it.
+    if [ "$DISCOVERED" != "$Q_URI" ]; then
+      say "Repointing the CUPS queue"
+      if sudo lpadmin -p "$QUEUE" -E -v "$DISCOVERED" -m everywhere 2>/dev/null; then
+        ok "queue '$QUEUE' now uses $DISCOVERED"
+      else
+        warn "could not repoint the queue - run this manually:"
+        printf '     sudo lpadmin -p %s -E -v "%s" -m everywhere\n' "$QUEUE" "$DISCOVERED"
+      fi
+    fi
+  else
+    warn "NO '$EXPECTED_MODEL' RESPONDING over IPP."
+    warn "  devices seen above; if yours is not listed it is off WiFi."
+  fi
 fi
 
 # ---------------------------------------------------------------- dependencies
