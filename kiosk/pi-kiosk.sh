@@ -127,7 +127,7 @@ exec "$CHROMIUM" \
   --noerrdialogs \
   --disable-infobars \
   --disable-session-crashed-bubble \
-  --disable-features=TranslateUI,Translate \
+  --disable-features=TranslateUI,Translate,CalculateNativeWinOcclusion \
   --overscroll-history-navigation=0 \
   --touch-events=enabled \
   --autoplay-policy=no-user-gesture-required \
@@ -139,7 +139,6 @@ exec "$CHROMIUM" \
   --disable-background-timer-throttling \
   --disable-renderer-backgrounding \
   --disable-backgrounding-occluded-windows \
-  --disable-features=TranslateUI,Translate,CalculateNativeWinOcclusion \
   --force-device-scale-factor=1 \
   --enable-logging=stderr \
   --v=0 \

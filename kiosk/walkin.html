@@ -826,7 +826,7 @@ function throttledUnknownLog(distance) {
 /* ===== REMOTE KIOSK CONTROL (admin) ===== */
 // Must match APP_VERSION in netlify/functions/_shared.js. If the deployed
 // version differs, the kiosk reloads itself so it never runs a stale page.
-var KIOSK_APP_VERSION = '2026.10.14-52';
+var KIOSK_APP_VERSION = '2026.10.14-53';
 var kioskState = { face_login_enabled: true, maintenance_mode: false, maintenance_message: '' };
 var kioskSettingsTimer = null;
 var cameraStoppedForMaint = false;
@@ -1167,6 +1167,9 @@ async function openCamera() {
     return await openCameraInner();
   } catch (e) {
     piLog('openCamera threw: ' + e.message);
+    window.__pkCamError = e.name === 'NotAllowedError'
+      ? 'Permission denied by the browser'
+      : (e.message || 'Unknown error');
     return false;
   } finally {
     __camOpening = false;
@@ -1179,6 +1182,7 @@ async function openCameraInner() {
 
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
     document.getElementById('camStatus').innerHTML = '<span class="dot dot-red"></span> No camera API';
+    window.__pkCamError = 'This browser will not give the page camera access';
     piLog('getUserMedia unavailable (not a secure context?)');
     return false;
   }
@@ -1187,9 +1191,11 @@ async function openCameraInner() {
   // empty the problem is OS-level (no v4l2 device / wrong permissions) rather
   // than the constraint below. It is time-bound because it can stall in kiosk
   // mode, which would otherwise hide every camera error behind "Starting...".
+  var camCount = -1;
   try {
     var devs = await withTimeout(navigator.mediaDevices.enumerateDevices(), 8000, 'enumerateDevices');
     var cams = devs.filter(function (d) { return d.kind === 'videoinput'; });
+    camCount = cams.length;
     piLog('cameras seen: ' + cams.length);
     cams.forEach(function (c, i) { piLog('  cam' + i + ': ' + (c.label || '(no label - check permissions)')); });
   } catch (e) { piLog('enumerateDevices failed: ' + e.message); }
@@ -1231,8 +1237,23 @@ async function openCameraInner() {
 
   var msg = lastErr ? lastErr.name + ' ' + lastErr.message : 'unknown';
   document.getElementById('camStatus').innerHTML = '<span class="dot dot-yellow"></span> Camera blocked';
-  document.getElementById('faceStatusText').textContent = 'Camera unavailable - retrying...';
   piLog('camera FAILED all attempts: ' + msg);
+
+  // Turn the browser's error code into something a person can act on. The
+  // generic "Camera unavailable" was useless: it looked identical whether the
+  // webcam was unplugged, the OS denied it, or the page was not on a secure
+  // origin.
+  if (camCount === 0) {
+    window.__pkCamError = 'No camera detected - check it is plugged in and not in use by another app';
+  } else if (lastErr && lastErr.name === 'NotAllowedError') {
+    window.__pkCamError = 'The browser blocked camera access - restart the kiosk screen to retry';
+  } else if (lastErr && lastErr.name === 'NotFoundError') {
+    window.__pkCamError = 'No camera detected - check it is plugged in';
+  } else if (lastErr && lastErr.name === 'NotReadableError') {
+    window.__pkCamError = 'The camera is already in use by another application';
+  } else {
+    window.__pkCamError = 'Camera could not be started';
+  }
   return false;
 }
 
@@ -1833,32 +1854,50 @@ function applyCameraUi() {
 
 async function toggleCamera() {
   var btn = document.getElementById('camToggleBtn');
-  if (btn) btn.disabled = true;
 
-  try {
-    if (cameraOn) {
-      cameraOn = false;
-      resetFaceStreak();
-      stopCamera();
-      applyCameraUi();
-      setFaceStatus('Camera off', 'dot');
-    } else {
-      setFaceStatus('Starting camera...', 'dot-yellow');
-      var ok = await openCamera();
-      if (!ok) { scheduleCameraRetry(); return; }
-      cameraOn = true;
-      resetFaceStreak();
-      applyCameraUi();
-      setFaceStatus('Looking for you...', 'dot-yellow');
-    }
-  } catch (e) {
-    piLog('camera toggle failed: ' + e.message);
+  // Turning off is immediate and always allowed.
+  if (cameraOn) {
     cameraOn = false;
+    resetFaceStreak();
+    stopCamera();
     applyCameraUi();
-    setFaceStatus('Camera unavailable - use your PIN', 'dot-red');
-  } finally {
-    if (btn) btn.disabled = false;
+    setFaceStatus('Camera off', 'dot');
+    return;
   }
+
+  if (btn) { btn.disabled = true; btn.textContent = 'Starting...'; }
+  setFaceStatus('Starting camera...', 'dot-yellow');
+
+  var ok = false;
+  var why = '';
+  try {
+    ok = await openCamera();
+    if (!ok) why = window.__pkCamError || 'Camera could not be started';
+  } catch (e) {
+    why = e.message || String(e);
+  }
+
+  cameraOn = !!ok;
+
+  // Update the UI whichever way this went. The previous version returned early
+  // on failure, so a failed attempt left the button saying "Turn on camera" and
+  // the status stuck on "Starting camera..." -- indistinguishable from a button
+  // that does nothing.
+  if (ok) {
+    resetFaceStreak();
+    setFaceStatus('Looking for you...', 'dot-yellow');
+  } else {
+    setFaceStatus('Camera not available', 'dot-red');
+    var hint = document.getElementById('camHint');
+    if (hint) hint.textContent = why;
+    piLog('camera toggle failed: ' + why);
+    // Do not leave a background retry looping against a camera that is not
+    // there; the user can try again.
+    if (window.__camRetryTimer) { clearTimeout(window.__camRetryTimer); window.__camRetryTimer = null; }
+  }
+
+  if (btn) btn.disabled = false;
+  applyCameraUi();
 }
 
 function setFaceStatus(text, dotClass) {
