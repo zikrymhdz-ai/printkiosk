@@ -53,7 +53,7 @@ if (isPi) {
     // Detection runs on the CPU (single-threaded WASM), so every pass stalls
     // the video preview. Detect less often and on a smaller frame: the picture
     // stays smooth and recognition is still fast enough to log someone in.
-    window.FACE_MIN_INTERVAL_MS = 400;
+    window.FACE_MIN_INTERVAL_MS = 200;
     window.FACE_DETECT_WIDTH = 256;
     // Floor for the adaptive throttle. The detect loop measures how long its own
     // inference actually takes and stretches the gap when passes are slow, so a
@@ -743,6 +743,7 @@ function startKioskHeartbeat() {
     face_diag: window.__pkFaceDiag ? (function() {
       var d = window.__pkFaceDiag;
       return 'dist=' + d.distance + '/' + d.threshold
+        + ' mean=' + (d.mean === null ? '-' : d.mean) + '/' + d.meanThreshold
         + ' face=' + d.facePx + 'px(' + d.ratio + ' of ' + d.frameW + ')'
         + ' min=' + d.minRatio
         + (d.tooSmall ? ' TOO_SMALL' : ' size_ok')
@@ -842,7 +843,7 @@ function throttledUnknownLog(distance) {
 /* ===== REMOTE KIOSK CONTROL (admin) ===== */
 // Must match APP_VERSION in netlify/functions/_shared.js. If the deployed
 // version differs, the kiosk reloads itself so it never runs a stale page.
-var KIOSK_APP_VERSION = '2026.10.14-60';
+var KIOSK_APP_VERSION = '2026.10.14-61';
 
 // Latest printer verdict from the backend: can we print, and if not why.
 // Refreshed by loadPrinterStatus() and consulted by printTapped() at the
@@ -1473,10 +1474,22 @@ var FACE_MATCH_THRESHOLD = 0.48;
 // logged "Face matched!" and then threw the match away every single time.
 //
 // One constant, used as both the trigger and the requirement, so the two can
-// never contradict each other again. At FACE_MIN_INTERVAL_MS = 400 that is
-// about 2 seconds of holding still, which is a natural amount of time to ask
-// someone to stand at a kiosk and is far longer than a passer-by glancing in.
-var FACE_HOLD_FRAMES = 5;
+// never contradict each other again.
+var FACE_HOLD_FRAMES = 3;
+
+// The MEAN descriptor distance across the streak must be at or below this to
+// commit a sign-in. This is deliberately TIGHTER than FACE_MATCH_THRESHOLD.
+//
+// Cutting the hold from 5 frames to 3 would otherwise have made recognition
+// faster and sloppier, trading away exactly the false positives the hold
+// existed to prevent. Instead the streak is used as evidence: the average has
+// to be a confident match, so one borderline frame riding in on two excellent
+// ones cannot carry a passer-by through. Per-frame distance still gates entry
+// to the streak, so a genuinely bad frame resets it either way.
+//
+// Net effect: 3 frames at a 200ms interval is ~0.6s to sign in, down from ~2s,
+// while the bar a face must clear is higher than it was at 5 frames.
+var FACE_MEAN_THRESHOLD = 0.42;
 
 // Smallest acceptable face, as a fraction of the detection frame width.
 // Expressed as a ratio because the frame is downscaled to FACE_DETECT_WIDTH
@@ -1485,12 +1498,15 @@ var FACE_HOLD_FRAMES = 5;
 // rejects a face far off in the background but accepts someone at the kiosk.
 var FACE_MIN_FACE_RATIO = 0.12;
 
-var faceStreak = { count: 0, distance: null, box: null };
+var faceStreak = { count: 0, distance: null, box: null, sum: 0 };
 
 function resetFaceStreak() {
   faceStreak.count = 0;
   faceStreak.distance = null;
   faceStreak.box = null;
+  // sum must be cleared too, or a stale total from a previous attempt drags the
+  // mean down and lets a weak match through.
+  faceStreak.sum = 0;
 }
 
 async function startFaceDetection() {
@@ -1660,14 +1676,17 @@ async function detect() {
 
           if (match.label !== 'unknown' && match.distance < FACE_MATCH_THRESHOLD
               && bigEnough) {
-            faceStreak.count++;
-            faceStreak.distance = match.distance;
-            faceStreak.box = box;
+faceStreak.count++;
+        faceStreak.distance = match.distance;
+        faceStreak.sum += match.distance;
+        faceStreak.box = box;
+        const meanDistance = faceStreak.sum / faceStreak.count;
 
-if (faceStreak.count >= FACE_HOLD_FRAMES) {
-            matchCooldown = true;
-            document.getElementById('faceStatusText').textContent = 'Face matched!';
-            piLog('face held ' + faceStreak.count + ' frames, signing in');
+        if (faceStreak.count >= FACE_HOLD_FRAMES && meanDistance <= FACE_MEAN_THRESHOLD) {
+          matchCooldown = true;
+          document.getElementById('faceStatusText').textContent = 'Face matched!';
+          piLog('face held ' + faceStreak.count + ' frames, mean='
+            + meanDistance.toFixed(3) + ' signing in');
 
               const r = await fetch(API('data', 'get-user&id=' + match.label));
               const d = await r.json();
@@ -1702,6 +1721,8 @@ if (faceStreak.count >= FACE_HOLD_FRAMES) {
               window.__pkFaceDiag = {
                 distance: Math.round(match.distance * 1000) / 1000,
                 threshold: FACE_MATCH_THRESHOLD,
+                mean: faceStreak.count ? Math.round((faceStreak.sum / faceStreak.count) * 1000) / 1000 : null,
+                meanThreshold: FACE_MEAN_THRESHOLD,
                 facePx: Math.round(faceW),
                 frameW: Math.round(frameW),
                 ratio: Math.round(faceRatio * 1000) / 1000,
