@@ -9,16 +9,12 @@ Type=simple
 User=user
 WorkingDirectory=/home/user/printkiosk
 
-# The secret lives in this file (chmod 600), NOT in the repo -- the print-worker
-# secret must never be committed.
+# Everything the worker needs, including PRINT_WORKER_SECRET, lives in this
+# file (chmod 600) which install.sh discovers and writes. Do NOT repeat any of
+# these as Environment= here: the printer's address in particular changes, and
+# having it set in two places is how the worker ended up polling a printer
+# address that no longer existed while the CUPS queue used a different one.
 EnvironmentFile=/home/user/printkiosk/pi/print-worker.env
-Environment=PRINTKIOSK_API=https://printkioskfyp.netlify.app
-Environment=PRINTER_NAME=Brother
-# Must match how the CUPS queue reaches the printer. The default here
-# deliberately matches the queue's static address rather than an mDNS name:
-# if these two disagree, printing still works but supply polling fails
-# silently.
-Environment=PRINTER_URI=ipp://10.100.131.48:631/ipp/print
 
 ExecStart=/usr/bin/python3 /home/user/printkiosk/pi/print-worker.py
 

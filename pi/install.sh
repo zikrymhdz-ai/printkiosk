@@ -22,6 +22,40 @@ ok()   { printf '  \033[32mOK\033[0m  %s\n' "$1"; }
 warn() { printf '  \033[33m!!\033[0m  %s\n' "$1"; }
 die()  { printf '  \033[31mXX\033[0m  %s\n' "$1"; exit 1; }
 
+# ---------------------------------------------------------------------------
+# Printer discovery
+#
+# Tries every IPP device the network advertises (including mDNS names) and
+# returns the first one that actually answers a Get-Printer-Attributes. A
+# reachable-looking entry is not enough: a stale dnssd URI resolves and then
+# fails to connect, which is exactly the failure this replaces.
+# ---------------------------------------------------------------------------
+ipp_answers() {
+  command -v ipptool >/dev/null 2>&1 || return 1
+  ipptool -tv "$1" /usr/share/cups/ipptool/get-printer-attributes.test >/dev/null 2>&1
+}
+
+discover_printer_uri() {
+  # 1. Anything the local CUPS already knows about (uses the queue's own URI,
+  #    which is the one printing is proven to work over).
+  if command -v lpstat >/dev/null 2>&1 && [ -n "$QUEUE" ]; then
+    local q
+    q="$(lpstat -v "$QUEUE" 2>/dev/null | head -1 | awk '{print $3}')"
+    if [ -n "$q" ] && ipp_answers "$q"; then
+      echo "$q"; return 0
+    fi
+  fi
+
+  # 2. Anything advertised over the network.
+  local candidates
+  candidates="$(lpinfo -v 2>/dev/null | awk '/^network/{print $2}')"
+  for c in $candidates; do
+    if ipp_answers "$c"; then echo "$c"; return 0; fi
+  done
+
+  return 1
+}
+
 # ---------------------------------------------------------------- prerequisites
 say "Checking prerequisites"
 command -v lpadmin >/dev/null 2>&1 || die "CUPS client not found. Run: sudo apt install -y cups-client"
@@ -32,6 +66,22 @@ command -v lpstat >/dev/null 2>&1 && lpstat -p "$QUEUE" >/dev/null 2>&1 \
   || warn "CUPS queue '$QUEUE' not found - create it before printing (see PRINTING.md)"
 
 [ -f "$PI_DIR/print-worker.py" ] || die "print-worker.py not found in $PI_DIR"
+
+# Fail early and clearly if the printer is not on the network. Installing
+# against a printer that has dropped off WiFi produces a worker that claims
+# everything works and then silently accepts no jobs.
+say "Checking the printer is reachable"
+Q_URI="$(lpstat -v "$QUEUE" 2>/dev/null | head -1 | awk '{print $3}')"
+if [ -n "$Q_URI" ] && ipp_answers "$Q_URI"; then
+  ok "printer answers at $Q_URI"
+elif ipp_answers "ipp://Brother.local/ipp/print"; then
+  ok "printer answers at ipp://Brother.local/ipp/print (mDNS)"
+else
+  warn "NO PRINTER RESPONDING over IPP."
+  warn "  candidates CUPS knows about:"
+  lpinfo -v 2>/dev/null | sed 's/^/    /' | head -10
+  warn "  Check the printer is powered on and joined to WiFi, then re-run."
+fi
 
 # ---------------------------------------------------------------- dependencies
 say "Installing Python dependencies"
@@ -58,17 +108,21 @@ else
     *) warn "does not start with pk_print_ - double-check it matches Netlify" ;;
   esac
   umask 077
-  # PRINTER_URI must match how the CUPS queue reaches the printer. The default
-  # installer wrote an mDNS name (Brother.local) while the queue itself was
-  # created with the static address, so the supply poll silently failed while
-  # printing kept working -- which looks like "the printer status does not
-  # follow the printer" rather than a config mismatch.
-  PRINTER_ADDR="${PRINTER_ADDR:-10.100.131.48}"
+  # Do NOT hardcode a printer address here. A fixed IP in this file was wrong
+  # twice: first an mDNS name while the CUPS queue used an address, then a
+  # static address that the printer later abandoned. Instead, discover it at
+  # install time and record whichever URI actually answers right now.
+  PRINTER_URI_FOUND="$(discover_printer_uri)"
+  if [ -z "$PRINTER_URI_FOUND" ]; then
+    die "No IPP printer found on this network.
+       Power the printer on and confirm it is joined to WiFi, then re-run.
+       To see candidates yourself:  lpinfo -v | grep -i ipp"
+  fi
   cat > "$ENV_FILE" <<EOF
 PRINT_WORKER_SECRET=$SECRET
 PRINTKIOSK_API=https://printkioskfyp.netlify.app
 PRINTER_NAME=$QUEUE
-PRINTER_URI=ipp://$PRINTER_ADDR:631/ipp/print
+PRINTER_URI=$PRINTER_URI_FOUND
 EOF
   chmod 600 "$ENV_FILE"
   ok "written to $ENV_FILE"
