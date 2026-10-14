@@ -143,13 +143,10 @@ window.KIOSK_SETTINGS_POLL_MS = 30000;
   .status-bar { display: flex; align-items: center; gap: 8px; padding: 8px 0; font-size: 13px; color: #475569; }
   .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex-shrink:0; }
   /* Camera is opt-in. Default off, so an unattended kiosk is not identifying
-     people who merely walk past it. */
-  .cam-toggle { width: 100%; margin-top: 4px; padding: 14px 0; border-radius: 12px;
-    border: 2px solid #bfdbfe; background: linear-gradient(135deg, #3b82f6, #2563eb);
-    color: #fff; font-size: 16px; font-weight: 700; cursor: pointer; font-family: inherit;
-    box-shadow: 0 4px 14px rgba(37,99,235,0.3); transition: transform 0.1s, background 0.2s, color 0.2s; }
-  .cam-toggle:active { transform: scale(0.97); }
-  .cam-toggle.cam-on { background: #ffffff; color: #1e3a8a; border-color: #94a3b8; box-shadow: none; }
+     people who merely walk past it. Uses the same button classes as every
+     other control here. */
+  .cam-toggle { width: 100%; margin-top: 4px; }
+  .cam-toggle.cam-on { background: #ffffff; color: #1e3a8a; border-color: #94a3b8; }
   .cam-toggle:disabled { opacity: 0.55; cursor: default; }
   .cam-hint { font-size: 12px; color: #64748b; text-align: center; margin: 8px 0 0; line-height: 1.5; }
   /* Camera off: deliberately inert rather than a black box that looks broken. */
@@ -380,8 +377,8 @@ window.addEventListener('load', function () {
 
     <!-- Camera is opt-in. Default off, so the kiosk is not identifying people
          who merely walk past it. -->
-    <button class="cam-toggle" id="camToggleBtn" onclick="toggleCamera()">Turn on camera</button>
-    <p class="cam-hint" id="camHint">Face recognition is off. Turn the camera on to sign in with your face, or enter your PIN below.</p>
+    <button class="btn-kiosk btn-secondary-kiosk cam-toggle" id="camToggleBtn" onclick="toggleCamera()">Turn on camera</button>
+    <p class="cam-hint" id="camHint">Camera is off</p>
   </div>
 
   <!-- MIDDLE: OTP PIN + on-screen keypad -->
@@ -1827,9 +1824,7 @@ function applyCameraUi() {
     btn.className = 'cam-toggle' + (cameraOn ? ' cam-on' : '');
   }
   if (hint) {
-    hint.textContent = cameraOn
-      ? 'Looking for you. Step closer and face the camera. Turn the camera off to stop.'
-      : 'Face recognition is off. Turn the camera on to sign in with your face, or enter your PIN below.';
+    hint.textContent = cameraOn ? 'Looking for you. Step closer and face the camera.' : 'Camera is off';
   }
   if (box) box.classList.toggle('cam-idle', !cameraOn);
   if (cam && !cameraOn) cam.style.visibility = 'hidden';

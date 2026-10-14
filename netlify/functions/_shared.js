@@ -341,6 +341,42 @@ async function assignUniqueMatchAmount(basePrice) {
   return { total: (baseCents + 9) / 100, fee: 0.09, base: baseCents / 100, crowded: true };
 }
 
+// Allocates a unique fee and inserts the job, retrying if another upload took
+// the same slot in between.
+//
+// Reading "which totals are taken" and then inserting is not atomic, so two
+// uploads a second apart both saw 0.29 free and both used it. Four jobs ended
+// up priced identically, which made the incoming payments ambiguous -- real
+// money arrived and could not be matched to a job, so it was parked for staff
+// while the customer stood at a kiosk that never printed.
+//
+// The database enforces uniqueness (see migration 20261014_unique_pending_total);
+// this loop handles the resulting conflict by moving to the next free slot.
+async function createJobWithUniqueFee(jobData, extendedFields) {
+  const attempts = 12;
+
+  for (let i = 0; i < attempts; i++) {
+    const pricing = await assignUniqueMatchAmount(jobData.__basePrice);
+    const row = Object.assign({}, jobData, extendedFields, {
+      total_price: pricing.total,
+      base_price: pricing.base,
+      match_fee: pricing.fee
+    });
+    delete row.__basePrice;
+
+    const result = await supabaseRequest('POST', '/print_jobs', row);
+    if (!result.error) return { result: result, pricing: pricing };
+
+    // 23505 = unique_violation: someone claimed this exact total first.
+    const text = JSON.stringify(result.data || '');
+    if (text.includes('23505') || text.includes('duplicate key')) continue;
+
+    return { result: result, pricing: pricing };
+  }
+
+  return { result: { error: true, message: 'Could not reserve a unique payment amount' }, pricing: null };
+}
+
 async function supabaseStorageUpload(bucket, path, fileBuffer, contentType) {
   const url = SUPABASE_URL + '/storage/v1/object/' + bucket + '/' + path;
   const headers = {
@@ -464,7 +500,7 @@ module.exports = {
   SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM_NAME,
   VERIFICATION_CODE_LENGTH, VERIFICATION_CODE_TTL,
   corsHeaders, json, err, supabaseRequest, generateJobId, safeEqual,
-  generateSessionToken, validateSession, calculatePrice, assignUniqueMatchAmount,
+  generateSessionToken, validateSession, calculatePrice, assignUniqueMatchAmount, createJobWithUniqueFee,
   generateVerificationCode, isValidGmail, isValidMalaysianPhone,
   normalizePhone, sendVerificationEmail, smtpSend,
   supabaseStorageUpload, supabaseStorageSignedUrl, supabaseStorageDelete, parseMultipartFormData, EXT_MIME_MAP

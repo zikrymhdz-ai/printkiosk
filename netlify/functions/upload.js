@@ -1,4 +1,4 @@
-const { json, err, supabaseRequest, validateSession, generateJobId, calculatePrice, assignUniqueMatchAmount, ALLOWED_EXTENSIONS, SUPABASE_URL, supabaseStorageSignedUrl, parseMultipartFormData, EXT_MIME_MAP } = require('./_shared');
+const { json, err, supabaseRequest, validateSession, generateJobId, calculatePrice, assignUniqueMatchAmount, createJobWithUniqueFee, ALLOWED_EXTENSIONS, SUPABASE_URL, supabaseStorageSignedUrl, parseMultipartFormData, EXT_MIME_MAP } = require('./_shared');
 
 exports.handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') return json({});
@@ -174,23 +174,26 @@ async function handleUpload(event) {
       file_type: fileType,
       pages, color_mode: colorMode, paper_size: paperSize, sides, copies,
       brightness, contrast, crop_mode: cropMode, finish,
+      __basePrice: basePrice,
       total_price: pricing.total,
       status: 'pending',
       paid: false,
       print_pin: printPin
     };
 
-    // New columns are optional so the site keeps working before the migration runs.
-    const extended = Object.assign({}, jobData, {
+    // Allocate a unique total and insert atomically-ish: if another upload took
+    // this exact total in the same instant, retry with the next free slot
+    // instead of creating a second job with an identical price.
+    const { result, pricing: usedPricing } = await createJobWithUniqueFee(jobData, {
       page_spec: pageSpec,
-      base_price: pricing.base,
-      match_fee: pricing.fee,
       selection_mode: selectionMode
     });
 
-    let result = await supabaseRequest('POST', '/print_jobs', extended);
     if (result.error) {
-      result = await supabaseRequest('POST', '/print_jobs', jobData);
+      // Fall back to the pre-migration column set so the site keeps working if
+      // the lifecycle columns are not present yet.
+      const legacy = Object.assign({}, jobData, { total_price: usedPricing ? usedPricing.total : basePrice });
+      result = await supabaseRequest('POST', '/print_jobs', legacy);
       if (result.error) {
         return err('Failed to create print job: ' + (result.message || ''), 500);
       }
@@ -267,27 +270,25 @@ async function handleUpload(event) {
       file_type: fileType,
       pages, color_mode: colorMode, paper_size: paperSize, sides, copies,
       brightness, contrast, crop_mode: cropMode, finish,
+      __basePrice: basePrice,
       total_price: pricing.total,
       status: 'pending',
       paid: false,
       print_pin: printPin
     };
 
-    const extended = Object.assign({}, jobData, {
+    const { result, pricing: usedPricing } = await createJobWithUniqueFee(jobData, {
       page_spec: pageSpec,
-      base_price: pricing.base,
-      match_fee: pricing.fee,
       selection_mode: selectionMode
     });
 
-    let result = await supabaseRequest('POST', '/print_jobs', extended);
     if (result.error) {
-      result = await supabaseRequest('POST', '/print_jobs', jobData);
+      const legacy = Object.assign({}, jobData, { total_price: usedPricing ? usedPricing.total : basePrice });
+      result = await supabaseRequest('POST', '/print_jobs', legacy);
       if (result.error) {
         return err('Failed to create print job: ' + (result.message || ''), 500);
       }
     }
-
     const createdJob = result.data[0];
 
     if (Number(createdJob.total_price) === 0) {
