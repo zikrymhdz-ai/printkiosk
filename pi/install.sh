@@ -16,6 +16,11 @@ APP_DIR="$HOME/printkiosk"
 PI_DIR="$APP_DIR/pi"
 ENV_FILE="$PI_DIR/print-worker.env"
 QUEUE="Brother"
+# The worker must point at this specific model. Several printers on this
+# network advertise IPP (a Brother DCP-T430W and an HP LaserJet have both
+# turned up), and printing a customer's job to the wrong machine is worse
+# than printing nothing at all.
+EXPECTED_MODEL="${EXPECTED_MODEL:-HL-L3240CDW}"
 
 say()  { printf '\n\033[1;34m==> %s\033[0m\n' "$1"; }
 ok()   { printf '  \033[32mOK\033[0m  %s\n' "$1"; }
@@ -35,24 +40,63 @@ ipp_answers() {
   ipptool -tv "$1" /usr/share/cups/ipptool/get-printer-attributes.test >/dev/null 2>&1
 }
 
+# Ask a printer what it calls itself. Used to make sure we are not pointing the
+# worker at the wrong physical machine.
+printer_name() {
+  command -v ipptool >/dev/null 2>&1 || return 1
+  # ipptool emits e.g. "[0] printer-name (name) = Brother HL-L3240CDW series".
+  # Both ends need trimming: the value is left-padded after the '=' is consumed,
+  # and without stripping it every model comparison below fails on a stray space.
+  ipptool -tv "$1" /usr/share/cups/ipptool/get-printer-attributes.test 2>/dev/null |
+    grep -i 'printer-name' | head -1 |
+    sed 's/^[[:space:]]*//; s/.*printer-name[^=]*=[[:space:]]*//; s/[[:space:]]*(\(integer\|text\|name\)).*//; s/[[:space:]]*$//'
+}
+
+# Lists what is actually on the network, with the model each device reports.
+show_printers() {
+  local c name
+  echo "  IPP devices visible:"
+  while read -r c; do
+    [ -n "$c" ] || continue
+    name="$(printer_name "$c")"
+    printf '    %-58s %s\n' "$c" "${name:-<no reply>}"
+  done <<EOF
+$(lpinfo -v 2>/dev/null | awk '/^network/{print $2}')
+EOF
+}
+
+# Returns the URI to use. Prefers a device whose reported model matches
+# EXPECTED_MODEL. Refuses to guess if several match, because printing a
+# customer's document to the wrong machine is worse than printing nothing.
 discover_printer_uri() {
-  # 1. Anything the local CUPS already knows about (uses the queue's own URI,
-  #    which is the one printing is proven to work over).
+  local candidates c name match=""
+  candidates="$(lpinfo -v 2>/dev/null | awk '/^network/{print $2}')"
+
+  # 1. The queue CUPS already uses, if it answers.
   if command -v lpstat >/dev/null 2>&1 && [ -n "$QUEUE" ]; then
     local q
     q="$(lpstat -v "$QUEUE" 2>/dev/null | head -1 | awk '{print $3}')"
     if [ -n "$q" ] && ipp_answers "$q"; then
-      echo "$q"; return 0
+      name="$(printer_name "$q")"
+      if [ -z "$EXPECTED_MODEL" ] || printf '%s' "$name" | grep -qi "$EXPECTED_MODEL"; then
+        echo "$q"; return 0
+      fi
     fi
   fi
 
-  # 2. Anything advertised over the network.
-  local candidates
-  candidates="$(lpinfo -v 2>/dev/null | awk '/^network/{print $2}')"
+  # 2. Anything advertised, keeping only real matches.
   for c in $candidates; do
-    if ipp_answers "$c"; then echo "$c"; return 0; fi
+    ipp_answers "$c" || continue
+    name="$(printer_name "$c")"
+    if [ -z "$EXPECTED_MODEL" ] || printf '%s' "$name" | grep -qi "$EXPECTED_MODEL"; then
+      if [ -n "$match" ]; then
+        warn "two printers match '$EXPECTED_MODEL'; not guessing. Refusing to choose."
+        return 1
+      fi
+      match="$c"
+    fi
   done
-
+  [ -n "$match" ] && { echo "$match"; return 0; }
   return 1
 }
 
@@ -71,16 +115,15 @@ command -v lpstat >/dev/null 2>&1 && lpstat -p "$QUEUE" >/dev/null 2>&1 \
 # against a printer that has dropped off WiFi produces a worker that claims
 # everything works and then silently accepts no jobs.
 say "Checking the printer is reachable"
+show_printers
 Q_URI="$(lpstat -v "$QUEUE" 2>/dev/null | head -1 | awk '{print $3}')"
 if [ -n "$Q_URI" ] && ipp_answers "$Q_URI"; then
   ok "printer answers at $Q_URI"
 elif ipp_answers "ipp://Brother.local/ipp/print"; then
   ok "printer answers at ipp://Brother.local/ipp/print (mDNS)"
 else
-  warn "NO PRINTER RESPONDING over IPP."
-  warn "  candidates CUPS knows about:"
-  lpinfo -v 2>/dev/null | sed 's/^/    /' | head -10
-  warn "  Check the printer is powered on and joined to WiFi, then re-run."
+  warn "NO PRINTER RESPONDING over IPP at all."
+  warn "  If '$EXPECTED_MODEL' is not listed above, it is powered off or off WiFi."
 fi
 
 # ---------------------------------------------------------------- dependencies
