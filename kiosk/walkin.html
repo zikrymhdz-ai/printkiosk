@@ -572,6 +572,12 @@ window.addEventListener('load', function () {
       <span style="font-size:13px; color:#60a5fa;">You earned <strong id="receiptCoins">0</strong> coins</span>
     </div>
     <button class="btn-kiosk btn-primary-kiosk" style="width:100%;" onclick="printTapped()" id="receiptDoneBtn">Print My Document</button>
+    <!-- Cancels the PRINT, not the payment. A customer who typed the wrong code
+         still owes nothing extra and the document is still theirs: the job stays
+         paid and pending, so the correct code can be entered straight away, or
+         staff can print it later. Nothing here releases a job to the printer -
+         only printTapped() does that. -->
+    <button class="btn-kiosk btn-secondary-kiosk" style="width:100%; margin-top:10px;" onclick="cancelPrintTapped()" id="receiptCancelBtn">Cancel - do not print this</button>
     <div id="paperWarn" class="hidden" style="margin-top:12px; padding:12px 14px; border-radius:10px; background:#fff7ed; border:1px solid #fdba74; text-align:left;">
       <div style="font-size:14px; font-weight:700; color:#c2410c;" id="paperWarnTitle">Paper running low</div>
       <div style="font-size:13px; color:#9a3412; margin-top:4px;" id="paperWarnBody">Please top up the paper tray before printing.</div>
@@ -849,7 +855,7 @@ function throttledUnknownLog(distance) {
 /* ===== REMOTE KIOSK CONTROL (admin) ===== */
 // Must match APP_VERSION in netlify/functions/_shared.js. If the deployed
 // version differs, the kiosk reloads itself so it never runs a stale page.
-var KIOSK_APP_VERSION = '2026.10.14-91';
+var KIOSK_APP_VERSION = '2026.10.14-92';
 
 // Latest printer verdict from the backend: can we print, and if not why.
 // Refreshed by loadPrinterStatus() and consulted by printTapped() at the
@@ -2305,6 +2311,47 @@ function printTapped() {
   if (warn) warn.classList.add('hidden');
   if (btn) { btn.disabled = false; btn.style.opacity = '1'; }
   closeReceipt();
+}
+
+/* Cancel the print from the receipt screen.
+ *
+ * This deliberately does NOT call request-print and does NOT touch the payment
+ * or the job status. The customer has already paid, and the document is still
+ * theirs - so the job stays paid and pending, ready for the correct code or for
+ * staff. Cancelling here only steps back one screen.
+ *
+ * The trap this avoids: "cancel" that quietly voided or refunded the job would
+ * take money back and lose the document; "cancel" that called request-print
+ * would print the very document the customer meant to refuse. Neither happens.
+ */
+function cancelPrintTapped() {
+  var overlay = document.getElementById('receiptOverlay');
+  var warn = document.getElementById('paperWarn');
+  if (warn) warn.classList.add('hidden');
+
+  // Drop the held job so nothing can print it from a later tap by accident.
+  currentPinJob = null;
+  currentPinJobId = null;
+  currentPinJobs = [];
+
+  if (overlay) overlay.classList.add('hidden');
+
+  var btn = document.getElementById('receiptDoneBtn');
+  if (btn) { btn.disabled = false; btn.textContent = 'Print My Document'; btn.style.opacity = '1'; }
+
+  var input = document.getElementById('pinInput');
+  if (input) {
+    input.value = '';
+    try { input.focus(); } catch (e) { /* not fatal if it cannot take focus */ }
+  }
+
+  var hint = document.getElementById('kioskPinHint');
+  if (hint) {
+    hint.textContent = 'Not printed. Your payment is safe - enter the correct 6-digit '
+      + 'code to print your document.';
+  }
+  var fb = document.getElementById('pinFeedback');
+  if (fb) { fb.style.display = 'none'; fb.textContent = ''; }
 }
 
 function closeReceipt() {
