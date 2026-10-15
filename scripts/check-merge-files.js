@@ -133,6 +133,67 @@ function get(url) {
     ok(r.pages === 5, 'five files (the cap) combine cleanly');
   }
 
+  // 8. THE REPORTED CASE: one image plus one PDF where the customer picked
+  //    pages 3,5 of 5. The selection must survive the merge, or the customer is
+  //    billed and printed for all 5 pages - and then pays the 2-page amount,
+  //    which is why their payment stopped matching.
+  {
+    const pdf = await pdfOf(5, 'report.pdf');
+    const img = await pngOf('photo.png');
+    const prepared = await PK.prepareForMerge([
+      { file: img, settings: { page_spec: 'all' } },
+      { file: pdf, settings: { page_spec: '3,5' } },
+    ]);
+    ok(prepared.length === 2, 'both documents are prepared for the merge');
+
+    const r = await PK.mergeIntoPdf(prepared);
+    ok(r.pages === 3, 'image + selected pages 3,5 come to 3 pages, got ' + r.pages);
+
+    const back = await PDFDoc.load(await r.file.arrayBuffer());
+    ok(back.getPageCount() === 3, 'the merged file really has 3 pages, not 6');
+
+    // The image is 1x1px, so its page is 1x1pt; the PDF sheets are 200x300pt.
+    // Checking the sizes proves the image was kept and the order is right.
+    const p1 = back.getPage(0).getSize();
+    const p2 = back.getPage(1).getSize();
+    ok(p1.width === 1 && p1.height === 1, 'page 1 is the image, not a blank sheet');
+    ok(p2.width === 200 && p2.height === 300, 'page 2 is a sheet taken from the PDF');
+    ok(back.getPageCount() === 3, 'page 3 is the PDF sheet for page 5');
+  }
+
+  // 9. Every page selected explicitly is the whole document, so nothing is lost.
+  {
+    const pdf = await pdfOf(3, 'three.pdf');
+    const prepared = await PK.prepareForMerge([
+      { file: pdf, settings: { page_spec: '1,2,3' } },
+    ]);
+    const r = await PK.mergeIntoPdf(prepared);
+    ok(r.pages === 3, 'selecting 1,2,3 of 3 pages keeps all 3, got ' + r.pages);
+  }
+
+  // 10. A selection on an image is ignored - an image is one page anyway - and
+  //     must not throw or drop the file.
+  {
+    const img = await pngOf('photo.png');
+    const prepared = await PK.prepareForMerge([
+      { file: img, settings: { page_spec: '2,4' } },
+    ]);
+    ok(prepared.length === 1, 'an image is kept despite a page selection');
+    const r = await PK.mergeIntoPdf(prepared);
+    ok(r.pages === 1, 'an image stays one page');
+  }
+
+  // 11. A manual crop must be what gets merged, not the original.
+  {
+    const original = await pdfOf(2, 'uncropped.pdf');
+    const cropped = await pdfOf(1, 'uncropped.pdf');
+    const prepared = await PK.prepareForMerge([
+      { file: original, croppedFile: cropped, settings: { crop_mode: 'manual', page_spec: 'all' } },
+    ]);
+    const r = await PK.mergeIntoPdf(prepared);
+    ok(r.pages === 1, 'the cropped file is merged instead of the original (1 page, got ' + r.pages + ')');
+  }
+
   if (failed) { console.log('  -> ' + failed + ' failed'); process.exit(1); }
   console.log('  ok      multiple documents become one job with the right page count');
 })().catch(e => { console.log('  ERROR ' + (e && e.message)); console.log(e && e.stack); process.exit(1); });

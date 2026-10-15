@@ -13,6 +13,17 @@ const VERSION_FILE = path.join(ROOT, 'version.js');
 const SHARED = path.join(ROOT, 'netlify', 'functions', '_shared.js');
 const WALKIN = path.join(ROOT, 'kiosk', 'walkin.html');
 
+// Pages that load behaviour-carrying JS by a bare relative path.
+const STAMPED = [
+  path.join(ROOT, 'website', 'customer.html'),
+  path.join(ROOT, 'website', 'upload.html'),
+];
+// Replaced with the app version so a new deploy cannot be served a stale copy
+// out of the browser or the CDN cache. Without it the old pagerange.js kept
+// loading, so mergeIntoPdf was undefined and uploads stayed split into one job
+// per file even though the server had been fixed.
+const BUILD_TOKEN = '__PK_BUILD__';
+
 const target = require(VERSION_FILE).APP_VERSION;
 
 const SHARED_RE = /const APP_VERSION = '([^']+)'/;
@@ -35,11 +46,43 @@ function rewrite(file, re, name, value) {
   return true;
 }
 
+// Stamp the cache-busting query on every page that carries the placeholder.
+// Also rewrites an EXISTING stamp, because the placeholder is consumed on the
+// first run - matching only the token meant every later bump silently left the
+// pages pointing at the previous build.
+const ASSET_STAMP_RE = /(pagerange\.js|pstore\.js)\?v=[^"']*/g;
+
+function stampBuild(file) {
+  const rel = path.relative(ROOT, file);
+  const before = fs.readFileSync(file, 'utf8');
+  const hasToken = before.indexOf(BUILD_TOKEN) !== -1;
+  const hasStamp = ASSET_STAMP_RE.test(before);
+  ASSET_STAMP_RE.lastIndex = 0;
+
+  if (!hasToken && !hasStamp) {
+    throw new Error('neither ' + BUILD_TOKEN + ' nor a ?v= stamp found in ' + rel);
+  }
+
+  const after = before
+    .split(BUILD_TOKEN).join(target)
+    .replace(ASSET_STAMP_RE, '$1?v=' + target);
+
+  if (after === before) return false;
+  fs.writeFileSync(file, after);
+  console.log('  stamped  ' + rel + '  ?v=' + target);
+  return true;
+}
+
 console.log('syncing app version -> ' + target);
 const changed = [
   rewrite(SHARED, SHARED_RE, 'APP_VERSION', target),
   rewrite(WALKIN, WALKIN_RE, 'KIOSK_APP_VERSION', target),
 ];
+
+let stamped = 0;
+for (const file of STAMPED) {
+  if (stampBuild(file)) stamped++;
+}
 
 // Verify by re-reading, so a regex that silently failed to match cannot pass.
 const check = [
@@ -56,4 +99,17 @@ if (bad.length) {
   process.exit(1);
 }
 
-console.log(changed.length ? '\nversion synced.' : '\nalready in sync.');
+// No page may be left holding the placeholder, or it would request a script
+// literally named "?v=__PK_BUILD__" and get a 404.
+const unstamped = STAMPED.filter(function (f) {
+  return fs.readFileSync(f, 'utf8').indexOf(BUILD_TOKEN) !== -1;
+});
+if (unstamped.length) {
+  console.error('\nFAILED: build placeholder left in '
+    + unstamped.map(function (f) { return path.relative(ROOT, f); }).join(', '));
+  process.exit(1);
+}
+
+console.log(changed.length || stamped
+  ? '\nversion synced.'
+  : '\nalready in sync.');

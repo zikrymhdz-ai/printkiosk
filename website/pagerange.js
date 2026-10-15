@@ -240,11 +240,45 @@ window.PKPageRange = (function () {
     });
   }
 
+  /* Reduce a batch to the files that should actually be combined.
+   *
+   * Each item may carry its own page selection ("3,5"). That has to be applied
+   * BEFORE the merge. Merging first and setting page_spec to 'all' silently
+   * threw the selection away: the customer asked for 2 pages, was billed and
+   * printed all 5, then paid the 2-page amount - which is why their payment no
+   * longer matched anything the system was waiting for.
+   */
+  function prepareForMerge(items) {
+    return items.reduce(function (chain, item) {
+      return chain.then(function (acc) {
+        var file = (item && item.file) ? item.file : item;
+        var s = (item && item.settings) || {};
+        var src = (s.crop_mode === 'manual' && item.croppedFile) ? item.croppedFile : file;
+        var spec = (s.page_spec && s.page_spec !== 'all') ? String(s.page_spec) : 'all';
+
+        // Only a PDF can be trimmed; an image is a single page either way.
+        if (spec === 'all' || extOf(src.name) !== 'pdf') {
+          acc.push(src);
+          return acc;
+        }
+        var nums = spec.split(',').map(function (n) { return parseInt(n, 10); })
+          .filter(function (n) { return n > 0; });
+        if (!nums.length) { acc.push(src); return acc; }
+
+        return extractPdfPages(src, nums).then(function (trimmed) {
+          acc.push(trimmed);
+          return acc;
+        });
+      });
+    }, Promise.resolve([]));
+  }
+
   return {
     parse: parse,
     compress: compress,
     extractPdfPages: extractPdfPages,
     mergeIntoPdf: mergeIntoPdf,
+    prepareForMerge: prepareForMerge,
     extOf: extOf
   };
 })();

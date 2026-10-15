@@ -34,5 +34,25 @@ for (const [rel, re] of TARGETS) {
   }
 }
 
+// The upload pages must request their scripts with the build stamp. A stale
+// pagerange.js means mergeIntoPdf is undefined, and uploads quietly stay split
+// into one job per file - which looks exactly like an unfixed server bug.
+for (const rel of ['website/customer.html', 'website/upload.html']) {
+  const src = fs.readFileSync(path.join(ROOT, rel), 'utf8');
+  for (const asset of ['pagerange.js', 'pstore.js']) {
+    const stamped = src.indexOf(asset + '?v=' + expected) !== -1;
+    if (!stamped) {
+      console.log('  FAILED  ' + rel + ' does not load ' + asset + '?v=' + expected);
+      console.log('          run: node scripts/sync-version.js');
+      failed = true;
+    }
+  }
+  if (src.indexOf('__PK_BUILD__') !== -1) {
+    console.log('  FAILED  ' + rel + ' still contains the raw __PK_BUILD__ placeholder');
+    failed = true;
+  }
+}
+
 if (failed) process.exit(1);
 console.log('  ok      all version copies in sync at ' + expected);
+console.log('  ok      upload pages are cache-busted at the same version');

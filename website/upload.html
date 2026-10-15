@@ -16,10 +16,10 @@
 <link rel="stylesheet" href="../styles.css">
 <link href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.css" rel="stylesheet">
 <script src="../frontend_config.js"></script>
-<script src="pstore.js"></script>
+<script src="pstore.js?v=2026.10.14-83"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
-<script src="pagerange.js"></script>
+<script src="pagerange.js?v=2026.10.14-83"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.js"></script>
 <script>pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
 <style>
@@ -921,10 +921,12 @@ async function submitPhoneUpload() {
     if (bulkFiles.length > 1) {
       btn.disabled = true;
       btn.textContent = 'Combining ' + bulkFiles.length + ' documents...';
-      var merged = await PKPageRange.mergeIntoPdf(bulkFiles.map(function (it) {
-        return (it.settings && it.settings.crop_mode === 'manual' && it.croppedFile)
-          ? it.croppedFile : it.file;
-      }));
+      // Apply each file's own page selection FIRST. Merging whole documents and
+      // then marking the result 'all' pages threw the selection away, so picking
+      // pages 3,5 of a 5-page PDF billed and printed all 5 - and the customer
+      // then paid the 2-page amount, which matched nothing.
+      var filesToMerge = await PKPageRange.prepareForMerge(bulkFiles);
+      var merged = await PKPageRange.mergeIntoPdf(filesToMerge);
 
       // Settings apply to the combined document as a whole: the page total comes
       // from the merge, and colour is used if ANY part was colour, so nothing
