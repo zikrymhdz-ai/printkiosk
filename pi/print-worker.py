@@ -432,7 +432,20 @@ def read_supplies():
         # ipptool exits 0 even when it cannot parse the test file, so its exit
         # status alone does not mean the printer answered. Attribute lines are
         # the only real evidence that a request completed.
-        if re.search(r"^\s*\[\d+\]", text or "", re.MULTILINE):
+        #
+        # The shape differs by ipptool build. Some emit an index prefix
+        # ("    [12] printer-toner-black-remaining (integer) = 87"), others emit
+        # a named group with no index at all:
+        #
+        #     Get-Printer-Attributes:
+        #         attributes-charset (charset) = utf-8
+        #         printer-toner-black-remaining (integer) = 87
+        #
+        # Matching only the indexed form made a perfectly good response look
+        # like a request that never completed. Match any indented assignment,
+        # which both shapes satisfy and neither the header nor the argument echo
+        # ("\"/usr/share/cups/...test\":") does.
+        if re.search(r"^\s+\S[^\n]*?=\s*\S", text or "", re.MULTILINE):
             break
 
         first_error = first_error or (text or "").strip().replace("\n", " | ")[:200]

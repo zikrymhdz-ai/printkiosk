@@ -1697,6 +1697,19 @@ var d;
   loadJobs();
   btn.disabled = false;
   btn.textContent = 'Upload & Get PIN';
+
+  // Start watching for the payment automatically.
+  //
+  // checkPaymentStatus() existed but only ran when the customer clicked the
+  // button, so a member who paid sat on "pay RM x" until they worked out that
+  // a second button needed pressing, and concluded the payment had not been
+  // detected - even when it had been, and the order was already settled
+  // server-side. upload.html has always polled on its own.
+  setTimeout(function() {
+    if (!payPollTimer) {
+      try { checkPaymentStatus(); } catch (e) { /* the manual button still works */ }
+    }
+  }, 1200);
 }
 
 function resetUpload() {

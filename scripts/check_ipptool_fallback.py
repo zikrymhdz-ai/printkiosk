@@ -18,13 +18,29 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WORKER = os.path.join(ROOT, "pi", "print-worker.py")
 
 # Well-formed ipptool output, as it actually appears (on stderr).
-GOOD = "\n".join([
+#
+# Two shapes exist. This Pi's build emits the named-group form with no index at
+# all -- matching only the indexed form made a good response look like a request
+# that never completed.
+GOOD_INDEXED = "\n".join([
     "    [12] printer-uri (uri) = 'ipp://10.100.131.48:631/ipp/print'",
     "    [13] printer-name (nameWithoutLanguage) = Brother HL-L3240CDW series",
     "    [14] printer-toner-black-remaining (integer) = 87 (% of supply)",
     "    [15] printer-toner-cyan-remaining (integer) = 42 (% of supply)",
     "    [16] printer-toner-magenta-remaining (integer) = 13 (% of supply)",
     "    [17] printer-toner-yellow-remaining (integer) = 0 (% of supply)",
+])
+
+GOOD_GROUPED = "\n".join([
+    "Get-Printer-Attributes:",
+    "    attributes-charset (charset) = utf-8",
+    "    attributes-natural-language (naturalLanguage) = en",
+    "    printer-name (nameWithoutLanguage) = Brother HL-L3240CDW series",
+    "    printer-make-and-model (nameWithoutLanguage) = Brother HL-L3240CDW series",
+    "    printer-toner-black-remaining (integer) = 87 (% of supply)",
+    "    printer-toner-cyan-remaining (integer) = 42 (% of supply)",
+    "    printer-toner-magenta-remaining (integer) = 13 (% of supply)",
+    "    printer-toner-yellow-remaining (integer) = 0 (% of supply)",
 ])
 
 # Exactly what the Pi reported.
@@ -100,15 +116,24 @@ def main():
     # 1. CUPS's file works -> used first, no fallback needed.
     rs, calls = load_worker(
         "/usr/share/cups/ipptool/get-printer-attributes.test",
-        lambda p: (0, "", GOOD))
+        lambda p: (0, "", GOOD_INDEXED))
     levels, online, why, model = rs()
     ok(calls and calls[0].startswith("/usr/share/cups"),
        "CUPS's own test file is tried first (%s)" % (calls[0] if calls else "-"))
     ok(levels and levels.get("toner_black") == 87,
        "toner parsed on the first try: %s" % levels)
 
+    # 1b. The shape THIS Pi emits: a named group with no [n] index at all.
+    rs, calls = load_worker(
+        "/usr/share/cups/ipptool/get-printer-attributes.test",
+        lambda p: (0, "", GOOD_GROUPED))
+    levels, online, why, model = rs()
+    ok(levels and levels.get("toner_black") == 87,
+       "the grouped (un-indexed) output shape parses too: %s" % levels)
+    ok(online is True, "grouped output is reported as a reachable printer")
+
     # 2. CUPS file missing -> generated fallback used.
-    rs, calls = load_worker(None, lambda p: (0, "", GOOD))
+    rs, calls = load_worker(None, lambda p: (0, "", GOOD_INDEXED))
     levels, online, why, model = rs()
     ok(calls and calls[0].startswith(tempfile.gettempdir()),
        "falls back to the generated file when CUPS has none (%s)" % (calls[0] if calls else "-"))

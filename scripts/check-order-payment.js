@@ -164,5 +164,27 @@ ok(!/if \(currentOrderId\(\)\) \{[\s\S]{0,80}seal-order/.test(guestPage),
 ok(/if \(!userId\) \{[\s\S]{0,120}return \{ orderId: null \}/.test(upload),
   'a guest order reference is discarded, so a guest cannot form a bundle');
 
+// The member page must watch for payment on its own. checkPaymentStatus()
+// existed but only ran from a button click, so a customer who paid sat on
+// "pay RM x" and concluded the payment was not detected - while the order was
+// in fact already settled server-side.
+ok(/setTimeout\(function\(\) \{[\s\S]{0,200}checkPaymentStatus\(\)/.test(memberPage),
+  'the member page starts watching for payment automatically');
+ok(/!payPollTimer/.test(memberPage),
+  'the automatic poll does not stack on top of a manual one');
+
+// --- printer output format ------------------------------------------------
+const worker = fs.readFileSync(ROOT + 'pi/print-worker.py', 'utf8');
+// ipptool builds differ: some emit "    [12] name (syntax) = value", others a
+// named group with no index at all. Matching only the indexed form made a good
+// response look like a request that never completed.
+// Substring rather than a regex: these assertions are about a literal pattern
+// in the source, and a regex for a regex has repeatedly proven fussier than the
+// fact it asserts.
+ok(worker.includes('[^\\n]*?=\\s*\\S'),
+  'attribute detection accepts both ipptool output shapes');
+ok(!worker.includes('^\\s*\\[\\d+\\]'),
+  'detection no longer requires an [n] index prefix');
+
 if (failed) { console.log('  -> ' + failed + ' failed'); process.exit(1); }
 console.log('  ok      orders settle as one payment and earn a coin per file');
