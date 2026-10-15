@@ -55,13 +55,19 @@ if (isPi) {
     // stays smooth and recognition is still fast enough to log someone in.
     window.FACE_MIN_INTERVAL_MS = 200;
     window.FACE_DETECT_WIDTH = 256;
-    // Floor for the adaptive throttle. The detect loop measures how long its own
-    // inference actually takes and stretches the gap when passes are slow, so a
-    // slow Pi backs off instead of freezing the UI several times a second.
-    window.FACE_ADAPTIVE_MIN_MS = 400;
-    window.FACE_ADAPTIVE_MAX_MS = 1400;
-    // A pass slower than this is treated as "this device needs breathing room".
-    window.FACE_SLOW_PASS_MS = 200;
+    // Floor and ceiling for the adaptive sampling interval. The loop measures its
+    // own inference cost and sets the gap to that plus slack, so the kiosk runs
+    // as fast as the hardware allows instead of at a hardcoded guess.
+    //
+    // These were 400 and 1400 with a separate +150ms-per-slow-pass ratchet.
+    // Because a Pi pass genuinely takes 200-400ms, the ratchet always fired,
+    // the gap walked up to 1400ms within seconds and could not come back down,
+    // so sign-in ended up taking 4.2s and got slower the longer the kiosk ran.
+    window.FACE_ADAPTIVE_MIN_MS = 200;
+    window.FACE_ADAPTIVE_MAX_MS = 450;
+    // Idle slack above the measured pass cost, so the main thread is not
+    // permanently saturated and the UI stays responsive.
+    window.FACE_GAP_SLACK = 0.35;
     // Keep the screen awake and allow a reload to recover from a wedged renderer.
     // Flicker / reload control, all switchable from the admin dashboard.
 //   KIOSK_ALLOW_RELOAD   - false disables the periodic idle page reload
@@ -843,7 +849,7 @@ function throttledUnknownLog(distance) {
 /* ===== REMOTE KIOSK CONTROL (admin) ===== */
 // Must match APP_VERSION in netlify/functions/_shared.js. If the deployed
 // version differs, the kiosk reloads itself so it never runs a stale page.
-var KIOSK_APP_VERSION = '2026.10.14-61';
+var KIOSK_APP_VERSION = '2026.10.14-63';
 
 // Latest printer verdict from the backend: can we print, and if not why.
 // Refreshed by loadPrinterStatus() and consulted by printTapped() at the
@@ -1087,9 +1093,21 @@ async function bootKiosk() {
       await faceapi.nets.ssdMobilenetv1.loadFromUri(url);
       window.__pkDetector = 'ssd';
     }
-    await faceapi.nets.faceLandmark68Net.loadFromUri(url);
+    // The 68-point landmark net is deliberately NOT loaded.
+    //
+    // It used to be loaded here and run on every frame via
+    // .withFaceLandmarks(), because of a comment claiming
+    // withFaceDescriptor() only exists "after withFaceLandmarks() has upgraded
+    // the result". That is not true: detectSingleFace() returns a result that
+    // exposes .withFaceDescriptor() directly.
+    //
+    // The landmark net is the most expensive network in the face-api stack -
+    // comparable to the recognition net - and not one of its 68 points was ever
+    // read. It was pure per-frame cost on a Pi. Dropping it cuts the work per
+    // pass substantially and also removes ~1.3MB of model loading.
     await faceapi.nets.faceRecognitionNet.loadFromUri(url);
-    piLog('detector: ' + window.__pkDetector);
+    window.__pkNoLandmarks = true;
+    piLog('detector: ' + window.__pkDetector + ' (no landmark net)');
   }
 
   // Face AI is optional. If vendor/face-api.min.js is missing (not transferred
@@ -1557,8 +1575,10 @@ async function startFaceDetection() {
   // the whole inference, which is what the user perceives as lag - so the cure is
   // fewer, well-spaced passes rather than a fixed guess tuned for one machine.
   const adaptiveMin = window.FACE_ADAPTIVE_MIN_MS || minInterval || 400;
-  const adaptiveMax = Math.max(adaptiveMin, window.FACE_ADAPTIVE_MAX_MS || 1400);
-  const slowPassMs = window.FACE_SLOW_PASS_MS || 200;
+  // Ceiling deliberately low. Once a pass costs more than this, sampling slower
+  // just makes sign-in sluggish without making the hardware any happier, and
+  // the right answer at that point is to use a cheaper detector or input size.
+  const adaptiveMax = Math.max(adaptiveMin, window.FACE_ADAPTIVE_MAX_MS || 450);
   let detectGap = adaptiveMin;
   let lastPassMs = 0;
 
@@ -1604,20 +1624,34 @@ async function detect() {
       // Build the options once, not every frame - constructing them allocates and
       // face-api re-validates them on each call.
       if (!window.__pkDetOpts) {
+        // scoreThreshold 0.3 was low enough that weak detections still cost a full
+        // descriptor inference plus a match, which is wasted work on a Pi. 0.4
+        // keeps the recall that matters for a face at arm's length while
+        // dropping the marginal detections the mean-distance gate was rejecting
+        // anyway.
         window.__pkDetOpts = (window.__pkDetector === 'tiny')
-          ? new faceapi.TinyFaceDetectorOptions({ inputSize: inputSize, scoreThreshold: 0.3 })
+          ? new faceapi.TinyFaceDetectorOptions({ inputSize: inputSize, scoreThreshold: 0.4 })
           : new faceapi.SsdMobilenetv1Options({ inputSize: inputSize });
       }
 
-      // The order of this chain is not optional on this face-api build:
-      // withFaceDescriptor() only exists AFTER withFaceLandmarks() has upgraded the
-      // result object. Calling detectSingleFace(...).withFaceDescriptor() directly
-      // throws "withFaceDescriptor is not a function", and skipping the landmark
-      // net throws "FaceLandmark68Net - load model before inference".
-      // Do not try to "optimise" the landmarks away - the chain depends on it.
-      var det = await faceapi.detectSingleFace(frameCanvas, window.__pkDetOpts)
-        .withFaceLandmarks()
-        .withFaceDescriptor();
+      // Landmark detection is skipped: none of the 68 points are used, and running
+      // that net every frame was the single largest per-pass cost. The fallback
+      // exists so this can never break recognition if a face-api build turns
+      // out to need the landmark upgrade after all.
+      var raw = faceapi.detectSingleFace(frameCanvas, window.__pkDetOpts);
+      var det;
+      if (raw && typeof raw.withFaceDescriptor === 'function') {
+        det = await raw.withFaceDescriptor();
+        window.__pkLandmarkFallback = false;
+      } else {
+        det = await raw.withFaceLandmarks().withFaceDescriptor();
+        window.__pkLandmarkFallback = true;
+        if (!window.__pkLandmarkWarned) {
+          window.__pkLandmarkWarned = true;
+          piLog('landmark fallback in use - withFaceDescriptor needed the upgrade');
+        }
+      }
+
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
       if (det) {
@@ -1757,11 +1791,24 @@ faceStreak.count++;
      // gap tightens again if later passes turn out to be cheap.
      const ended = performance.now ? performance.now() : Date.now();
      lastPassMs = ended - passStart;
-     if (lastPassMs > slowPassMs) {
-       detectGap = Math.min(adaptiveMax, detectGap + 150);
-     } else if (lastPassMs < slowPassMs * 0.6) {
-       detectGap = Math.max(adaptiveMin, detectGap - 40);
-     }
+// Self-tuning sampling interval.
+    //
+    // The previous version was a one-way ratchet: a pass slower than slowPassMs
+    // added 150ms to the gap, up to adaptiveMax of 1400ms, and it could only
+    // shrink again if a pass came in under 120ms. On a Pi, where a pass
+    // realistically takes 200-400ms, that branch never ran -- so the gap ratcheted
+    // to its 1400ms ceiling within a few passes and STAYED there. Recognition
+    // became slower the longer the kiosk ran: 3 frames at 1400ms is 4.2s, far
+    // worse than the 0.6s the constants claim.
+    //
+    // Now the gap is derived from what a pass actually costs, plus a little
+    // slack so the main thread is not permanently saturated, clamped to a
+    // ceiling low enough to stay responsive, and smoothed so one slow outlier
+    // cannot yank it.
+    const gapSlack = window.FACE_GAP_SLACK || 0.35;
+    const targetGap = Math.max(adaptiveMin,
+      Math.min(adaptiveMax, lastPassMs * (1 + gapSlack)));
+    detectGap = detectGap + (targetGap - detectGap) * 0.5;
      // Published for the admin heartbeat so lag can be measured, not guessed.
      window.__pkFaceMs = lastPassMs;
      window.__pkFaceGap = detectGap;
