@@ -193,20 +193,49 @@ else
   # twice: first an mDNS name while the CUPS queue used an address, then a
   # static address that the printer later abandoned. Instead, discover it at
   # install time and record whichever URI actually answers right now.
-  PRINTER_URI_FOUND="$(discover_printer_uri)"
+PRINTER_URI_FOUND="$(discover_printer_uri)"
   if [ -z "$PRINTER_URI_FOUND" ]; then
     die "No IPP printer found on this network.
-       Power the printer on and confirm it is joined to WiFi, then re-run.
-       To see candidates yourself:  lpinfo -v | grep -i ipp"
+  Power the printer on and confirm it is joined to WiFi, then re-run.
+  To see candidates yourself:  lpinfo -v | grep -i ipp"
   fi
+
+  # IPP credentials, only if this printer asks for them.
+  #
+  # A printer that requires authentication answers an unauthenticated request
+  # with an error status, and ipptool surfaces only the mandatory printer-name
+  # from it - no model, no toner levels. That presents as a serial number and a
+  # "wrong printer" rather than as the missing password it actually is.
+  #
+  # Leaving these blank is harmless for a printer that does not use them, so this
+  # asks once and writes empty values rather than forcing an answer.
+  echo
+  say "Printer password"
+  echo "  Only needed if this printer asks for a username and password over IPP."
+  echo "  Press Enter to skip (most printers on a shop network do not)."
+  echo
+  read -r -p "  IPP username (blank = none): " PRINTER_USER
+  PRINTER_PASSWORD=""
+  if [ -n "$PRINTER_USER" ]; then
+    read -r -s -p "  IPP password (invisible, then Enter): " PRINTER_PASSWORD
+    echo
+    [ -n "$PRINTER_PASSWORD" ] || die "a username was given with no password"
+  fi
+
+  umask 077
   cat > "$ENV_FILE" <<EOF
 PRINT_WORKER_SECRET=$SECRET
 PRINTKIOSK_API=https://printkioskfyp.netlify.app
 PRINTER_NAME=$QUEUE
 PRINTER_URI=$PRINTER_URI_FOUND
+PRINTER_USER=$PRINTER_USER
+PRINTER_PASSWORD=$PRINTER_PASSWORD
 EOF
   chmod 600 "$ENV_FILE"
   ok "written to $ENV_FILE"
+  if [ -n "$PRINTER_USER" ]; then
+    ok "printer credentials saved (not echoed, file is chmod 600)"
+  fi
 fi
 
 # Say out loud what the worker will actually poll, and prove it is reachable.

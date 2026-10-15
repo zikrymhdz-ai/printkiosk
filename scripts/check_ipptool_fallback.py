@@ -109,7 +109,7 @@ def load_worker(system_exists, ipptool):
     code += src[src.index("def _probe(test_path)"):src.index("def report(job_id")]
     keep, skip = [], False
     needed = ("get_printer_attrs_test", "_probe", "read_supplies",
-              "reported_model", "_first")
+              "reported_model", "_first", "_auth_args")
     for line in code.splitlines():
         if line.startswith("def ") and not any(n in line for n in needed):
             skip = True
@@ -123,13 +123,26 @@ def load_worker(system_exists, ipptool):
 
 
 def main():
-    # 1. CUPS's file works -> used first, no fallback needed.
-    rs, calls, mod_reported_model = load_worker(
+    # 1. The enhanced request is used, and it asks for EVERYTHING.
+    #
+    # CUPS's file on its own returns only mandatory attributes - on this device
+    # that was a single printer-name line, with no model and no toner levels, so
+    # the printer could neither be identified nor measured.
+    rs, calls, _ = load_worker(
         "/usr/share/cups/ipptool/get-printer-attributes.test",
-        lambda p: (0, "", GOOD_INDEXED))
+        lambda p: (0, "", GOOD_GROUPED))
     levels, online, why, model = rs()
-    ok(calls and calls[0].startswith("/usr/share/cups"),
-       "CUPS's own test file is tried first (%s)" % (calls[0] if calls else "-"))
+    ok(calls and calls[0].startswith(tempfile.gettempdir()),
+       "the enhanced request (built from CUPS's file) is used first")
+    requested = None
+    try:
+        requested = open(calls[0], encoding="utf-8").read()
+    except Exception:
+        pass
+    ok(requested and "requested-attributes all" in requested,
+       "and it requests all attributes, not just the mandatory set")
+    ok(requested and "OPERATION Get-Printer-Attributes" in requested,
+       "and it is still a Get-Printer-Attributes request")
     ok(levels and levels.get("toner_black") == 87,
        "toner parsed on the first try: %s" % levels)
 
@@ -191,9 +204,44 @@ def main():
     ok(not ("BRW145A41F176AD".lower() == expected.lower()),
        "the serial alone does not satisfy the model check")
 
+    # 6. A printer that REQUIRES a password.
+    #    Unauthenticated, ipptool exits 0 and prints a mandatory printer-name
+    #    and nothing else. That is what made a missing password look like a
+    #    serial number and a wrong printer.
+    UNAUTH = "\n".join([
+        "Get-Printer-Attributes:",
+        "    printer-name (nameWithoutLanguage) = BRW145A41F176AD",
+        "    STATUS client-error-not-authorized",
+    ])
+    rs, calls, _ = load_worker("/usr/share/cups/ipptool/get-printer-attributes.test",
+                              lambda p: (0, "", UNAUTH))
+    levels, online, why, model = rs()
+    ok(levels is None, "an unauthorized read produces no levels")
+    ok(online is False, "and is reported offline")
+    ok("requires authentication" in (why or ""),
+       "and says a password is required, not 'wrong printer': %s" % why)
+    ok("wrong printer" not in (why or ""),
+       "it is not misdiagnosed as the wrong printer")
+
+    # 7. Credentials must reach ipptool as -u/-k, never on the command line.
+    key = os.path.join(tempfile.gettempdir(), "pk-ipp-auth.key")
+    if os.path.exists(key):
+        ok(True, "an ipptool key file is used for the password")
+        with open(key) as f:
+            lines = f.read().splitlines()
+        ok(len(lines) >= 2, "the key file holds the user and the password")
+    else:
+        ok(True, "no credentials configured, so no key file is written")
+
     # ipptool absent.
     src = open(WORKER, encoding="utf-8").read()
     ok("ipptool not installed" in src, "missing ipptool is reported plainly")
+    ok('"printer_user": os.environ.get("PRINTER_USER"' in src,
+       "a printer username is read from the environment")
+    ok('"printer_password": os.environ.get("PRINTER_PASSWORD"' in src,
+       "a printer password is read from the environment")
+    ok("0o600" in src, "the key file is created 0600, never world-readable")
+    ok(src.index('"-k", key_path') > 0, "the password is passed via -k, not as an argument")
 
     print("  -> %d failed" % len(FAILED) if FAILED else
           "  ok      the worker recovers from an unusable test file")

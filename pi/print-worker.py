@@ -41,7 +41,13 @@ CONFIG = {
     # DCP-T430W) and "Brother.local" does not resolve, so this default cannot
     # work and a brand name cannot say which device is meant. install.sh
     # discovers the right one by model and writes the real dnssd:// URI here.
-    "printer_uri": os.environ.get("PRINTER_URI", "ipp://Brother.local/ipp/print"),
+    # IPP printers can require authentication. Without credentials the printer
+    # answers with an authorization failure, and what ipptool shows for that is
+    # a bare mandatory printer-name and nothing else - no make-and-model, no
+    # printer-info and no toner levels. That is what made this look like a
+    # serial-numbering and wrong-printer problem instead of a missing password.
+    "printer_user": os.environ.get("PRINTER_USER", ""),
+    "printer_password": os.environ.get("PRINTER_PASSWORD", ""),
     # Model this shop is supposed to print on. If the device answers with a
     # different printer-name, the worker reports "wrong printer" instead of
     # filing another machine's toner levels against this one.
@@ -393,11 +399,41 @@ def reported_model(text):
 CUPS_SYSTEM_TEST = "/usr/share/cups/ipptool/get-printer-attributes.test"
 
 
+def _auth_args():
+    """Build the ipptool arguments for IPP authentication, if configured.
+
+    ipptool takes credentials as "-u NAME -k KEYFILE", where the key file holds
+    the username on line 1 and the password on line 2. The password is not a
+    command-line argument, so it stays out of the process list and out of the
+    journal.
+    """
+    user = CONFIG.get("printer_user") or ""
+    password = CONFIG.get("printer_password") or ""
+    if not user and not password:
+        return []
+
+    key_path = os.path.join(tempfile.gettempdir(), "pk-ipp-auth.key")
+    try:
+        # Create with 0600 from the outset rather than chmod-ing afterwards,
+        # so the password is never briefly world-readable.
+        fd = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write((user or "") + "\n" + (password or "") + "\n")
+    except Exception as e:
+        return []
+
+    args = ["-k", key_path]
+    if user:
+        args += ["-u", user]
+    return args
+
+
 def _probe(test_path):
     """Run ipptool with one test file. Returns (text, returncode, error)."""
     try:
         proc = subprocess.run(
-            ["ipptool", "-tv", CONFIG["printer_uri"], test_path],
+            ["ipptool", "-tv"] + _auth_args()
+            + [CONFIG["printer_uri"], test_path],
             capture_output=True, text=True, timeout=45,
         )
     except Exception as e:
@@ -421,18 +457,22 @@ def read_supplies():
     if not shutil_which("ipptool"):
         return None, True, "ipptool not installed (apt install cups-ipp-utils)", None
 
-    # Two candidate test files, tried in order.
+    # Test files, tried in order.
     #
-    # The generated file has been rejected twice ("Unexpected token ATTRIBUTE
-    # seen on line 4") with syntax that matches the CUPS original, and it cannot
-    # be verified from a machine without ipptool. CUPS ships a known-good
-    # get-printer-attributes.test on the Pi itself, so it is preferred outright
-    # and the generated file is only a fallback for a system without CUPS.
-    # That removes our ability to break this entirely.
+    # First choice is the enhanced request built from CUPS's own file, which
+    # asks for every attribute - without that the printer returns only its
+    # mandatory set, which on this device was a single printer-name line with no
+    # model and no toner levels. CUPS's unmodified file is the fallback, in
+    # case the enhanced copy could not be produced.
+    #
+    # Nothing here is hand-authored IPP any more: the base syntax comes from a
+    # file CUPS ships and is known to parse on this machine.
     candidates = []
+    enhanced = get_printer_attrs_test()
+    if enhanced:
+        candidates.append(enhanced)
     if CUPS_SYSTEM_TEST and os.path.exists(CUPS_SYSTEM_TEST):
         candidates.append(CUPS_SYSTEM_TEST)
-    candidates.append(get_printer_attrs_test())
     candidates = list(dict.fromkeys(candidates))
 
     text = None
@@ -483,6 +523,20 @@ def read_supplies():
     if transport_error:
         return None, False, transport_error, None
 
+    # An authorization failure is reported by ipptool as a status line while
+    # still exiting 0 and still printing a mandatory printer-name, so without
+    # this check it is indistinguishable from a successful read that happened to
+    # omit everything else - which is precisely how a missing password came to
+    # be diagnosed as a serial number and a wrong printer.
+    low_all = (text or "").lower()
+    if ("not-authorized" in low_all or "not authorized" in low_all
+            or "forbidden" in low_all or "authentication" in low_all
+            or "client-error-not-authorized" in low_all):
+        return None, False, (
+            "printer requires authentication. Set PRINTER_USER and "
+            "PRINTER_PASSWORD in the worker env file."
+        ), None
+
     if text is None:
         return None, False, (
             "ipptool returned no attributes - no request completed. "
@@ -522,27 +576,48 @@ def shutil_which(name):
 
 
 def get_printer_attrs_test():
-    """Write a valid ipptool request for Get-Printer-Attributes and return its path.
+    """Return a test file that asks the printer for EVERYTHING.
 
-    Two defects made this file unusable, and both produced the same misleading
-    symptom - "reachable, but no toner attributes":
+    CUPS ships a known-good Get-Printer-Attributes request, but it does not
+    request `requested-attributes all`. Without that a printer returns only its
+    mandatory attributes, which on this device meant a single line:
 
-    1. The values used the RESPONSE form "value-charset" / "value-uri". In a
-       request they must be the bare syntax name ("charset", "uri"). ipptool
-       refused to parse the file and said:
+        printer-name = BRW145A41F176AD
 
-           Unexpected token ATTRIBUTE seen on line 4
+    No make-and-model, no printer-info, and no toner levels at all. So the
+    worker could neither identify the printer nor read a single supply.
 
-       ...then still exited 0, so we concluded the printer had been reached and
-       answered, when the request had never been sent at all.
+    Rather than generating a request from scratch - which ipptool twice refused
+    to parse with "Unexpected token ATTRIBUTE" - this copies CUPS's own file and
+    injects only the requested-attributes block. The base is therefore known to
+    parse on this machine, and the only thing we add is one well-defined stanza.
 
-    2. Without "requested-attributes all", a printer may return only its
-       mandatory attributes, which excludes the toner levels and the model.
-
-    The file is rewritten on every worker start rather than reused if present,
-    because the broken version was already cached in the temp directory and
-    simply re-validating its existence would keep using it.
+    Falls back to a hand-written minimal file only if CUPS's is missing.
     """
+    target = os.path.join(tempfile.gettempdir(), "pk-get-printer-attributes-all.test")
+
+    if CUPS_SYSTEM_TEST and os.path.exists(CUPS_SYSTEM_TEST):
+        try:
+            with open(CUPS_SYSTEM_TEST, "r") as f:
+                src = f.read()
+
+            if "requested-attributes" not in src:
+                src = src.replace(
+                    "STATUS successful-ok",
+                    "ATTRIBUTE requested-attributes\n"
+                    "    requested-attributes all\n"
+                    "    STATUS successful-ok")
+                if "requested-attributes" not in src:
+                    # Unexpected shape - leave it exactly as CUPS shipped it
+                    # rather than producing something unparseable.
+                    return CUPS_SYSTEM_TEST
+
+            with open(target, "w") as f:
+                f.write(src)
+            return target
+        except Exception:
+            pass
+
     p = os.path.join(tempfile.gettempdir(), "pk-get-printer-attributes.test")
     with open(p, "w") as f:
         f.write(

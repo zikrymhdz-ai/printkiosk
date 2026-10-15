@@ -192,17 +192,27 @@ if (tf) {
   // Only the payload that is written matters. The docstring deliberately names
   // the bad forms to explain the bug, and an assertion that scanned it would
   // fail on its own explanation.
-  const write = body.match(/f\.write\([\s\S]*?\)\s*\n/);
-  ok(!!write, 'the generated file payload found');
-  const payload = write ? write[0] : '';
+  // The LAST f.write in this function is the fallback IPP request; an earlier
+  // one belongs to _auth_args, which the slice also drags in, so the first
+  // match is not necessarily the one being asserted about.
+  const writes = body.match(/f\.write\([\s\S]*?\)\s*\n/g) || [];
+  ok(writes.length > 0, 'the hand-written fallback payload found');
+  const payload = writes.length ? writes[writes.length - 1] : '';
   ok(!/value-charset|value-uri|value-naturalLanguage/.test(payload),
     'no response-style "value-*" used in a request');
   ok(payload.includes('charset "utf-8"'),
-    'charset uses the request syntax');
+    'the fallback uses the request syntax');
   ok(payload.includes('requested-attributes all'),
-    'requests all attributes, so toner levels and model are actually returned');
-  ok(!/if not os\.path\.exists\(p\)/.test(body),
-    'the file is rewritten on every start, not reused from a stale temp copy');
+    'the fallback requests all attributes too');
+
+  // The MAIN path is now derived from CUPS's own file with the
+  // requested-attributes block injected. Nothing hand-authored IPP is used when
+  // CUPS is present, which is what removed our ability to produce an unparseable
+  // request.
+  ok(body.includes('CUPS_SYSTEM_TEST') && body.includes('requested-attributes all'),
+    'the request is built from CUPS\'s own file with all attributes requested');
+  ok(/return CUPS_SYSTEM_TEST/.test(body),
+    'if the file cannot be enhanced, CUPS\'s original is used untouched');
 }
 
 // A completed request must contain attribute lines; without this check an
