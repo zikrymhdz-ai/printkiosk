@@ -10,6 +10,7 @@
 // guards against is a library that behaves differently than expected.
 const fs = require('fs');
 const https = require('https');
+const path = require('path');
 const vm = require('vm');
 
 function get(url) {
@@ -377,6 +378,45 @@ function get(url) {
       soloOk = solo && solo.pages === 1;
     } catch (e) { /* ignore */ }
     ok(soloOk, 'a single file is unaffected');
+  }
+
+  // 16. Baking an adjustment must not balloon the file.
+  //     Converting a photo to black and white re-encodes it, and re-encoding
+  //     everything as PNG made a real grainy photo about 2.7x larger than the
+  //     JPEG the customer uploaded. Combined with a second photo, the document
+  //     was rejected by storage with "object exceeded the maximum allowed
+  //     size". The output format now follows the input format.
+  {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'website', 'pagerange.js'), 'utf8');
+    const bake = src.slice(src.indexOf('function adjustImageFile'), src.indexOf('function _clamp'));
+
+    ok(!/}, 'image\/png'\);\s*$/m.test(bake) || /wasJpegOutput/.test(bake),
+      'the output format depends on the source, not hardcoded to PNG');
+    ok(/wasJpegOutput \? 'image\/jpeg' : 'image\/png'/.test(bake),
+      'a JPEG is written back as JPEG');
+    ok(/wasJpegOutput \? 0\.92 : undefined/.test(bake),
+      'and at a print-quality setting');
+    ok(/wasJpeg \? stem \+ '\.jpg' : stem \+ '\.png'/.test(bake),
+      'and the file name follows the bytes it contains');
+
+    // A storage rejection must not be shown to the customer verbatim.
+    for (const page of ['website/customer.html', 'website/upload.html']) {
+      const p = fs.readFileSync(path.join(__dirname, '..', page), 'utf8');
+      ok(/function storageErrorMessage\(/.test(p), page + ' translates storage errors');
+      ok(/exceeded the maximum allowed size/.test(p),
+        page + ' recognises the oversized-object message');
+      ok(/storageErrorMessage\(upMsg/.test(p), page + ' uses it on the upload failure');
+    }
+
+    const helper = /function storageErrorMessage\([\s\S]*?\n\}/.exec(
+      fs.readFileSync(path.join(__dirname, '..', 'website', 'customer.html'), 'utf8'))[0];
+    const fn = vm.runInNewContext('(' + helper.replace(/^function storageErrorMessage/, 'function') + ')');
+    const raw = fn('object exceeded the maximum allowed size', 413, 52 * 1024 * 1024);
+    ok(!/exceeded the maximum/.test(raw), 'the raw Supabase text is not shown to the customer');
+    ok(/too large/i.test(raw) && /fewer photos|smaller images/i.test(raw),
+      'the customer is told what to do instead: ' + raw);
+    ok(fn('some other failure', 500, 10) === 'some other failure',
+      'unrelated errors are left alone rather than rewritten');
   }
 
   if (failed) { console.log('  -> ' + failed + ' failed'); process.exit(1); }

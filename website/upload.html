@@ -16,10 +16,10 @@
 <link rel="stylesheet" href="../styles.css">
 <link href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.css" rel="stylesheet">
 <script src="../frontend_config.js"></script>
-<script src="pstore.js?v=2026.10.14-97"></script>
+<script src="pstore.js?v=2026.10.14-98"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
-<script src="pagerange.js?v=2026.10.14-97"></script>
+<script src="pagerange.js?v=2026.10.14-98"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.js"></script>
 <script>pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
 <style>
@@ -992,7 +992,20 @@ async function submitPhoneUpload() {
     });
   }
 
-  function uploadFail(msg) {
+  function storageErrorMessage(raw, status, bytes) {
+  // Supabase rejects an oversized object with text meant for developers, and
+  // that text was being shown to the customer verbatim: "object exceeded the
+  // maximum allowed size". Say what actually happened and what to do instead.
+  var msg = raw || ('Storage upload failed (HTTP ' + status + ')');
+  if (/exceeded the maximum allowed size|EntityTooLarge|Payload Too Large|too large/i.test(msg)) {
+    var mb = Math.round((bytes || 0) / (1024 * 1024));
+    return 'This document is too large to send to the printer (' + mb + 'MB). '
+      + 'Please try fewer photos, or smaller images.';
+  }
+  return msg;
+}
+
+function uploadFail(msg) {
     alert(msg);
     btn.disabled = false;
     btn.textContent = 'Upload & Pay';
@@ -1096,7 +1109,7 @@ async function submitPhoneUpload() {
         if (!upRes.ok) {
           var upMsg = 'Storage upload failed (HTTP ' + upRes.status + ')';
           try { var upJ = JSON.parse(await upRes.text()); upMsg = upJ.message || upJ.error || upMsg; } catch (e) {}
-          uploadFail(upMsg);
+          uploadFail(storageErrorMessage(upMsg, upRes.status, upFile.size));
           return;
         }
 

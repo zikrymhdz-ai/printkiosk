@@ -380,14 +380,25 @@ window.PKPageRange = (function () {
             ctx.putImageData(data, 0, 0);
           }
 
+          var wasJpegOutput = extOf(file.name) === 'jpg' || extOf(file.name) === 'jpeg';
           canvas.toBlob(function (blob) {
             if (!blob) { reject(new Error('Could not adjust ' + (file.name || 'image'))); return; }
-            // The bytes are now PNG, whatever the file was called. Keeping the
-            // old ".jpg" name made mergeIntoPdf() hand PNG data to embedJpg(),
-            // which failed with "SOI not found in JPEG".
-            var name = String(file.name || 'image').replace(/\.[^.]*$/, '') + '.png';
-            resolve(new File([blob], name, { type: 'image/png' }));
-          }, 'image/png');
+            // Keep the source's format. This used to always write PNG, which is
+            // lossless and therefore enormous next to a JPEG - a phone photo
+            // could balloon from a few MB to tens of MB, and the combined
+            // document was then rejected on upload with "object exceeded the
+            // maximum allowed size". JPEG in, JPEG out: the printed result is
+            // indistinguishable at 0.92 and the file stays about the same size
+            // the customer chose to upload.
+            //
+            // The name must match the bytes, or mergeIntoPdf()'s sniffer and
+            // the JPEG branch disagree - that mismatch previously produced
+            // "SOI not found in JPEG".
+            var wasJpeg = wasJpegOutput;
+            var stem = String(file.name || 'image').replace(/\.[^.]*$/, '');
+            var type = wasJpeg ? 'image/jpeg' : 'image/png';
+            resolve(new File([blob], wasJpeg ? stem + '.jpg' : stem + '.png', { type: type }));
+          }, wasJpegOutput ? 'image/jpeg' : 'image/png', wasJpegOutput ? 0.92 : undefined);
         } catch (e) {
           reject(e);
         }
