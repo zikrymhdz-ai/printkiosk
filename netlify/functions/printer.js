@@ -281,15 +281,14 @@ async function reportSupplies(event) {
     printer_error: body.error ? String(body.error).slice(0, 200) : null,
     // Where the worker is pointed, so "unreachable" can be told apart from
     // "pointing at the wrong address" after a move.
-    printer_target: String(body.printer_name || '').slice(0, 80)
-  };
-
-  // Never overwrite a known target with an empty one.
-  if (!row.printer_target) delete row.printer_target;
+    printer_target: String(body.printer_name || '').slice(0, 80),
     // Recorded even when the read failed, so "checked recently but
     // unreachable" is distinguishable from "never checked".
     last_checked: new Date().toISOString()
   };
+
+  // Never overwrite a known target with an empty one.
+  if (!row.printer_target) delete row.printer_target;
 
   // There is no standard IPP attribute for "how much paper is left in the
   // tray" -- most drivers only report which trays are loaded. So paper_level is
