@@ -29,7 +29,7 @@ const PRICE_DOUBLE_SIDED_MULTIPLIER = 0.7;
 // Bumped whenever the kiosk front-end changes. The kiosk compares this against
 // the version it was loaded with and reloads itself, so an unattended screen
 // never keeps running a stale copy of walkin.html.
-const APP_VERSION = '2026.10.14-67';
+const APP_VERSION = '2026.10.14-68';
 
 const ALLOWED_EXTENSIONS = ['pdf', 'doc', 'docx', 'jpg', 'jpeg', 'png'];
 
@@ -302,10 +302,33 @@ function calculatePrice(pages, colorMode, paperSize, sides, copies) {
 // If two unpaid jobs have the identical amount, one paying customer's money could
 // mark the *other* job paid (free print). We therefore nudge every concurrent
 // same-priced job by one cent so each payment maps to exactly one job.
-// Range stays 0.00-0.09 for everyone, including guests. It only has to separate
-// jobs that are still payable, so jobs past the payable window are ignored here
-// instead of squatting on a slot. That keeps ten slots sufficient even though the
-// table accumulates abandoned rows.
+//
+// The slots run in blocks of ten, matching how the amounts actually read. For a
+// base of RM0.20 the first block is 0.20-0.29 (offset 0-9), the next is
+// 0.30-0.39 (offset 10-19), then 0.40-0.49, and so on. Offsets are handed out
+// in order, so it is a simple ascending walk.
+//
+// Previously the walk stopped after ten offsets, so an eleventh concurrent
+// same-priced job in the payable window had no slot at all and was handed the
+// top one as "crowded" - which collides with the job that legitimately held
+// it. That is precisely what produced the queue of identical RM0.29 jobs this
+// whole fee scheme exists to prevent.
+//
+// Only jobs still inside the payable window compete for a slot; abandoned rows
+// past it are ignored rather than squatting on one.
+const MAX_MATCH_OFFSETS = 50;
+
+// Pick the lowest offset whose total is not already taken. Shared by jobs and
+// by orders, so an order total is allocated exactly the way a job total is.
+function pickFreeOffset(baseCents, used, maxOffsets) {
+  const limit = maxOffsets || MAX_MATCH_OFFSETS;
+  for (let k = 0; k < limit; k++) {
+    const cents = baseCents + k;
+    if (!used.has(cents)) return { offset: k, cents: cents };
+  }
+  return null;
+}
+
 async function assignUniqueMatchAmount(basePrice) {
   const baseCents = Math.round(basePrice * 100);
   if (baseCents <= 0) return { total: 0, fee: 0, base: 0 };
@@ -328,17 +351,48 @@ async function assignUniqueMatchAmount(basePrice) {
     }
   }
 
-  for (let k = 0; k <= 9; k++) {
-    const cents = baseCents + k;
-    if (!used.has(cents)) {
-      return { total: cents / 100, fee: k / 100, base: baseCents / 100 };
-    }
+  const free = pickFreeOffset(baseCents, used);
+  if (free) {
+    return { total: free.cents / 100, fee: free.offset / 100, base: baseCents / 100 };
   }
 
-  // All ten slots are genuinely live. Hand out the top slot and let the backend
-  // route the payment to staff review rather than silently confirming the newest
-  // job, which would release the wrong customer's document.
-  return { total: (baseCents + 9) / 100, fee: 0.09, base: baseCents / 100, crowded: true };
+  // Every slot is genuinely live. Hand out the top one and let the backend route
+  // the payment to staff review rather than silently confirming the newest job,
+  // which would release the wrong customer's document.
+  return { total: (baseCents + MAX_MATCH_OFFSETS - 1) / 100, fee: (MAX_MATCH_OFFSETS - 1) / 100, base: baseCents / 100, crowded: true };
+}
+
+// Orders need the same treatment one level up.
+//
+// A one-file order is already unique because its job total is, so it keeps that
+// figure unchanged. A multi-file order sums to something that is NOT guaranteed
+// to be unique: {0.20, 0.30} and {0.50} both total RM0.50, and a payment of
+// RM0.50 could then settle either order. So after summing, the lowest free
+// offset is added to make the ORDER total distinct among live orders.
+//
+// usedOrderTotals must contain every order total currently awaiting payment,
+// including single-file ones.
+function assignUniqueOrderTotal(sumOfJobTotals, usedOrderTotals) {
+  const baseCents = Math.round(sumOfJobTotals * 100);
+  if (baseCents <= 0) return { total: 0, fee: 0, base: 0 };
+
+  const used = new Set();
+  for (const v of (usedOrderTotals || [])) {
+    const n = Math.round(parseFloat(v) * 100);
+    if (!Number.isNaN(n)) used.add(n);
+  }
+
+  // A single-file order is its own unique total already; don't add a fee the
+  // customer was never quoted.
+  if (used.size === 0) {
+    return { total: baseCents / 100, fee: 0, base: baseCents / 100 };
+  }
+
+  const free = pickFreeOffset(baseCents, used);
+  if (free) {
+    return { total: free.cents / 100, fee: free.offset / 100, base: baseCents / 100 };
+  }
+  return { total: (baseCents + MAX_MATCH_OFFSETS - 1) / 100, fee: (MAX_MATCH_OFFSETS - 1) / 100, base: baseCents / 100, crowded: true };
 }
 
 // Allocates a unique fee and inserts the job, retrying if another upload took
@@ -500,7 +554,7 @@ module.exports = {
   SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM_NAME,
   VERIFICATION_CODE_LENGTH, VERIFICATION_CODE_TTL,
   corsHeaders, json, err, supabaseRequest, generateJobId, safeEqual,
-  generateSessionToken, validateSession, calculatePrice, assignUniqueMatchAmount, createJobWithUniqueFee,
+  generateSessionToken, validateSession, calculatePrice, assignUniqueMatchAmount, createJobWithUniqueFee, assignUniqueOrderTotal, pickFreeOffset, MAX_MATCH_OFFSETS,
   generateVerificationCode, isValidGmail, isValidMalaysianPhone,
   normalizePhone, sendVerificationEmail, smtpSend,
   supabaseStorageUpload, supabaseStorageSignedUrl, supabaseStorageDelete, parseMultipartFormData, EXT_MIME_MAP

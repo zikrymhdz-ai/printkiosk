@@ -1,4 +1,42 @@
-const { json, err, supabaseRequest, validateSession, generateJobId, calculatePrice, assignUniqueMatchAmount, createJobWithUniqueFee, ALLOWED_EXTENSIONS, SUPABASE_URL, supabaseStorageSignedUrl, parseMultipartFormData, EXT_MIME_MAP } = require('./_shared');
+const { json, err, supabaseRequest, validateSession, generateJobId, calculatePrice, assignUniqueMatchAmount, createJobWithUniqueFee, assignUniqueOrderTotal, ALLOWED_EXTENSIONS, SUPABASE_URL, supabaseStorageSignedUrl, parseMultipartFormData, EXT_MIME_MAP } = require('./_shared');
+
+// A guest uploading without an account gets one file only: they have no
+// identity, so a bundle of theirs could not be attributed to them when a
+// payment arrives, and their PIN is collected on paper. Members may bundle up
+// to MAX_BUNDLE_FILES.
+const MAX_BUNDLE_FILES = 5;
+const MAX_FILE_BYTES = 20 * 1024 * 1024; // 20MB per file
+
+// Validate and normalise the order reference a file belongs to.
+//
+// Guests get one file per order and no order at all, because an unattributable
+// guest bundle cannot be matched to a payment later. Members may bundle up to
+// MAX_BUNDLE_FILES; the cap is enforced here rather than in the UI, because a
+// sixth file would create an order the payment step could not settle.
+async function resolveOrderId(raw, userId) {
+  const orderId = String(raw || '').trim().slice(0, 40);
+
+  if (!userId) {
+    if (orderId) {
+      return { error: 'Guests can upload one file at a time. Please sign in to send several files together.' };
+    }
+    return { orderId: null };
+  }
+
+  if (!orderId) return { error: 'Missing order reference' };
+  if (!/^[A-Za-z0-9_-]{8,40}$/.test(orderId)) return { error: 'Invalid order reference' };
+
+  const existing = await supabaseRequest('GET', '/print_jobs', null, {
+    'order_id': 'eq.' + orderId,
+    'select': 'id'
+  });
+  const already = !existing.error && Array.isArray(existing.data) ? existing.data.length : 0;
+  if (already >= MAX_BUNDLE_FILES) {
+    return { error: 'An order can contain at most ' + MAX_BUNDLE_FILES + ' files. Start a new upload to send more.' };
+  }
+
+  return { orderId: orderId };
+}
 
 exports.handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') return json({});
@@ -13,6 +51,12 @@ exports.handler = async (event) => {
 
   if (url.searchParams.get('action') === 'sign-upload') {
     return handleSignUpload(event);
+  }
+
+  // Final step of a batch: computes what the customer must actually pay for the
+  // whole order and records it against every file in it.
+  if (url.searchParams.get('action') === 'seal-order') {
+    return handleSealOrder(event);
   }
 
   return handleUpload(event);
@@ -87,6 +131,93 @@ function isImage(ext) {
   return ['jpg', 'jpeg', 'png'].includes(ext);
 }
 
+// Seal an order: work out exactly what the customer must pay for the whole
+// batch, and record it against every file in it.
+//
+// The amount is computed from the DATABASE's own job totals, never from what
+// the browser claims. The client only says which files belong together; the sum
+// and the unique offset are ours.
+//
+// A single-file order keeps its existing job total untouched, so the amount a
+// one-file customer is quoted does not change with this feature.
+async function handleSealOrder(event) {
+  const session = await validateSession(event);
+  const userId = session ? session.user_id : null;
+  if (!userId) return err('Only signed-in customers can place a multi-file order', 403);
+
+  let body;
+  try { body = JSON.parse(event.body || '{}'); } catch (e) { return err('Invalid request body'); }
+
+  const orderId = String(body.order_id || '').trim().slice(0, 40);
+  if (!orderId || !/^[A-Za-z0-9_-]{8,40}$/.test(orderId)) return err('Invalid order reference');
+
+  const found = await supabaseRequest('GET', '/print_jobs', null, {
+    'order_id': 'eq.' + orderId,
+    'user_id': 'eq.' + userId,
+    'select': 'id,job_id,total_price,paid,status'
+  });
+  if (found.error) return err('Failed to read order', 500);
+  const jobs = Array.isArray(found.data) ? found.data : [];
+
+  if (!jobs.length) return err('No files found for this order', 404);
+  if (jobs.length > MAX_BUNDLE_FILES) {
+    return err('An order can contain at most ' + MAX_BUNDLE_FILES + ' files');
+  }
+  if (jobs.some(j => j.paid === true)) return err('This order has already been paid');
+
+  const sum = jobs.reduce(function (s, j) { return s + (parseFloat(j.total_price) || 0); }, 0);
+
+  // Collect every order total currently awaiting payment so this one can be
+  // given a total of its own. Without this, {0.20, 0.30} and {0.50} both total
+  // RM0.50 and a payment of RM0.50 could settle either order.
+  const liveOrders = await supabaseRequest('GET', '/print_jobs', null, {
+    'paid': 'eq.false',
+    'status': 'eq.pending',
+    'select': 'order_total,total_price',
+    'order_total': 'not.is.null',
+    'limit': '500'
+  });
+  const usedTotals = [];
+  if (!liveOrders.error && Array.isArray(liveOrders.data)) {
+    for (const j of liveOrders.data) {
+      const v = parseFloat(j.order_total);
+      if (!Number.isNaN(v)) usedTotals.push(v);
+    }
+  }
+  // This order's own current total must not block it.
+  for (const j of jobs) {
+    const v = parseFloat(j.total_price);
+    if (!Number.isNaN(v)) usedTotals.push(v);
+  }
+
+  let orderTotal;
+  if (jobs.length === 1) {
+    // One file: its job total is already unique, and adding a fee here would
+    // charge a single-file customer something they were never quoted.
+    orderTotal = parseFloat(jobs[0].total_price);
+  } else {
+    orderTotal = assignUniqueOrderTotal(sum, usedTotals).total;
+  }
+
+  const ids = jobs.map(j => j.job_id);
+  const upd = await supabaseRequest('PATCH', '/print_jobs?order_id=eq.' + orderId, {
+    'order_total': orderTotal
+  });
+  if (upd.error) {
+    return err('Failed to record the order total. Has migration 20261015_orders run?', 500);
+  }
+
+  return json({
+    success: true,
+    order_id: orderId,
+    order_total: orderTotal,
+    item_total: Math.round(sum * 100) / 100,
+    fee: Math.round((orderTotal - sum) * 100) / 100,
+    files: jobs.length,
+    job_ids: ids
+  });
+}
+
 async function handleUpload(event) {
   const session = await validateSession(event);
   const userId = session ? session.user_id : null;
@@ -130,9 +261,15 @@ async function handleUpload(event) {
     if (!ALLOWED_EXTENSIONS.includes(ext)) {
       return err('File type not allowed. Allowed: ' + ALLOWED_EXTENSIONS.join(', '));
     }
-    if (file.data.length > 20 * 1024 * 1024) {
+    if (file.data.length > MAX_FILE_BYTES) {
       return err('File too large. Maximum 20MB.');
     }
+
+    // Order identity. Every file in one upload batch carries the same order_id,
+    // which is what lets a single payment settle the whole order.
+    const order = await resolveOrderId(fields.order_id, userId);
+    if (order.error) return err(order.error);
+    const orderId = order.orderId;
 
     colorMode = ['bw', 'color'].includes(fields.color_mode) ? fields.color_mode : 'bw';
     paperSize = ['a4', 'a3'].includes(fields.paper_size) ? fields.paper_size : 'a4';
@@ -169,6 +306,8 @@ async function handleUpload(event) {
       job_id: jobId,
       user_id: userId,
       session_id: require('crypto').randomBytes(16).toString('hex'),
+      // Null for a guest's single file; shared by every file in a member's order.
+      order_id: orderId || null,
       file_name: fileName,
       file_path: fileUrl,
       file_type: fileType,
@@ -238,9 +377,13 @@ async function handleUpload(event) {
     const ext = getExtension(fileName);
     fileType = body.file_type || (isImage(ext) ? 'image' : 'document');
 
-    if (!fileUrl || !fileName) return err('file_url and file_name required');
+if (!fileUrl || !fileName) return err('file_url and file_name required');
     if (!ALLOWED_EXTENSIONS.includes(ext)) return err('File type not allowed');
-    if (fileType !== 'image' && fileType !== 'document') return err('file_type must be image or document');
+    if (fileType !== 'image' && fileType !== 'document') return err('file_type must be image or ');
+
+    const order2 = await resolveOrderId(body.order_id, userId);
+    if (order2.error) return err(order2.error);
+    const orderId = order2.orderId;
 
     colorMode = ['bw', 'color'].includes(body.color_mode) ? body.color_mode : 'bw';
     paperSize = ['a4', 'a3'].includes(body.paper_size) ? body.paper_size : 'a4';
@@ -265,6 +408,8 @@ async function handleUpload(event) {
       job_id: jobId,
       user_id: userId,
       session_id: require('crypto').randomBytes(16).toString('hex'),
+      // Null for a guest's single file; shared by every file in a member's order.
+      order_id: orderId || null,
       file_name: fileName,
       file_path: fileUrl,
       file_type: fileType,

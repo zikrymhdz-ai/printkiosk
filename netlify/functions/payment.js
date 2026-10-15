@@ -45,7 +45,44 @@ exports.handler = async (event) => {
   }
 };
 
-async function confirmJobPaid(job, method, reference) {
+// Credit one coin for an order, recorded against the job that anchors it.
+//
+// Kept as its own function so the per-order rule lives in exactly one place:
+// confirmJobPaid() calls it for a single-file order, and the multi-file path
+// calls it once after settling every file.
+async function awardOrderCoins(anchorJob, fileCount) {
+  if (!anchorJob || !anchorJob.user_id) return { ok: true, coinsEarned: 0 };
+
+  const coinsEarned = 1;
+
+  const userResult = await supabaseRequest('GET', '/users', null, {
+    'id': 'eq.' + anchorJob.user_id,
+    'select': 'coins'
+  });
+
+  if (userResult.error || !userResult.data || userResult.data.length === 0) {
+    return { ok: true, coinsEarned: 0 };
+  }
+
+  const newBalance = (parseInt(userResult.data[0].coins, 10) || 0) + coinsEarned;
+
+  await supabaseRequest('PATCH', '/users?id=eq.' + anchorJob.user_id, { coins: newBalance });
+  await supabaseRequest('POST', '/coin_transactions', {
+    user_id: anchorJob.user_id,
+    print_job_id: anchorJob.id,
+    type: 'earned',
+    amount: coinsEarned,
+    description: 'Print order' + (fileCount > 1 ? ' (' + fileCount + ' files)' : '')
+      + ' - ' + anchorJob.job_id,
+    balance_after: newBalance
+  });
+
+  return { ok: true, coinsEarned: coinsEarned };
+}
+
+async function confirmJobPaid(job, method, reference, opts) {
+  const skipCoins = !!(opts && opts.skipCoins);
+
   const paymentResult = await supabaseRequest('POST', '/payments', {
     print_job_id: job.id,
     user_id: job.user_id,
@@ -68,28 +105,12 @@ async function confirmJobPaid(job, method, reference) {
   if (updateResult.error) return { ok: false, error: 'Failed to update job status' };
 
   let coinsEarned = 0;
-  if (job.user_id) {
-    coinsEarned = 1;
-
-    const userResult = await supabaseRequest('GET', '/users', null, {
-      'id': 'eq.' + job.user_id,
-      'select': 'coins'
-    });
-
-    if (!userResult.error && userResult.data && userResult.data.length > 0) {
-      const currentCoins = userResult.data[0].coins;
-      const newBalance = currentCoins + coinsEarned;
-
-      await supabaseRequest('PATCH', '/users?id=eq.' + job.user_id, { coins: newBalance });
-      await supabaseRequest('POST', '/coin_transactions', {
-        user_id: job.user_id,
-        print_job_id: job.id,
-        type: 'earned',
-        amount: coinsEarned,
-        description: 'Print job ' + job.job_id,
-        balance_after: newBalance
-      });
-    }
+  // Coins are credited per ORDER, not per file. A five-file order is one payment
+  // and earns one coin; crediting per job paid out five for a single payment.
+  if (job.user_id && !skipCoins) {
+    const awarded = await awardOrderCoins(job, 1);
+    if (!awarded.ok) return awarded;
+    coinsEarned = awarded.coinsEarned;
   }
 
   await supabaseRequest('POST', '/alerts', {
@@ -183,38 +204,69 @@ async function handleNlsReceived(event) {
   });
   const jobs = jobsResult.error ? [] : (jobsResult.data || []);
 
-  // AMOUNT IS PRIMARY. The unique match fee (0.00-0.09) makes each live job's
-  // total distinct, so the amount is the strongest signal we have.
-  const matches = jobs.filter(j => Math.abs(parseFloat(j.total_price) - amount) < 0.005);
-
-if (!matches.length) {
-  // No single job carries this total. Try a bundle: the customer may have
-  // uploaded several files and paid the combined amount once.
-  const amountCents = toCents(amount);
-  const grouped = {};
+  // Group into orders. Each order is settled as a unit, so the payment is
+  // matched against an ORDER's total, not an individual job's.
+  const byOrder = new Map();
   for (const j of jobs) {
-    const cents = toCents(j.total_price);
-    if (cents <= 0) continue;
-    const k = ownerKey(j);
-    (grouped[k] = grouped[k] || []).push({ job: j, cents: cents });
+    const k = orderKeyOf(j);
+    if (!byOrder.has(k)) byOrder.set(k, []);
+    byOrder.get(k).push(j);
   }
 
-  let bundles = [];
-  for (const k of Object.keys(grouped)) {
-    bundles = bundles.concat(findBundles(grouped[k], amountCents));
+  const candidates = [];
+  for (const [k, group] of byOrder) {
+    // Every file in an order shares one amount; treat them as one candidate.
+    candidates.push({ key: k, jobs: group, amount: orderAmountOf(group) });
   }
 
-  if (bundles.length === 1) {
-    // Exactly one reading - settle every file in it.
-    const bundle = bundles[0];
-    const total = bundle.reduce(function (s, j) { return s + parseFloat(j.total_price); }, 0);
+  const matches = candidates.filter(c => Math.abs(c.amount - amount) < 0.005);
 
-    for (const j of bundle) {
-      const r = await confirmJobPaid(j, 'DuitNow (multi-file)', ref);
+  if (!matches.length) {
+    await supabaseRequest('POST', '/alerts', {
+      type: 'payment_received',
+      message: 'Payment detected RM ' + amount.toFixed(2) + ' (REF ' + ref + ' or ' + ts + ') but no matching order was found. Orders must be paid in full; a partial payment does not settle.',
+      severity: 'info',
+      is_read: false
+    });
+    return json({ success: false, matched: false, reason: 'no_match', amount });
+  }
+
+  if (matches.length > 1) {
+    // Two orders genuinely cost the same. Do not guess which documents the
+    // money paid for - releasing the wrong customer's files is a free print.
+    await supabaseRequest('POST', '/payment_review_queue', {
+      amount: amount,
+      payer_text: rawText,
+      notification_ref: ref,
+      reason: matches.length + ' orders each total RM ' + amount.toFixed(2)
+        + ' - staff must decide which order this paid for'
+    });
+    await supabaseRequest('POST', '/alerts', {
+      type: 'payment_received',
+      message: 'Payment detected RM ' + amount.toFixed(2) + ' (REF ' + ref + ') matches '
+        + matches.length + ' different orders - parked for review',
+      severity: 'warning',
+      is_read: false
+    });
+    return json({ success: false, matched: false, reason: 'ambiguous_order', amount: amount });
+  }
+
+  // Exactly one order carries this amount.
+  const order = matches[0];
+  const orderJobs = order.jobs;
+
+  if (orderJobs.length > 1) {
+    // Settle every file in the order, crediting coins ONCE for the order rather
+    // than once per file: the customer made one payment, so they earned one
+    // coin. Previously a five-file order paid five coins.
+    for (let i = 0; i < orderJobs.length; i++) {
+      const r = await confirmJobPaid(orderJobs[i], 'DuitNow (order)', ref, {
+        skipCoins: true
+      });
       if (!r.ok) {
         await supabaseRequest('POST', '/alerts', {
           type: 'payment_received',
-          message: 'Multi-file payment for ' + bundle.map(x => x.job_id).join(' + ')
+          message: 'Order payment for ' + orderJobs.map(j => j.job_id).join(' + ')
             + ' failed partway: ' + r.error + '. Check these jobs by hand.',
           severity: 'error',
           is_read: false
@@ -223,10 +275,12 @@ if (!matches.length) {
       }
     }
 
+    const coins = await awardOrderCoins(orderJobs[0], orderJobs.length);
+
     await supabaseRequest('POST', '/alerts', {
       type: 'payment_received',
-      message: 'Payment RM ' + total.toFixed(2) + ' settled ' + bundle.length + ' files: '
-        + bundle.map(j => j.job_id).join(', '),
+      message: 'Payment RM ' + amount.toFixed(2) + ' settled an order of '
+        + orderJobs.length + ' files: ' + orderJobs.map(j => j.job_id).join(', '),
       severity: 'info',
       is_read: false
     });
@@ -234,68 +288,14 @@ if (!matches.length) {
     return json({
       success: true,
       matched: true,
-      multi: true,
-      job_ids: bundle.map(j => j.job_id),
+      order: true,
+      job_ids: orderJobs.map(j => j.job_id),
       amount: amount
     });
   }
 
-  if (bundles.length > 1) {
-    // More than one combination of files adds up to this payment. Do not guess.
-    await supabaseRequest('POST', '/payment_review_queue', {
-      amount: amount,
-      payer_text: rawText,
-      notification_ref: ref,
-      reason: bundles.length + ' different file combinations each total RM '
-        + amount.toFixed(2) + ' - staff must decide which documents this paid for'
-    });
-    await supabaseRequest('POST', '/alerts', {
-      type: 'payment_received',
-      message: 'Payment detected RM ' + amount.toFixed(2) + ' (REF ' + ref + ') matches '
-        + bundles.length + ' different file combinations - parked for review',
-      severity: 'warning',
-      is_read: false
-    });
-    return json({ success: false, matched: false, reason: 'ambiguous_bundle', amount: amount });
-  }
-
-  await supabaseRequest('POST', '/alerts', {
-    type: 'payment_received',
-    message: 'Payment detected RM ' + amount.toFixed(2) + ' (REF ' + ref + ' or ' + ts + ') but no matching job or file combination was found',
-    severity: 'info',
-    is_read: false
-  });
-  return json({ success: false, matched: false, reason: 'no_match', amount });
-}
-
-  let job = matches[0];
-  let disambiguatedBy = 'amount';
-
-  if (matches.length > 1) {
-    // Rare: two live jobs share a total. The payer's name is only a tie-breaker,
-    // never the primary key, because the name on a bank account very often
-    // differs from the name on the account (nicknames, different ordering,
-    // truncated, romanisation). If it cannot separate them, do NOT guess.
-    await attachUserNames(matches);
-    const payer = extractPayerName(rawText);
-    if (payer) {
-      const named = matches.filter(j => jobBelongsToName(j, payer));
-      if (named.length === 1) {
-        job = named[0];
-        disambiguatedBy = 'amount+name';
-      } else if (named.length > 1) {
-        return await parkForReview(amount, amountRaw, payer, ref, rawText, named,
-          'amount matched ' + named.length + ' jobs and the payer name matched all of them');
-      }
-    }
-
-    if (disambiguatedBy === 'amount') {
-      // Could not pick safely. Park it instead of confirming somebody's document
-      // against somebody else's money.
-      return await parkForReview(amount, amountRaw, payer, ref, rawText, matches,
-        matches.length + ' pending jobs share RM ' + amount.toFixed(2) + ' and the payer name did not identify one');
-    }
-  }
+  // Exactly one order, and it holds a single file: the ordinary path.
+  const job = orderJobs[0];
 
   // Idempotency: already confirmed elsewhere?
   const dupResult = await supabaseRequest('GET', '/payments', null, {
@@ -317,114 +317,7 @@ if (!matches.length) {
     job_id: job.job_id,
     amount,
     coins_earned: res.coinsEarned,
-    matched_by: disambiguatedBy
-  });
-}
-
-// Fetch the account name for each candidate so the payer name can break a tie.
-// Guest jobs have no user, so they can never be matched this way - by design,
-// guests rely on the unique amount alone.
-async function attachUserNames(jobs) {
-  const ids = jobs.map(j => j.user_id).filter(Boolean);
-  if (!ids.length) return;
-  const result = await supabaseRequest('GET', '/users', null, {
-    'id': 'in.(' + ids.join(',') + ')',
-    'select': 'id,name',
-    'limit': String(ids.length)
-  });
-  if (result.error || !result.data) return;
-  const byId = {};
-  for (const u of result.data) byId[u.id] = u.name;
-  for (const j of jobs) j._userName = j.user_id ? byId[j.user_id] : null;
-}
-
-// "MUHAMMAD ZIKRY BIN MOHD H has transferred RM0.21 to you"
-// Pull out the payer's name. Deliberately conservative: returns null rather than
-// a wrong guess, because a bad name match is worse than no name match.
-function extractPayerName(rawText) {
-  if (!rawText) return null;
-  const patterns = [
-    /(.{2,60}?)\s+has transferred\s+RM/i,
-    /from\s+(.{2,60}?)(?:\s+via|\s*$)/im,
-    /by\s+(.{2,60}?)(?:\s+via|\s*$)/im
-  ];
-  for (const re of patterns) {
-    const m = re.exec(rawText);
-    if (!m) continue;
-    let name = String(m[1]).trim()
-      .replace(/^You've recieved money!\s*/i, '')
-      .replace(/^You received money!\s*/i, '')
-      .replace(/[!.,:;]\s*$/, '')
-      .trim();
-    // A real name, not another sentence.
-    if (name.length >= 3 && name.length <= 60 && /[A-Za-z]{2}/.test(name) && !/\b(rm|money|received|payment)\b/i.test(name)) {
-      return name;
-    }
-  }
-  return null;
-}
-
-// Compare loosely on purpose: the customer signed up one way, the bank shows
-// another. Case and spacing must not matter; we are only breaking a tie that the
-// amount alone could not.
-function jobBelongsToName(job, payerName) {
-  if (!job.user_id || !payerName) return false;
-  return job._userName ? sameName(job._userName, payerName) : false;
-}
-
-function sameName(a, b) {
-  const norm = (s) => String(s).toLowerCase().replace(/[^a-z]/g, '');
-  const na = norm(a), nb = norm(b);
-  if (!na || !nb) return false;
-  if (na === nb) return true;
-  // One contained in the other covers truncation ("Muhammad Zikry" vs
-  // "Muhammad Zikry Bin Mohd H") and reordered/middle-name variants.
-  return na.includes(nb) || nb.includes(na);
-}
-
-// Park an ambiguous payment for a human instead of force-matching it.
-async function parkForReview(amount, amountRaw, payerName, ref, rawText, candidates, reason) {
-  const candidateJobs = candidates.map(c => ({
-    id: c.id,
-    job_id: c.job_id,
-    total_price: c.total_price,
-    pages: c.pages,
-    copies: c.copies,
-    color_mode: c.color_mode,
-    file_name: c.file_name,
-    created_at: c.created_at
-  }));
-
-  const inserted = await supabaseRequest('POST', '/payment_review_queue', {
-    amount: amount,
-    amount_raw: amountRaw,
-    payer_name: payerName || '',
-    reference: ref || '',
-    raw_text: rawText || '',
-    candidate_jobs: JSON.stringify(candidateJobs),
-    reason: reason,
-    status: 'pending'
-  });
-
-  await supabaseRequest('POST', '/alerts', {
-    type: 'payment_received',
-    // The admin review card is gone - Mark Paid on the Transactions table is the
-    // single way staff settle a job. So the alert has to say what to do, otherwise
-    // a parked payment becomes invisible and the customer is stuck at the kiosk.
-    message: 'Payment RM ' + amount.toFixed(2) + ' could not be matched automatically ('
-      + reason + '). Open Admin > Transactions, find the job, and click Mark Paid.'
-      + (candidates.length ? ' Candidates: ' + candidates.map(c => c.job_id).join(', ') + '.' : ''),
-    severity: 'warning',
-    is_read: false
-  });
-
-  return json({
-    success: false,
-    matched: false,
-    needs_review: true,
-    reason: reason,
-    amount: amount,
-    candidates: inserted.error ? null : candidateJobs
+    matched_by: 'amount'
   });
 }
 
@@ -521,66 +414,39 @@ module.exports.confirmJobPaid = confirmJobPaid;
 // Exported so the admin dashboard can confirm a parked (ambiguous) payment
 // without duplicating the coins/job/settlement logic.
 // ---------------------------------------------------------------------------
-// Multi-file orders
+// Matching an order
 //
-// Uploading two files creates two separate print_jobs, but the customer pays
-// ONCE for the combined total. The matcher below compares the payment amount to
-// a single job's total_price, so a two-file payment of RM1.52 matched nothing at
-// all: no job has that total, and the payment was reported as "no_match" while
-// the customer stood at the kiosk.
+// A payment settles ONE order. An order is the set of files sharing an order_id,
+// and the amount the customer pays is that order's order_total, computed and
+// stored by upload.js at seal time.
 //
-// So a payment may also be matched against a SUBSET of jobs whose totals sum to
-// it. Constraints, all deliberate:
+// Matching used to compare the amount against a single job's total_price, which
+// meant a two-file order of RM0.41 + RM1.11 = RM1.52 matched nothing and the
+// customer paid without receiving a PIN. A subset search was added as a
+// workaround and then removed: session_id is generated fresh per job so a
+// guest's files were never grouped, it needed a 5-file cap to bound the
+// combinatorics, and two different combinations can sum to the same amount,
+// which is unresolvable without guessing.
 //
-//   - only within one session/user, so one customer's jobs can never be
-//     combined with another's to hit the right number
-//   - only jobs already pending and unpaid inside MATCH_WINDOW_MIN
-//   - only exact to the cent, so coincidence is not a factor
-//   - a maximum of 5 files, matching what the UI will actually let you upload
+// With order_id this is an equality test - no search, no ambiguity, no cap, and
+// identical behaviour for guests and members.
 //
-// If more than one subset sums to the same amount the result is genuinely
-// ambiguous, and guessing would credit the wrong documents. Those are parked
-// for staff review instead.
-const MAX_BUNDLE_FILES = 5;
-const CENT = 0.005;
-
-// Exact subset search over integer cents, so floating point cannot make
-// 0.41 + 1.11 miss 1.52.
-function toCents(v) {
-  return Math.round((parseFloat(v) || 0) * 100);
+// Jobs with no order_id predate this and are treated as single-file orders of
+// their own, so existing single-file payments keep matching with no backfill.
+//
+// Whole-order payment only: a partial amount simply does not equal order_total,
+// so it never matches and the order stays pending. That is intentional.
+function orderKeyOf(j) {
+  return j.order_id ? 'o:' + j.order_id : 'j:' + j.job_id;
 }
 
-function findBundles(candidates, amountCents) {
-  const found = [];
-  const target = amountCents;
-
-  function walk(start, remaining, chosen) {
-    if (remaining === 0) {
-      found.push(chosen.slice());
-      return;
-    }
-    if (chosen.length >= MAX_BUNDLE_FILES) return;
-    if (remaining < 0) return;
-
-    for (let i = start; i < candidates.length; i++) {
-      const c = candidates[i];
-      if (c.cents > remaining) continue; // totals are positive
-      chosen.push(c.job);
-      walk(i + 1, remaining - c.cents, chosen);
-      chosen.pop();
-      if (found.length > 20) return; // pathological input guard
-    }
+function orderAmountOf(jobs) {
+  // order_total is authoritative once sealed. Fall back to the job total for
+  // legacy unsealed rows.
+  const sealed = jobs.map(j => parseFloat(j.order_total))
+    .filter(v => !Number.isNaN(v) && v !== null);
+  if (sealed.length === jobs.length && sealed.length) {
+    return sealed[0];
   }
-
-  walk(0, target, []);
-  return found;
+  return jobs.reduce(function (s, j) { return s + (parseFloat(j.total_price) || 0); }, 0);
 }
-
-// Group pending jobs by owner so a payment can only ever combine one
-// customer's documents.
-function ownerKey(j) {
-  return j.user_id ? 'u:' + j.user_id : 's:' + (j.session_id || '?');
-}
-
-module.exports.findBundles = findBundles;
-module.exports.toCents = toCents;

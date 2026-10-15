@@ -12,6 +12,6 @@
   "scripts": {
     "version:sync": "node scripts/sync-version.js",
     "check:version": "node scripts/sync-version.js",
-    "test": "node scripts/sync-version.js && node scripts/check-syntax.js && node scripts/check-kiosk-globals.js && node scripts/check-face-logic.js && node scripts/check-printer-honesty.js && node scripts/check-clear-jobs.js && node scripts/check-face-perf.js && node scripts/check-printer-diagnostics.js && node scripts/check-page-extract.js && node scripts/check-printer-identity.js && node scripts/check-model-parse.js && node scripts/check-multi-file-payment.js && node scripts/check-version-sync.js"
+    "test": "node scripts/sync-version.js && node scripts/check-syntax.js && node scripts/check-kiosk-globals.js && node scripts/check-face-logic.js && node scripts/check-printer-honesty.js && node scripts/check-clear-jobs.js && node scripts/check-face-perf.js && node scripts/check-printer-diagnostics.js && node scripts/check-page-extract.js && node scripts/check-printer-identity.js && node scripts/check-model-parse.js && node scripts/check-order-payment.js && node scripts/check-version-sync.js"
   }
 }

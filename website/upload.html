@@ -258,6 +258,9 @@ let phonePdfDoc = null;
 let phonePdfPages = 1;
 let phoneCurrentPreviewPage = 1;
 let phoneCurrentJobId = null;
+// Server-priced total for the whole order. Null for a guest's single file, where
+// the job total is already the amount to pay.
+let phoneOrderTotal = null;
 let phoneUploadedJobs = [];
 let qToken = '';
 let qGuest = false;
@@ -301,10 +304,48 @@ document.getElementById('phoneFile').addEventListener('change', function() {
   this.value = '';
 });
 
+// A signed-in customer may send several files in one order and pay once for
+// them all. A guest may send only one: they have no account, so an order of
+// theirs could not be attributed to them when the payment arrives.
+var MAX_ORDER_FILES = 5;
+var MAX_FILES_GUEST = 1;
+
+function uploadPageIsGuest() {
+  // qGuest is set from ?guest=1 (the kiosk QR), which also clears the session.
+  // Both are checked so a stale token cannot turn a guest order into a bundle.
+  return qGuest || !localStorage.getItem('session_token');
+}
+
+// One order reference per batch. It is what lets a single payment settle every
+// file the customer sent together.
+function currentOrderId() {
+  if (uploadPageIsGuest()) return '';
+  var oid = sessionStorage.getItem('pk_order_id');
+  if (!oid) {
+    oid = 'o' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+    sessionStorage.setItem('pk_order_id', oid);
+  }
+  return oid;
+}
+
 function addFiles(files) {
   var added = 0;
   var errs = '';
-  files.forEach(function(file) {
+  var limit = uploadPageIsGuest() ? MAX_FILES_GUEST : MAX_ORDER_FILES;
+  var room = limit - bulkFiles.length;
+
+  if (room <= 0) {
+    alert(uploadPageIsGuest()
+      ? 'Guests can send one file at a time. Sign in to send several files in one order.'
+      : 'An order can hold up to ' + limit + ' files. Remove one to add another.');
+    return;
+  }
+  if (files.length > room) {
+    errs = (files.length - room) + ' file' + (files.length - room === 1 ? ' was' : 's were')
+      + ' not added - an order holds up to ' + limit + ' file' + (limit === 1 ? '' : 's') + '.';
+  }
+
+  files.slice(0, room).forEach(function(file) {
     var ext = (file.name.split('.').pop() || '').toLowerCase();
     if (!['pdf','doc','docx','jpg','jpeg','png'].includes(ext)) { errs += (errs ? '\n' : '') + file.name + ': unsupported type'; return; }
     if (file.size > 20 * 1024 * 1024) { errs += (errs ? '\n' : '') + file.name + ': exceeds 20MB'; return; }
@@ -841,8 +882,11 @@ async function submitPhoneUpload() {
       } else {
         var formData = new FormData();
         var blob = await upFile.arrayBuffer().then(function(b) { return new Blob([b], { type: upFile.type || 'application/octet-stream' }); });
-        formData.append('file', blob, fileName);
-        formData.append('print_pin', orderPin);
+formData.append('file', blob, fileName);
+    formData.append('print_pin', orderPin);
+    // Groups this file with the others in the same order. Empty for a guest,
+    // who sends one file at a time.
+    if (currentOrderId()) formData.append('order_id', currentOrderId());
         formData.append('color_mode', s.color || 'bw');
         formData.append('paper_size', 'a4');
         formData.append('sides', s.sides || 'single');
@@ -874,6 +918,28 @@ async function submitPhoneUpload() {
 
   if (!phoneUploadedJobs.length) { alert('No files uploaded successfully'); btn.disabled = false; btn.textContent = 'Upload & Pay'; return; }
 
+  // Ask the server what the whole order costs. The browser's own sum is not
+  // trusted: the amount quoted to the customer must be exactly the one the
+  // payment matcher looks for, or they pay and it never settles.
+  if (currentOrderId()) {
+    try {
+      var sealRes = await fetch(API('upload', 'seal-order'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Session-Token': sessionStorage.getItem('pk_token') || localStorage.getItem('session_token') || ''
+        },
+        body: JSON.stringify({ order_id: currentOrderId() })
+      });
+      var sealData = await sealRes.json();
+      if (!sealData.success) throw new Error(sealData.error || 'Could not price this order');
+      phoneOrderTotal = sealData.order_total;
+    } catch (sealErr) {
+      uploadFail(sealErr.message || 'Could not price this order');
+      return;
+    }
+  }
+
   var totalPages = 0;
   var totalCopies = 0;
   var totalPrice = 0;
@@ -881,6 +947,9 @@ async function submitPhoneUpload() {
   phoneUploadedJobs.forEach(function(j) { totalPages += j.pages; totalCopies += j.copies || 1; totalPrice += parseFloat(j.total_price) || 0; if ((j.color_mode || 'bw') === 'color') hasColor = true; });
   var allJobIds = phoneUploadedJobs.map(function(j) { return j.job_id; });
   phoneCurrentJobId = allJobIds.join(',');
+  // Quote what the SERVER priced the order at, not the browser's own sum, so the
+  // amount shown and the amount the payment matcher looks for cannot disagree.
+  if (phoneOrderTotal !== null) totalPrice = phoneOrderTotal;
 
   // Fully covered by coins -> already paid, go straight to the receipt.
   if (phoneAutoPaid) { showPhoneFreeReceipt(); return; }

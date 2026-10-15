@@ -765,8 +765,28 @@ uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('drag
 uploadZone.addEventListener('drop', (e) => { e.preventDefault(); uploadZone.classList.remove('dragover'); addFiles(e.dataTransfer.files); });
 fileInput.addEventListener('change', () => { if (fileInput.files.length) addFiles(fileInput.files); fileInput.value = ''; });
 
+// A signed-in customer may send up to MAX_ORDER_FILES in one order and pay once
+// for the whole thing. Guests use upload.html, which allows a single file.
+var MAX_ORDER_FILES = 5;
+
+// One order reference per batch, so a single payment settles every file in it.
+function currentOrderId() {
+  var oid = sessionStorage.getItem('pk_order_id');
+  if (!oid) {
+    oid = 'o' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+    sessionStorage.setItem('pk_order_id', oid);
+  }
+  return oid;
+}
+
 function addFiles(files) {
-  for (var i = 0; i < files.length; i++) {
+  var limit = MAX_ORDER_FILES;
+  var room = limit - bulkFiles.length;
+  if (room <= 0) {
+    alert('An order can hold up to ' + limit + ' files. Remove one to add another.');
+    return;
+  }
+  for (var i = 0; i < Math.min(files.length, room); i++) {
     var f = files[i];
     var ext = f.name.split('.').pop().toLowerCase();
     if (!allowedExts.includes(ext)) { alert(f.name + ': File type not allowed'); continue; }
@@ -1440,7 +1460,7 @@ async function placeOrder() {
 
   // Bytes go straight to Supabase Storage via a signed URL, so Netlify's 6MB
   // request-body limit never applies. Steps: 1) sign 2) PUT to storage 3) create job row.
-  async function uploadJobNetlify(file, s, orderPin, sessionToken, pageSpec, pagesCount) {
+  async function uploadJobNetlify(file, s, orderPin, sessionToken, pageSpec, pagesCount, orderId) {
     var fileName = file.name || 'file';
     var signRes = await fetch(API('upload', 'sign-upload'), {
       method: 'POST',
@@ -1466,10 +1486,12 @@ async function placeOrder() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Session-Token': sessionToken || '' },
       body: JSON.stringify({
-        job_id: signD.job_id,
-        file_url: signD.public_url,
-        file_name: fileName,
-        print_pin: orderPin,
+job_id: signD.job_id,
+    file_url: signD.public_url,
+    file_name: fileName,
+    print_pin: orderPin,
+    // Groups this file with the rest of the batch.
+    order_id: orderId || '',
         color_mode: s.color || 'bw',
         paper_size: 'a4',
         sides: s.sides || 'single',
@@ -1528,14 +1550,16 @@ async function placeOrder() {
         ? pageSpec.split(',').filter(Boolean).length
         : (s.pages || 1);
 
-      var d;
-      if (IS_NETLIFY) {
-        d = await uploadJobNetlify(upFile, s, orderPin, token, pageSpec, pagesCount);
-      } else {
-        const fd = new FormData();
-        var blob = await fileToBlob(upFile);
-        fd.append('file', blob, upFile.name || 'file');
-        fd.append('print_pin', orderPin);
+var d;
+    if (IS_NETLIFY) {
+      d = await uploadJobNetlify(upFile, s, orderPin, token, pageSpec, pagesCount, currentOrderId());
+    } else {
+      const fd = new FormData();
+      var blob = await fileToBlob(upFile);
+      fd.append('file', blob, upFile.name || 'file');
+      fd.append('print_pin', orderPin);
+      // Groups this file with the others in the same order.
+      fd.append('order_id', currentOrderId());
         fd.append('color_mode', s.color || 'bw');
         fd.append('paper_size', 'a4');
         fd.append('sides', s.sides || 'single');
@@ -1573,11 +1597,35 @@ async function placeOrder() {
   showUploadOverlay(true, { sub: 'Finalising your order…', progress: 100, note: 'Almost done…' });
   if (!pendingUploadJobs.length) { showUploadOverlay(false); alert('No files uploaded successfully'); btn.disabled = false; btn.textContent = 'Upload & Get PIN'; return; }
 
+  // Ask the server what the whole order costs. The browser's own sum is not
+  // trusted: the amount quoted must be exactly the one the payment matcher
+  // looks for, or the customer pays and it never settles.
+  var sealedOrderTotal = null;
+  try {
+    var sealRes = await fetch(API('upload', 'seal-order'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Session-Token': token || '' },
+      body: JSON.stringify({ order_id: currentOrderId() })
+    });
+    var sealData = await sealRes.json();
+    if (!sealData.success) throw new Error(sealData.error || 'Could not price this order');
+    sealedOrderTotal = sealData.order_total;
+  } catch (sealErr) {
+    showUploadOverlay(false);
+    alert(sealErr.message || 'Could not price this order. Nothing has been charged.');
+    btn.disabled = false;
+    btn.textContent = 'Upload & Get PIN';
+    return;
+  }
+
   var totalPages = 0;
   var totalCopies = 0;
   var totalPrice = 0;
   pendingUploadJobs.forEach(function(j) { totalPages += j.pages; totalCopies += j.copies || 1; totalPrice += parseFloat(j.total_price) || 0; });
   redeemOriginalTotal = totalPrice; // base amount before any coin discount
+    // Quote the server-priced order total so the displayed amount and the amount
+    // the payment matcher looks for are the same number.
+    if (sealedOrderTotal !== null) totalPrice = sealedOrderTotal;
   var fileNames = pendingUploadJobs.map(function(j) { return j.file_name; });
   var pinDisplay = pendingUploadJobs.length ? (pendingUploadJobs[0].print_pin || orderPin) : orderPin;
   var allJobIds = pendingUploadJobs.map(function(j) { return j.job_id; });
