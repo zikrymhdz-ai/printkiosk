@@ -16,10 +16,10 @@
 <link rel="stylesheet" href="../styles.css">
 <link href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.css" rel="stylesheet">
 <script src="../frontend_config.js"></script>
-<script src="pstore.js?v=2026.10.14-88"></script>
+<script src="pstore.js?v=2026.10.14-89"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
-<script src="pagerange.js?v=2026.10.14-88"></script>
+<script src="pagerange.js?v=2026.10.14-89"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.js"></script>
 <script>pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
 <style>
@@ -1026,6 +1026,13 @@ async function submitPhoneUpload() {
         return;
       }
       renderFileList();
+      // Files that price differently must stay in separate jobs, otherwise a
+      // black-and-white photo gets printed in colour AND charged at the colour
+      // rate. Say so, rather than letting the job count quietly surprise them.
+      if (bulkFiles.length > 1) {
+        toastMsg('Kept as ' + bulkFiles.length + ' separate jobs: files with a different colour, '
+          + 'sides or copies are priced differently, so they are printed separately.');
+      }
     }
 
     for (let i = 0; i < bulkFiles.length; i++) {

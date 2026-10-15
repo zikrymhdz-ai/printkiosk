@@ -414,54 +414,83 @@ window.PKPageRange = (function () {
    *
    * Returns items shaped like the originals, so the upload loop is unchanged.
    */
-  function combineByType(items) {
-    var docs = [];
-    var images = [];
-    items.forEach(function (it) {
-      (isImage(it.file.name) ? images : docs).push(it);
-    });
-
-    var work = Promise.resolve([]);
-
-    if (images.length > 1) {
-      work = work.then(function () {
-        return combineImages(images).then(function (merged) {
-          if (!merged) return images; // could not bake adjustments: keep separate
-          return [mergedItem(images, merged)];
-        });
-      });
-    } else {
-      work = work.then(function () { return images; });
-    }
-
-    if (docs.length > 1) {
-      var allPdf = docs.every(function (it) { return extOf(it.file.name) === 'pdf'; });
-      if (allPdf) {
-        work = work.then(function (acc) {
-          return prepareForMerge(docs).then(function (files) {
-            return mergeIntoPdf(files).then(function (merged) {
-              return acc.concat([mergedItem(docs, merged)]);
-            });
-          });
-        });
-      } else {
-        work = work.then(function (acc) { return acc.concat(docs); });
+  /* Split a batch into groups that can safely be combined.
+   *
+   * Combining is only correct when every member prices the SAME way, because
+   * one job carries one colour_mode column and calculatePrice() takes a single
+   * mode for all of its pages. With colour, sides and copies held equal:
+   *
+   *   sum of parts = (page1 + page2 + ...) x sidesMult x rate x copies
+   *   combined    = (total pages)    x sidesMult x rate x copies
+   *
+   * which are equal. So a group keyed on those three can be merged with no
+   * change to what the customer is charged. Anything that differs - one photo
+   * in colour and one in black and white - must stay a separate job, or it is
+   * charged at the colour rate and printed in colour.
+   *
+   * File type is part of the key too: a document and a photo are printed
+   * differently, and the page refuses that batch up front via mixedTypes().
+   *
+   * Returns [[items...], [items...], ...] in first-seen order.
+   */
+  function combineGroups(items) {
+    var groups = [];
+    var byKey = {};
+    (items || []).forEach(function (it) {
+      var s = it.settings || {};
+      var kind = isImage(it.file.name) ? 'image' : 'document';
+      var key = kind + '|' + (s.color || 'bw') + '|' + (s.sides || 'single')
+        + '|' + (s.copies || 1);
+      if (!byKey[key]) {
+        byKey[key] = [];
+        groups.push(byKey[key]);
       }
-    } else if (docs.length === 1) {
-      work = work.then(function (acc) { return acc.concat(docs); });
-    }
-
-    return work;
+      byKey[key].push(it);
+    });
+    return groups;
   }
 
-  // Settings for a combined group. Colour is colour if ANY part was colour, so
-  // nothing is silently printed in the wrong mode; everything else comes from
-  // the first file. No adjustment survives, because a combined document is no
-  // longer an image - the values were already baked into the pixels.
+  function combineByType(items) {
+    var groups = combineGroups(items);
+
+    return groups.reduce(function (chain, group) {
+      return chain.then(function (acc) {
+        // A single file has nothing to combine with.
+        if (group.length < 2) return acc.concat(group);
+
+        var kind = isImage(group[0].file.name) ? 'image' : 'document';
+
+        if (kind === 'image') {
+          return combineImages(group).then(function (merged) {
+            // Could not bake the adjustments in: keep them separate rather than
+            // merging and silently losing what the customer dialled in.
+            if (!merged) return acc.concat(group);
+            return acc.concat([mergedItem(group, merged)]);
+          });
+        }
+
+        // A DOC/DOCX has no client-side renderer, so documents are only merged
+        // when every member is a PDF.
+        var allPdf = group.every(function (it) { return extOf(it.file.name) === 'pdf'; });
+        if (!allPdf) return acc.concat(group);
+
+        return prepareForMerge(group).then(function (files) {
+          return mergeIntoPdf(files).then(function (merged) {
+            return acc.concat([mergedItem(group, merged)]);
+          });
+        });
+      });
+    }, Promise.resolve([]));
+  }
+
+  /* Settings for a combined group.
+   *
+   * Every member shares colour, sides and copies - that is what the grouping
+   * guarantees - so the first file's values are correct for all of them. The
+   * old behaviour, "colour if any part was colour", silently printed a
+   * black-and-white photo in colour AND charged the colour rate for it.
+   */
   function mergedItem(members, merged) {
-    var anyColor = members.some(function (it) {
-      return it.settings && it.settings.color === 'color';
-    });
     var first = (members[0] && members[0].settings) || {};
     return {
       file: merged.file,
@@ -470,7 +499,7 @@ window.PKPageRange = (function () {
       pdfPages: merged.pages,
       _mergedFrom: members.map(function (it) { return it.file.name; }),
       settings: {
-        color: anyColor ? 'color' : (first.color || 'bw'),
+        color: first.color || 'bw',
         copies: first.copies || 1,
         sides: first.sides || 'single',
         pages: merged.pages,
@@ -514,6 +543,7 @@ window.PKPageRange = (function () {
     mergeIntoPdf: mergeIntoPdf,
     prepareForMerge: prepareForMerge,
     combineByType: combineByType,
+    combineGroups: combineGroups,
     combineImages: combineImages,
     adjustImageFile: adjustImageFile,
     shareableSettings: shareableSettings,
