@@ -500,10 +500,10 @@ window.addEventListener('load', function () {
     <p id="jobsUserName" style="font-size:20px; font-weight:700; margin-bottom:4px;"></p>
     <p style="color:#7d90ad; font-size:13px; margin-bottom:16px;">Select a print job to proceed</p>
     <div id="jobsList" style="display:flex; flex-direction:column; gap:10px;"></div>
-    <div id="jobsEmpty" style="display:none; text-align:center; padding:24px; color:#64748b;">
-      <p style="font-size:14px; font-weight:600;">No pending jobs</p>
-      <p style="font-size:13px; margin-top:4px;">Upload files from your phone first</p>
-    </div>
+      <div id="jobsEmpty" style="display:none; text-align:center; padding:24px; color:#64748b;">
+        <p style="font-size:14px; font-weight:600;" id="jobsEmptyTitle">No documents ready to print</p>
+        <p style="font-size:13px; margin-top:4px;" id="jobsEmptyMsg">Upload files from your phone first</p>
+      </div>
     <div style="display:flex; gap:8px; margin-top:16px;">
       <button class="btn-kiosk btn-primary-kiosk" style="flex:1;" onclick="showUploadQRFromJobs()">Scan QR to upload</button>
       <button class="btn-kiosk btn-secondary-kiosk" style="flex:1;" onclick="location.reload()">Back</button>
@@ -855,7 +855,7 @@ function throttledUnknownLog(distance) {
 /* ===== REMOTE KIOSK CONTROL (admin) ===== */
 // Must match APP_VERSION in netlify/functions/_shared.js. If the deployed
 // version differs, the kiosk reloads itself so it never runs a stale page.
-var KIOSK_APP_VERSION = '2026.10.14-92';
+var KIOSK_APP_VERSION = '2026.10.14-94';
 
 // Latest printer verdict from the backend: can we print, and if not why.
 // Refreshed by loadPrinterStatus() and consulted by printTapped() at the
@@ -1934,17 +1934,30 @@ function showUserJobs(userData) {
     .then(function(r) { return r.json(); })
     .then(function(d) {
       var jobs = d.data || [];
-      if (!jobs.length) {
+      // Only documents that have been paid for may be picked here. Listing an
+      // unpaid one invited the customer to tap it, and everything downstream
+      // assumed "listed" meant "paid": it is how an unpaid job reached the
+      // printer. Unpaid jobs are counted instead of listed, so nobody is left
+      // wondering where their document went.
+      var paid = jobs.filter(function (j) { return j.paid === true; });
+      var waiting = jobs.length - paid.length;
+
+      if (!paid.length) {
         list.innerHTML = '';
         empty.style.display = 'block';
+        var msg = empty.querySelector('#jobsEmptyMsg');
+        if (msg) {
+          msg.textContent = waiting
+            ? 'You have ' + waiting + ' document' + (waiting === 1 ? '' : 's')
+              + ' waiting for payment. Pay on the website first, then scan again.'
+            : 'No documents ready to print.';
+        }
         return;
       }
-      list.innerHTML = jobs.map(function(j) {
-        var isPaid = j.paid;
+
+      list.innerHTML = paid.map(function(j) {
         var colorLabel = j.color_mode === 'color' ? 'Color' : j.color_mode === 'mixed' ? 'Mixed' : 'B&W';
-        var statusBadge = isPaid
-          ? '<span style="background:#166534; color:white; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:600;">Paid</span>'
-          : '<span style="background:#92400e; color:white; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:600;">Unpaid</span>';
+        var statusBadge = '<span style="background:#166534; color:white; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:600;">Paid</span>';
         return '<div class="job-card" style="cursor:pointer; padding:14px; border-radius:12px; transition:border-color 0.2s;" onmouseover="this.style.borderColor=\'#3b82f6\'" onmouseout="this.style.borderColor=\'#334155\'" onclick="selectJob(\'' + j.job_id + '\')">' +
           '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">' +
             '<span style="font-weight:700; font-size:14px; color:#f1f5f9; max-width:60%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">' + (j.file_name || 'File') + '</span>' +
@@ -1955,7 +1968,7 @@ function showUserJobs(userData) {
             '<span>' + colorLabel + '</span>' +
             '<span>x' + (j.copies || 1) + '</span>' +
           '</div>' +
-          '<div style="margin-top:8px; font-size:16px; font-weight:700; color:#3b82f6;">RM ' + parseFloat(j.total_price || 0).toFixed(2) + '</div>' +
+          '<div style="margin-top:8px; font-size:16px; font-weight:700; color:#3b82f6;">RM ' + orderAmountOf([j]).toFixed(2) + '</div>' +
         '</div>';
       }).join('');
     })
@@ -1978,18 +1991,18 @@ function selectJob(jobId) {
       document.getElementById('pinJobId').textContent = job.job_id;
       document.getElementById('pinFileName').textContent = job.file_name;
       document.getElementById('pinPages').textContent = job.pages + 'p ' + job.color_mode;
-      document.getElementById('pinAmount').textContent = 'RM ' + parseFloat(job.total_price).toFixed(2);
+      document.getElementById('pinAmount').textContent = 'RM ' + orderAmountOf([job]).toFixed(2);
       if (job.paid) {
         document.getElementById('receiptJobId').textContent = job.job_id;
         document.getElementById('receiptFile').textContent = job.file_name;
         document.getElementById('receiptPages').textContent = job.pages + ' pages';
         document.getElementById('receiptColor').textContent = job.color_mode === 'color' ? 'Color' : 'B&W';
         document.getElementById('receiptCopies').textContent = 'x' + (job.copies || 1);
-        document.getElementById('receiptTotal').textContent = 'RM ' + parseFloat(job.total_price).toFixed(2);
+        document.getElementById('receiptTotal').textContent = 'RM ' + orderAmountOf([job]).toFixed(2);
         document.getElementById('receiptCoinsRow').style.display = 'none';
         document.getElementById('receiptOverlay').classList.remove('hidden');
       } else {
-        document.getElementById('payAmount').textContent = 'RM ' + parseFloat(job.total_price).toFixed(2);
+        document.getElementById('payAmount').textContent = 'RM ' + orderAmountOf([job]).toFixed(2);
         document.getElementById('paymentOverlay').classList.remove('hidden');
       }
     });
@@ -2187,9 +2200,30 @@ async function lookupPin() {
   }
 }
 
+/* The amount an order must be paid at.
+ *
+ * This MUST mirror orderAmountOf() in netlify/functions/payment.js. The payment
+ * matcher decides what it is looking for using that rule, so if the kiosk shows
+ * a different figure the customer pays an amount nothing is waiting for and
+ * their payment is never detected.
+ *
+ * The kiosk used to add up the per-job total_price. For an order of several
+ * jobs that sum carries each job's own small match fee, while the sealed
+ * order_total is the items plus ONE fee for the payment - so the two figures
+ * differ by exactly the amount that makes the payment miss. One job agreed,
+ * which is why this only showed up once a batch became more than one job.
+ */
+function orderAmountOf(jobs) {
+  var list = jobs || [];
+  var sealed = list.map(function (j) { return parseFloat(j.order_total); })
+    .filter(function (v) { return !isNaN(v) && v !== null; });
+  if (sealed.length === list.length && sealed.length) return sealed[0];
+  return list.reduce(function (s, j) { return s + (parseFloat(j.total_price) || 0); }, 0);
+}
+
 function renderPinJobs(jobs) {
   var totalPages = jobs.reduce(function(a, j) { return a + (parseInt(j.pages) || 0); }, 0);
-  var totalPrice = jobs.reduce(function(a, j) { return a + (parseFloat(j.total_price) || 0); }, 0);
+  var totalPrice = orderAmountOf(jobs);
   var allColors = jobs.map(function(j) { return j.color_mode || 'bw'; });
   var colorLabel = allColors.every(function(c) { return c === allColors[0]; }) ? (allColors[0] === 'color' ? 'Color' : allColors[0] === 'mixed' ? 'Mixed' : 'B&W') : 'Mixed';
   var fileLine = jobs.length === 1 ? jobs[0].file_name : jobs.length + ' files: ' + jobs.map(function(j) { return j.file_name.split('.').pop(); }).join(', ');
@@ -2201,7 +2235,8 @@ function renderPinJobs(jobs) {
 
 function showReceiptFromJobs(jobs, coinsEarned) {
   var jobIds = jobs.map(function(j) { return j.job_id; });
-  var totalPrice = jobs.reduce(function(a, j) { return a + (parseFloat(j.total_price) || 0); }, 0);
+  // Same rule as the matcher, for the same reason.
+  var totalPrice = orderAmountOf(jobs);
   var totalPages = jobs.reduce(function(a, j) { return a + (parseInt(j.pages) || 0); }, 0);
   var totalCopies = jobs.reduce(function(a, j) { return a + (parseInt(j.copies) || 1); }, 0);
   var allColors = jobs.map(function(j) { return j.color_mode || 'bw'; });
