@@ -1,4 +1,4 @@
-const { json, err, supabaseRequest, validateSession, generateJobId, calculatePrice, assignUniqueMatchAmount, createJobWithUniqueFee, assignUniqueOrderTotal, ALLOWED_EXTENSIONS, SUPABASE_URL, supabaseStorageSignedUrl, parseMultipartFormData, EXT_MIME_MAP } = require('./_shared');
+const { json, err, supabaseRequest, validateSession, generateJobId, calculatePrice, assignUniqueMatchAmount, createJobWithUniqueFee, assignUniqueOrderTotal, ALLOWED_EXTENSIONS, SUPABASE_URL, supabaseStorageSignedUrl, parseMultipartFormData, EXT_MIME_MAP, JOB_PAYABLE_WINDOW_MIN } = require('./_shared');
 
 // A guest uploading without an account gets one file only: they have no
 // identity, so a bundle of theirs could not be attributed to them when a
@@ -197,21 +197,34 @@ async function handleSealOrder(event) {
     const b = parseFloat(j.base_price);
     return s + (Number.isNaN(b) ? (parseFloat(j.total_price) || 0) : b);
   }, 0);
-  // Collect every order total currently awaiting payment so this one can be
-  // given a total of its own. Without this, {0.20, 0.30} and {0.50} both total
-  // RM0.50 and a payment of RM0.50 could settle either order.
+  // Reserve every amount that could still be matched to a payment, so this
+  // order's total cannot collide with another live one.
+  //
+  // Both fields are reserved, and the window is the same 60 minutes the matcher
+  // uses. Reserving only order_total let a single-file job's total_price equal
+  // a multi-file order's order_total; reserving for a shorter window than the
+  // matcher let an amount be re-issued while the original order was still a
+  // candidate. Either way two orders ended up on one figure, and the matcher
+  // parks such a payment for staff review rather than guessing - so the
+  // customer paid the amount they were shown and it never settled.
+  const sealCutoff = new Date(Date.now() - JOB_PAYABLE_WINDOW_MIN * 60 * 1000).toISOString();
   const liveOrders = await supabaseRequest('GET', '/print_jobs', null, {
     'paid': 'eq.false',
     'status': 'eq.pending',
+    // No "order_total is not null" filter: unsealed single-file orders are
+    // matched against their job total and must be reserved too.
     'select': 'order_total,total_price',
-    'order_total': 'not.is.null',
+    'created_at': 'gte.' + sealCutoff,
     'limit': '500'
   });
+
   const usedTotals = [];
   if (!liveOrders.error && Array.isArray(liveOrders.data)) {
     for (const j of liveOrders.data) {
-      const v = parseFloat(j.order_total);
-      if (!Number.isNaN(v)) usedTotals.push(v);
+      for (const field of ['order_total', 'total_price']) {
+        const v = parseFloat(j[field]);
+        if (!Number.isNaN(v)) usedTotals.push(v);
+      }
     }
   }
   // This order's own current total must not block it.

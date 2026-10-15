@@ -7,10 +7,19 @@ const SUPABASE_REST_URL = SUPABASE_URL + '/rest/v1';
 const SESSION_DURATION = 86400 * 7;
 
 // How long a pending print job can still be matched to a payment by the watcher.
-// Ten minutes is long enough for a customer to upload, pick a payment method and
-// complete a transfer, and short enough that abandoned jobs stop squatting on the
-// unique match-amount slots.
-const JOB_PAYABLE_WINDOW_MIN = 10;
+//
+// This MUST be the same window the payment matcher uses. They used to differ -
+// 10 minutes here, 60 in payment.js - and the gap is what made correct payments
+// undetectable: at minute 10 an amount stopped being reserved, so a new order
+// could be issued the same figure, yet both orders stayed matchable candidates
+// for a full hour. A payment of that amount then matched two orders, was parked
+// for staff review, and the customer stood at the kiosk watching it never
+// settle. A customer who was shown RM1.30, paid RM1.30, and was told their
+// payment could not be detected.
+//
+// Reserving for exactly as long as an order stays matchable makes a duplicate
+// amount impossible for any payment the matcher could ever be asked about.
+const JOB_PAYABLE_WINDOW_MIN = 60;
 
 // Shared secret between the PrintKiosk Payment Watcher APK and this backend,
 // used to sign server-side "payment detected" events (HMAC-SHA256).
@@ -29,7 +38,7 @@ const PRICE_DOUBLE_SIDED_MULTIPLIER = 0.7;
 // Bumped whenever the kiosk front-end changes. The kiosk compares this against
 // the version it was loaded with and reloads itself, so an unattended screen
 // never keeps running a stale copy of walkin.html.
-const APP_VERSION = '2026.10.14-96';
+const APP_VERSION = '2026.10.14-97';
 
 const ALLOWED_EXTENSIONS = ['pdf', 'doc', 'docx', 'jpg', 'jpeg', 'png'];
 
@@ -359,7 +368,12 @@ async function assignUniqueMatchAmount(basePrice) {
   const result = await supabaseRequest('GET', '/print_jobs', null, {
     'paid': 'eq.false',
     'status': 'eq.pending',
-    'select': 'total_price',
+    // order_total as well as total_price. A sealed multi-file order is matched
+    // against its ORDER total, while a single-file order is matched against
+    // its JOB total. Reserving only one of the two let a job total collide with
+    // a live order total - two matchable orders on the same figure, which the
+    // matcher correctly refuses to guess between.
+    'select': 'total_price,order_total',
     'created_at': 'gte.' + cutoff,
     'limit': '500'
   });
@@ -367,8 +381,10 @@ async function assignUniqueMatchAmount(basePrice) {
   const used = new Set();
   if (!result.error && Array.isArray(result.data)) {
     for (const j of result.data) {
-      const v = parseFloat(j.total_price);
-      if (!Number.isNaN(v)) used.add(Math.round(v * 100));
+      for (const field of ['total_price', 'order_total']) {
+        const v = parseFloat(j[field]);
+        if (!Number.isNaN(v)) used.add(Math.round(v * 100));
+      }
     }
   }
 
