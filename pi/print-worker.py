@@ -323,11 +323,24 @@ def send_to_printer(pdf_path, job):
 
 # ipptool -tv prints lines like:
 #   [12] printer-toner-black-remaining = 87 (% of supply) (integer)
+# ipptool -tv prints an OPTIONAL parenthesised value tag between the attribute
+# name and the '=', e.g.
+#
+#   [12] printer-toner-black-remaining (integer) = 87 (% of supply) (integer)
+#   [13] printer-name (nameWithoutLanguage) = Brother HL-L3240CDW series
+#
+# The original patterns required the '=' immediately after the name, so on this
+# build neither the toner levels nor the model were ever found. The printer was
+# reachable the whole time and reported status as "reachable, but no toner
+# attributes", which looked exactly like an absent or broken printer.
+#
+# (?:\s*\([^)]*\))? absorbs that tag, so both forms now match.
+_TAG = r"(?:\s*\([^)]*\))?"
 TONER_RE = {
-    "toner_black": re.compile(r"printer-toner-black-remaining\s*=\s*(\d+)"),
-    "toner_cyan": re.compile(r"printer-toner-cyan-remaining\s*=\s*(\d+)"),
-    "toner_magenta": re.compile(r"printer-toner-magenta-remaining\s*=\s*(\d+)"),
-    "toner_yellow": re.compile(r"printer-toner-yellow-remaining\s*=\s*(\d+)"),
+    "toner_black": re.compile(r"printer-toner-black-remaining" + _TAG + r"\s*=\s*(\d+)"),
+    "toner_cyan": re.compile(r"printer-toner-cyan-remaining" + _TAG + r"\s*=\s*(\d+)"),
+    "toner_magenta": re.compile(r"printer-toner-magenta-remaining" + _TAG + r"\s*=\s*(\d+)"),
+    "toner_yellow": re.compile(r"printer-toner-yellow-remaining" + _TAG + r"\s*=\s*(\d+)"),
 }
 
 # The printer's own model string, read from the same Get-Printer-Attributes
@@ -337,15 +350,8 @@ TONER_RE = {
 # so a brand name identifies neither. The queue is named "Brother" and the
 # configured URI was ipp://Brother.local/... which does not resolve at all, so
 # neither the config nor the queue name can be trusted to say which device is
-# actually being polled.
-#
-# printer-name is the device telling us what it is, which is the only
-# unambiguous identity available, and it costs nothing to read because the
-# attribute is already in the response.
-# ipptool prints the value in single quotes ('Brother HL-L3240CDW series'), so
-# the quote characters are excluded from the capture rather than stripped
-# afterwards - stripping only double quotes left stray ' on the stored value.
-PRINTER_NAME_RE = re.compile(r"printer-name\s*=\s*['\"]?([^'\"]+?)['\"]?\s*$", re.MULTILINE)
+# actually being polled. printer-name is the device telling us what it is.
+PRINTER_NAME_RE = re.compile(r"printer-name" + _TAG + r"\s*=\s*['\"]?([^'\"]+?)['\"]?\s*$", re.MULTILINE)
 
 
 def reported_model(text):
@@ -390,10 +396,20 @@ def read_supplies():
             levels[key] = int(m.group(1))
 
     if not levels:
-        # Reachable but the driver gave us nothing usable -- report unknown
-        # rather than a confident-looking 0%, which would page staff for "out
-        # of toner" when the printer is actually fine.
-        return None, False, "reachable, but no toner attributes in the response", None
+        # Reachable, but nothing usable came back. Include a sample of the real
+        # response so the parsing can be fixed from evidence.
+        #
+        # This was previously just "reachable, but no toner attributes", which
+        # is a dead end: it says the request succeeded without saying what came
+        # back, so the only way to learn the actual ipptool output format was to
+        # guess. printer-name is mandatory in every IPP Get-Printer-Attributes
+        # response, so failing to find either that or the toner attributes means
+        # our assumptions about the text format are wrong, not that the printer
+        # is odd.
+        sample = (text or "").strip().replace("\n", " | ")[:300]
+        return None, False, (
+            "reachable, but no toner attributes in the response. Got: " + (sample or "(empty)")
+        ), reported_model(text)
     return levels, True, "", reported_model(text)
 
 
