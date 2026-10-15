@@ -849,7 +849,7 @@ function throttledUnknownLog(distance) {
 /* ===== REMOTE KIOSK CONTROL (admin) ===== */
 // Must match APP_VERSION in netlify/functions/_shared.js. If the deployed
 // version differs, the kiosk reloads itself so it never runs a stale page.
-var KIOSK_APP_VERSION = '2026.10.14-64';
+var KIOSK_APP_VERSION = '2026.10.14-65';
 
 // Latest printer verdict from the backend: can we print, and if not why.
 // Refreshed by loadPrinterStatus() and consulted by printTapped() at the
@@ -1093,21 +1093,21 @@ async function bootKiosk() {
       await faceapi.nets.ssdMobilenetv1.loadFromUri(url);
       window.__pkDetector = 'ssd';
     }
-    // The 68-point landmark net is deliberately NOT loaded.
+    // faceLandmark68Net must stay loaded.
     //
-    // It used to be loaded here and run on every frame via
-    // .withFaceLandmarks(), because of a comment claiming
-    // withFaceDescriptor() only exists "after withFaceLandmarks() has upgraded
-    // the result". That is not true: detectSingleFace() returns a result that
-    // exposes .withFaceDescriptor() directly.
+    // I previously removed this on the grounds that none of the 68 points are
+    // ever read, so the inference was wasted. That was wrong, and the Pi proved
+    // it immediately:
     //
-    // The landmark net is the most expensive network in the face-api stack -
-    // comparable to the recognition net - and not one of its 68 points was ever
-    // read. It was pure per-frame cost on a Pi. Dropping it cuts the work per
-    // pass substantially and also removes ~1.3MB of model loading.
+    //   PROMISE ERROR: FaceLandmark68Net - load model before inference
+    //
+    // withFaceDescriptor() is not defined on the result of detectSingleFace();
+    // it lives on the class that withFaceLandmarks() returns. So the landmark
+    // step is not optional work, it is the only route to a descriptor, and the
+    // original comment in this file was correct all along.
+    await faceapi.nets.faceLandmark68Net.loadFromUri(url);
     await faceapi.nets.faceRecognitionNet.loadFromUri(url);
-    window.__pkNoLandmarks = true;
-    piLog('detector: ' + window.__pkDetector + ' (no landmark net)');
+    piLog('detector: ' + window.__pkDetector);
   }
 
   // Face AI is optional. If vendor/face-api.min.js is missing (not transferred
@@ -1640,23 +1640,15 @@ async function detect() {
           : new faceapi.SsdMobilenetv1Options({ inputSize: inputSize });
       }
 
-      // Landmark detection is skipped: none of the 68 points are used, and running
-      // that net every frame was the single largest per-pass cost. The fallback
-      // exists so this can never break recognition if a face-api build turns
-      // out to need the landmark upgrade after all.
-      var raw = faceapi.detectSingleFace(frameCanvas, window.__pkDetOpts);
-      var det;
-      if (raw && typeof raw.withFaceDescriptor === 'function') {
-        det = await raw.withFaceDescriptor();
-        window.__pkLandmarkFallback = false;
-      } else {
-        det = await raw.withFaceLandmarks().withFaceDescriptor();
-        window.__pkLandmarkFallback = true;
-        if (!window.__pkLandmarkWarned) {
-          window.__pkLandmarkWarned = true;
-          piLog('landmark fallback in use - withFaceDescriptor needed the upgrade');
-        }
-      }
+      // The chain is load-bearing: withFaceDescriptor() is not available directly on
+      // the detectSingleFace() result, only after withFaceLandmarks() returns
+      // the object it is defined on. Removing the landmark step to "save work"
+      // threw "FaceLandmark68Net - load model before inference" on the Pi and
+      // stopped face detection entirely. The 68 points are never read by this
+      // app, but the model still has to run to reach the descriptor.
+      var det = await faceapi.detectSingleFace(frameCanvas, window.__pkDetOpts)
+        .withFaceLandmarks()
+        .withFaceDescriptor();
 
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 

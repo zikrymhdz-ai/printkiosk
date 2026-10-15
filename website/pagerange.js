@@ -97,6 +97,17 @@ window.PKPageRange = (function () {
     return out.join(', ');
   }
 
+  // pdf-lib changed these to async in 1.17.0: PDFDocument.create() returns a
+    // Promise<PDFDocument>, not a document. It was called without await here, so
+    // `out` was a Promise and `out.copyPages` was undefined, producing
+    // "copyPages is not a function" whenever a customer picked specific pages.
+    //
+    // toPromise() accepts either shape so this keeps working across pdf-lib
+    // versions rather than being pinned to whichever one happens to be loaded.
+    function toPromise(v) {
+      return (v && typeof v.then === 'function') ? v : Promise.resolve(v);
+    }
+
   /* Build a new PDF containing only the selected pages (1-based). */
   function extractPdfPages(file, pages) {
     if (typeof PDFLib === 'undefined') {
@@ -107,19 +118,21 @@ window.PKPageRange = (function () {
     var name = (file.name || 'document.pdf').replace(/\.pdf$/i, '') + '_pages.pdf';
 
     return file.arrayBuffer()
-      .then(function (buf) { return PDFLib.PDFDocument.load(buf); })
+      .then(function (buf) { return toPromise(PDFLib.PDFDocument.load(buf)); })
       .then(function (src) {
-        var out = PDFLib.PDFDocument.create();
-        var indexes = [];
-        for (var i = 0; i < pages.length; i++) {
-          var idx = pages[i] - 1;
-          if (idx >= 0 && idx < src.getPageCount()) indexes.push(idx);
-        }
-        if (!indexes.length) throw new Error('No valid pages selected');
+        return toPromise(PDFLib.PDFDocument.create()).then(function (out) {
+          var indexes = [];
+          for (var i = 0; i < pages.length; i++) {
+            var idx = pages[i] - 1;
+            if (idx >= 0 && idx < src.getPageCount()) indexes.push(idx);
+          }
+          if (!indexes.length) throw new Error('No valid pages selected');
 
-        return out.copyPages(src, indexes).then(function (copied) {
-          copied.forEach(function (pg) { out.addPage(pg); });
-          return out.save();
+          // copyPages is async on 1.17.x and synchronous on older builds.
+          return toPromise(out.copyPages(src, indexes)).then(function (copied) {
+            copied.forEach(function (pg) { out.addPage(pg); });
+            return out.save();
+          });
         });
       })
       .then(function (bytes) {

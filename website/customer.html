@@ -1511,8 +1511,13 @@ async function placeOrder() {
           try {
             upFile = await PKPageRange.extractPdfPages(upFile, nums);
           } catch (e) {
-            alert('Could not select pages for ' + (item.file.name || 'file') + ': ' + e.message + '\n\nThe full document will be uploaded instead.');
-            pageSpec = 'all';
+            // Do NOT fall back to the whole document. This job is billed and
+            // printed per page, so quietly reverting to "all" would print and
+            // charge for every page when the customer asked for a few - and an
+            // alert can be dismissed without being read. Abort instead so the
+            // order is never created with the wrong page count.
+            throw new Error('Could not select pages for ' + (item.file.name || 'file')
+              + ': ' + (e.message || e) + '. Nothing was uploaded - please try again.');
           }
         } else {
           pageSpec = 'all';
