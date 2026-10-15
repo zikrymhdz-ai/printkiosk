@@ -196,7 +196,13 @@ async function handleNlsReceived(event) {
     // session_id is needed to group GUEST jobs by owner. Without it a guest's
       // files all fell into one shared bucket and could be combined across
       // unrelated customers.
-      'select': 'id,job_id,user_id,session_id,total_price,file_name,created_at,page_spec,pages,copies,color_mode',
+      // order_total MUST be selected here. Without it every row comes back with
+// order_total undefined, orderAmountOf() falls back to summing the per-job
+// totals, and that sum carries each job's own match fee. An order sealed at
+// RM0.40 (0.20 items + a single 0.00 order fee) was therefore searched for as
+// RM0.41 (0.20 + 0.21), so a payment of exactly RM0.40 matched nothing and was
+// reported as "no matching order" while the customer stood at the kiosk.
+'select': 'id,job_id,user_id,session_id,total_price,order_total,file_name,created_at,page_spec,pages,copies,color_mode',
     'created_at': 'gte.' + cutoff,
     'order': 'created_at.desc'
   });
@@ -215,6 +221,23 @@ async function handleNlsReceived(event) {
   for (const [k, group] of byOrder) {
     // Every file in an order shares one amount; treat them as one candidate.
     candidates.push({ key: k, jobs: group, amount: orderAmountOf(group) });
+  }
+
+  // Surface an order that has files but no sealed total. It can still be paid -
+  // the fallback sum is the only figure available - but the customer was
+  // quoted something, and if these two disagree the payment will never match.
+  const unsealed = candidates.filter(c => isUnsealedOrder(c.jobs));
+  if (unsealed.length) {
+    for (const c of unsealed) {
+      await supabaseRequest('POST', '/alerts', {
+        type: 'payment_received',
+        message: 'Order ' + c.key.replace(/^o:/, '') + ' has ' + c.jobs.length
+          + ' files but no sealed total - priced by summing job totals instead. '
+          + 'A payment may not match what the customer was quoted.',
+        severity: 'warning',
+        is_read: false
+      });
+    }
   }
 
   const matches = candidates.filter(c => Math.abs(c.amount - amount) < 0.005);
@@ -447,4 +470,21 @@ function orderAmountOf(jobs) {
     return sealed[0];
   }
   return jobs.reduce(function (s, j) { return s + (parseFloat(j.total_price) || 0); }, 0);
+}
+
+// True when this is a real multi-file order that never got sealed.
+//
+// It matters because orderAmountOf() falls back to summing per-job totals, and
+// that sum carries each job's own match fee - so an order charged RM0.40 would
+// be searched for as RM0.41 and a correct payment would match nothing. That
+// silent fallback is exactly how a missing column in the query went unnoticed.
+// Distinguishing "not selected" (undefined) from "not set" (null) lets this be
+// reported instead of quietly priced wrong.
+function isUnsealedOrder(jobs) {
+  if (!jobs.length) return false;
+  const grouped = jobs[0].order_id;
+  if (!grouped) return false; // legacy single-file row, nothing to seal
+  return jobs.every(function (j) {
+    return j.order_total === undefined || j.order_total === null;
+  });
 }

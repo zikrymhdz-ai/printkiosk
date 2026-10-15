@@ -246,5 +246,41 @@ ok(/not any\(expected\.lower\(\) in s\.lower\(\) for s in identity\)/.test(worke
 ok(!/expected\.lower\(\) not in model\.lower\(\)/.test(workerSrc),
   'printer-name alone is no longer decisive');
 
+// --- the matcher must SELECT order_total ----------------------------------
+// Omitting it from the query is invisible at read time: orderAmountOf() then
+// falls back to summing the per-job totals, which carry each job's own match
+// fee. An order sealed at RM0.40 was searched for as RM0.41, so a payment of
+// exactly RM0.40 matched nothing and was reported as "no matching order" while
+// the customer waited at the kiosk.
+const notifier = payment;
+const jobsQuery = notifier.match(/jobsResult = await supabaseRequest\('GET', '\/print_jobs', null, \{[\s\S]*?'select': '([^']*)'/);
+ok(!!jobsQuery, "the notifier's job query found");
+if (jobsQuery) {
+  ok(jobsQuery[1].split(',').map(s => s.trim()).includes('order_total'),
+    'order_total is selected by the notifier');
+}
+ok(!/select': 'id,job_id,user_id,session_id,total_price,file_name/.test(notifier),
+  'the old select without order_total is gone');
+
+// orderAmountOf must prefer the sealed value.
+ok(/const sealed = jobs\.map\(j => parseFloat\(j\.order_total\)\)/.test(payment),
+  'orderAmountOf reads order_total');
+ok(/sealed\.length === jobs\.length/.test(payment),
+  'and uses it only when every file agrees');
+
+// --- the arithmetic from the reported order -------------------------------
+// 0.20 + 0.21 of items, one 0.00 order fee, sealed at 0.40, paid 0.40.
+{
+  const sealed = [{ total_price: 0.21, order_total: 0.40 },
+                  { total_price: 0.20, order_total: 0.40 }];
+  const sumTotals = sealed.reduce((s, j) => s + j.total_price, 0);
+  ok(Math.abs(sumTotals - 0.41) < 0.005,
+    'the per-job totals still sum to 0.41 (they carry per-file fees)');
+  ok(Math.abs(sealed[0].order_total - 0.40) < 0.005,
+    'while the sealed order total is the 0.40 the customer was actually charged');
+  ok(Math.abs(sealed[0].order_total - sumTotals) > 0.005,
+    'so the two differ by exactly the amount that caused the miss');
+}
+
 if (failed) { console.log('  -> ' + failed + ' failed'); process.exit(1); }
 console.log('  ok      orders settle as one payment and earn a coin per file');
