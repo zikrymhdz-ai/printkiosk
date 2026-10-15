@@ -1682,7 +1682,19 @@ var d;
   document.getElementById('payAmountPost').textContent = 'RM ' + totalPrice.toFixed(2);
 
   // Show the payment-match fee breakdown when the server added one.
-  var totalFee = pendingUploadJobs.reduce(function(a, j) { return a + (parseFloat(j.match_fee) || 0); }, 0);
+  //
+  // ONE fee for the whole order, not one per file. Each job carries its own
+  // small match_fee from when it was created, but the customer makes a single
+  // payment and is charged a single fee. Summing the per-job fees showed more
+  // than the difference actually billed, so the receipt looked wrong even when
+  // the total was right.
+  var sealedFee = (sealedOrderTotal !== null)
+    ? sealedOrderTotal - pendingUploadJobs.reduce(function (a, j) {
+        var b = parseFloat(j.base_price);
+        return a + (isNaN(b) ? (parseFloat(j.total_price) || 0) : b);
+      }, 0)
+    : pendingUploadJobs.reduce(function (a, j) { return a + (parseFloat(j.match_fee) || 0); }, 0);
+  var totalFee = Math.max(0, Math.round(sealedFee * 100) / 100);
   var feeRow = document.getElementById('payMatchFeeRow');
   var feeNote = document.getElementById('payMatchNote');
   if (totalFee > 0) {
@@ -1698,18 +1710,70 @@ var d;
   btn.disabled = false;
   btn.textContent = 'Upload & Get PIN';
 
-  // Start watching for the payment automatically.
+  // Watch for the payment quietly in the background.
   //
-  // checkPaymentStatus() existed but only ran when the customer clicked the
-  // button, so a member who paid sat on "pay RM x" until they worked out that
-  // a second button needed pressing, and concluded the payment had not been
-  // detected - even when it had been, and the order was already settled
-  // server-side. upload.html has always polled on its own.
-  setTimeout(function() {
-    if (!payPollTimer) {
-      try { checkPaymentStatus(); } catch (e) { /* the manual button still works */ }
-    }
-  }, 1200);
+  // This deliberately does NOT call checkPaymentStatus(). That function is the
+  // handler behind the "I've paid" button, so calling it made the page appear
+  // to click its own button - with the confirming box and countdown, as though
+  // the customer had pressed it. It also started a 5 minute timer that ran to
+  // completion and reported "we could not confirm", because nothing about the
+  // poll was actually watching the order.
+  //
+  // Instead this polls the same endpoint directly and simply advances when
+  // every file is paid, leaving the screen untouched until then.
+  startBackgroundPaymentWatch(allJobIds);
+}
+
+// Silent watcher: polls for settlement and moves on, without touching the
+// button state, the confirming box or any countdown.
+function startBackgroundPaymentWatch(jobIds) {
+  if (!jobIds || !jobIds.length) return;
+  var ids = jobIds.slice();
+  var started = Date.now();
+  var MAX_MS = 15 * 60 * 1000; // stop watching eventually, quietly
+
+  var tick = setInterval(function () {
+    if (Date.now() - started > MAX_MS) { clearInterval(tick); return; }
+    // A manual poll owns the screen from here.
+    if (payPollTimer) { clearInterval(tick); return; }
+
+    fetch(API('data', 'get-all-jobs&user_id=' + (user ? user.id : '')))
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var rows = d.data || [];
+        var allPaid = ids.every(function (id) {
+          var j = rows.find(function (x) { return x.job_id === id; });
+          return j && (j.paid === true || isPaidStatus(j.status));
+        });
+        if (!allPaid) return;
+
+        clearInterval(tick);
+        // Refresh the entry so the receipt shows the settled state.
+        var entry = uploadedJobs.find(function (j) { return j.job_id === ids.join(','); });
+        if (entry) {
+          entry.paid = true;
+          entry.status = 'ready_to_print';
+          ids.forEach(function (id) {
+            var dj = rows.find(function (x) { return x.job_id === id; });
+            var sj = entry.server_jobs && entry.server_jobs.find(function (x) { return x.job_id === id; });
+            if (dj && sj) {
+              sj.paid = true;
+              sj.status = dj.status;
+              sj.print_pin = dj.print_pin || sj.print_pin;
+            }
+          });
+          localStorage.setItem('uploadedJobs', JSON.stringify(uploadedJobs));
+        }
+        document.getElementById('step3Pre').style.display = 'none';
+        document.getElementById('step3Pay').style.display = 'none';
+        document.getElementById('step3Post').style.display = 'block';
+        var cbx = document.getElementById('confirmingBox');
+        if (cbx) cbx.style.display = 'none';
+        showReceipt(pendingUploadJobs, entry);
+        loadJobs();
+      })
+      .catch(function () { /* transient; the next tick tries again */ });
+  }, 4000);
 }
 
 function resetUpload() {

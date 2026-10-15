@@ -28,7 +28,12 @@ const ok = (cond, msg) => {
 
 // --- identity must be read from the device, not assumed -------------------
 ok(/PRINTER_NAME_RE\s*=\s*re\.compile/.test(worker), 'the model string is parsed from the IPP response');
-ok(/PRINTER_NAME_RE = re\.compile\(r"printer-name/.test(worker), 'the regex targets the printer-name attribute');
+// The definition now wraps onto a second line because the pattern is built from
+// _TAG and _VALUE fragments, so the attribute name is not adjacent to
+// re.compile( any more.
+ok(/"printer-name" \+ _TAG/.test(worker), 'the regex targets the printer-name attribute');
+ok(/"printer-make-and-model" \+ _TAG/.test(worker), 'and printer-make-and-model');
+ok(/"printer-info" \+ _TAG/.test(worker), 'and printer-info');
 ok(/"printer_model":\s*model/.test(worker), 'the worker reports the model it was told by the printer');
 ok(/def reported_model/.test(worker), 'reported_model() helper exists');
 
@@ -40,8 +45,14 @@ ok(/"ipptool not installed[^"]*", None/.test(worker),
 
 // --- the wrong Brother must not be filed as ours --------------------------
 ok(/"expected_model"/.test(worker), 'worker config carries an expected model');
-ok(/expected\.lower\(\) not in model\.lower\(\)/.test(worker),
-  'the reported model is compared case-insensitively against the expected one');
+ok(/not any\(expected\.lower\(\) in s\.lower\(\) for s in identity\)/.test(worker),
+  'the expected model is matched case-insensitively against every identity attribute');
+// Brother reports printer-name as the unit serial, so a single-attribute
+// comparison rejects the correct printer.
+ok(/reported_model\(text\)/.test(worker) && /MAKE_MODEL_RE/.test(worker),
+  'identity is gathered from printer-name, make-and-model and printer-info');
+ok(/prefers the string naming the model|identity\[0\]/.test(worker),
+  'the model is reported from whichever attribute actually names it');
 ok(/wrong printer/.test(worker), 'a mismatch is reported as "wrong printer"');
 ok(/levels, online = None, False/.test(worker),
   'levels are suppressed when the wrong printer answered');

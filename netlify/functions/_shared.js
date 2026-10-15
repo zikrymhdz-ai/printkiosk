@@ -29,7 +29,7 @@ const PRICE_DOUBLE_SIDED_MULTIPLIER = 0.7;
 // Bumped whenever the kiosk front-end changes. The kiosk compares this against
 // the version it was loaded with and reloads itself, so an unattended screen
 // never keeps running a stale copy of walkin.html.
-const APP_VERSION = '2026.10.14-75';
+const APP_VERSION = '2026.10.14-77';
 
 const ALLOWED_EXTENSIONS = ['pdf', 'doc', 'docx', 'jpg', 'jpeg', 'png'];
 

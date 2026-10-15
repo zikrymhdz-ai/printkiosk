@@ -168,22 +168,22 @@ ok(/if \(!userId\) \{[\s\S]{0,120}return \{ orderId: null \}/.test(upload),
 // existed but only ran from a button click, so a customer who paid sat on
 // "pay RM x" and concluded the payment was not detected - while the order was
 // in fact already settled server-side.
-ok(/setTimeout\(function\(\) \{[\s\S]{0,200}checkPaymentStatus\(\)/.test(memberPage),
-  'the member page starts watching for payment automatically');
+ok(/startBackgroundPaymentWatch\(allJobIds\)/.test(memberPage),
+  'the member page starts watching for payment on its own, without pressing anything');
 ok(/!payPollTimer/.test(memberPage),
-  'the automatic poll does not stack on top of a manual one');
+  'the automatic watch does not stack on top of a manual one');
 
 // --- printer output format ------------------------------------------------
-const worker = fs.readFileSync(ROOT + 'pi/print-worker.py', 'utf8');
+const workerSrc = fs.readFileSync(ROOT + 'pi/print-worker.py', 'utf8');
 // ipptool builds differ: some emit "    [12] name (syntax) = value", others a
 // named group with no index at all. Matching only the indexed form made a good
 // response look like a request that never completed.
 // Substring rather than a regex: these assertions are about a literal pattern
 // in the source, and a regex for a regex has repeatedly proven fussier than the
 // fact it asserts.
-ok(worker.includes('[^\\n]*?=\\s*\\S'),
+ok(workerSrc.includes('[^\\n]*?=\\s*\\S'),
   'attribute detection accepts both ipptool output shapes');
-ok(!worker.includes('^\\s*\\[\\d+\\]'),
+ok(!workerSrc.includes('^\\s*\\[\\d+\\]'),
   'detection no longer requires an [n] index prefix');
 
 // --- a guest is walked straight through, and cannot add a second file -----
@@ -203,6 +203,48 @@ ok(guestPage.includes('id="backToStep1"') && /back\.style\.display = 'none'/.tes
 ok(/applyGuestFileLimit\(\);\s*\n\}/.test(guestPage), 'the limit is applied after session restore');
 ok(/if \(!uploadPageIsGuest\(\)\) return;/.test(guestPage),
   'every guest-only change is skipped for a signed-in customer');
+
+// --- ONE fee per payment, not one per file ---------------------------------
+// Four files of RM0.20 were charged RM0.86 because each carried its own match
+// fee. The fee exists to make a payment identifiable; a customer makes one
+// payment, so it is charged once.
+ok(/const sumBase = jobs\.reduce/.test(upload),
+  'the order total is built from base_price, which excludes per-job fees');
+ok(!/const sum = jobs\.reduce/.test(upload),
+  'the inflated per-job totals are no longer summed for the customer');
+ok(/assignUniqueOrderTotal\(sumBase, usedTotals\)/.test(upload),
+  'the order fee is added once, on top of the item prices');
+ok(/'select': 'id,job_id,total_price,base_price,match_fee/.test(upload),
+  'base_price is selected so the fee can be excluded');
+ok(/item_total: Math\.round\(sumBase \* 100\) \/ 100/.test(upload),
+  'item_total reports the true item price');
+ok(!/pendingUploadJobs\.reduce\(function\(a, j\) \{ return a \+ \(parseFloat\(j\.match_fee\)/.test(memberPage),
+  'the receipt no longer sums per-file fees as if it were the order fee');
+
+// --- the member page must not click its own button ------------------------
+// Calling checkPaymentStatus() is the button handler, so the page appeared to
+// press "I've paid" itself, and the 5 minute timer it started always ended in
+// "we could not confirm".
+ok(!/checkPaymentStatus\(\)[\s\S]{0,60}\}, \d+\);/.test(memberPage),
+  'the payment watch does not call the button handler');
+ok(!/try \{ checkPaymentStatus\(\); \}/.test(memberPage),
+  'no automatic invocation of checkPaymentStatus');
+ok(/function startBackgroundPaymentWatch\(jobIds\)/.test(memberPage),
+  'a silent background watcher exists instead');
+ok(/get-all-jobs&user_id=/.test(memberPage) && /allPaid/.test(memberPage),
+  'the watcher polls the same endpoint the button uses');
+ok(/if \(payPollTimer\) \{ clearInterval\(tick\); return; \}/.test(memberPage),
+  'the watcher stands aside when the customer starts a manual poll');
+
+// --- the printer must not be rejected for reporting a serial ---------------
+// Brother returns the SERIAL as printer-name ("BRW145A41F176AD"), so comparing
+// EXPECTED_MODEL against printer-name alone rejected the correct printer.
+ok(/MAKE_MODEL_RE = re\.compile/.test(workerSrc), 'printer-make-and-model is parsed');
+ok(/INFO_RE = re\.compile/.test(workerSrc), 'printer-info is parsed');
+ok(/not any\(expected\.lower\(\) in s\.lower\(\) for s in identity\)/.test(workerSrc),
+  'the expected model may appear in ANY identity attribute');
+ok(!/expected\.lower\(\) not in model\.lower\(\)/.test(workerSrc),
+  'printer-name alone is no longer decisive');
 
 if (failed) { console.log('  -> ' + failed + ' failed'); process.exit(1); }
 console.log('  ok      orders settle as one payment and earn a coin per file');

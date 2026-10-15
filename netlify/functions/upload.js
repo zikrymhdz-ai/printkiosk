@@ -165,7 +165,7 @@ async function handleSealOrder(event) {
   const found = await supabaseRequest('GET', '/print_jobs', null, {
     'order_id': 'eq.' + orderId,
     'user_id': 'eq.' + userId,
-    'select': 'id,job_id,total_price,paid,status'
+    'select': 'id,job_id,total_price,base_price,match_fee,paid,status'
   });
   if (found.error) return err('Failed to read order', 500);
   const jobs = Array.isArray(found.data) ? found.data : [];
@@ -176,8 +176,21 @@ async function handleSealOrder(event) {
   }
   if (jobs.some(j => j.paid === true)) return err('This order has already been paid');
 
-  const sum = jobs.reduce(function (s, j) { return s + (parseFloat(j.total_price) || 0); }, 0);
-
+  // Charge the items plus ONE matching fee for the whole payment.
+  //
+  // Every job was given its own small match fee when it was created, so two
+  // live jobs could never share a total. That was the right unit when one
+  // payment settled one job. For a multi-file order the customer makes ONE
+  // payment, so the fee is charged once - not once per file.
+  //
+  // Summing the inflated job totals charged RM0.86 for four files whose items
+  // totalled RM0.80: four separate fees of 0.01-0.03 stacked up, pushing the
+  // overhead towards 10% of a small order. The order total is therefore built
+  // from base_price, which excludes every per-job fee, plus one order fee.
+  const sumBase = jobs.reduce(function (s, j) {
+    const b = parseFloat(j.base_price);
+    return s + (Number.isNaN(b) ? (parseFloat(j.total_price) || 0) : b);
+  }, 0);
   // Collect every order total currently awaiting payment so this one can be
   // given a total of its own. Without this, {0.20, 0.30} and {0.50} both total
   // RM0.50 and a payment of RM0.50 could settle either order.
@@ -207,7 +220,7 @@ async function handleSealOrder(event) {
     // charge a single-file customer something they were never quoted.
     orderTotal = parseFloat(jobs[0].total_price);
   } else {
-    orderTotal = assignUniqueOrderTotal(sum, usedTotals).total;
+    orderTotal = assignUniqueOrderTotal(sumBase, usedTotals).total;
   }
 
   const ids = jobs.map(j => j.job_id);
@@ -222,8 +235,8 @@ async function handleSealOrder(event) {
     success: true,
     order_id: orderId,
     order_total: orderTotal,
-    item_total: Math.round(sum * 100) / 100,
-    fee: Math.round((orderTotal - sum) * 100) / 100,
+    item_total: Math.round(sumBase * 100) / 100,
+    fee: Math.round((orderTotal - sumBase) * 100) / 100,
     files: jobs.length,
     job_ids: ids
   });

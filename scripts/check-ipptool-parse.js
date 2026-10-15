@@ -53,17 +53,35 @@ function pyR(text) {
   return text.replace(/\\"/g, '"').replace(/\\'/g, "'");
 }
 
-// "printer-toner-black-remaining" + _TAG + r"\s*=\s*(\d+)"  ->  the pieces
-function patternFrom(line) {
+// "printer-name" + _TAG + r"\s*=\s*..."  ->  the pieces.
+// A single-line match stopped working when the definition wrapped: it captured
+// only "PRINTER_NAME_RE = re.compile(" and produced a pattern built from
+// nothing. Read forward to the statement's closing parenthesis instead.
+function patternFromDecl(decl) {
   const parts = [];
-  const rx = /r"((?:[^"\\]|\\.)*)"|_TAG/g;
+  const rx = /r"((?:[^"\\]|\\.)*)"|_TAG|_VALUE/g;
   let m;
-  while ((m = rx.exec(line)) !== null) {
-    parts.push(m[1] === undefined ? TAG : pyR(m[1]));
+  while ((m = rx.exec(decl)) !== null) {
+    if (m[1] !== undefined) parts.push(pyR(m[1]));
+    else if (m[0] === '_TAG') parts.push(TAG);
+    else if (m[0] === '_VALUE') parts.push(VALUE);
   }
   return parts.join('');
 }
+
+// Cut the declaration at its real terminator. Scanning for the first ")"
+// truncates inside the _TAG fragment itself, whose character class contains
+// literal brackets and parens, and produces an "Unterminated group" pattern.
+function declFrom(name) {
+  const at = src.indexOf(name + ' = ');
+  if (at === -1) throw new Error('cannot find ' + name);
+  const compileAt = src.indexOf('re.compile(', at);
+  const end = src.indexOf('re.MULTILINE)', compileAt);
+  return src.slice(at, end === -1 ? src.indexOf('\n', compileAt) : end + 're.MULTILINE)'.length);
+}
+
 const TAG = pyR((/_TAG = r"((?:[^"\\]|\\.)*)"/.exec(src) || [])[1] || '');
+const VALUE = pyR((/_VALUE = r"((?:[^"\\]|\\.)*)"/.exec(src) || [])[1] || '');
 
 function flagsFrom(line) {
   const f = [];
@@ -74,10 +92,9 @@ function flagsFrom(line) {
 const TONER = {};
 for (const line of src.split('\n')) {
   const m = /^\s*"(\w+)":\s*re\.compile\(/.exec(line);
-  if (m) TONER[m[1]] = new RegExp(patternFrom(line), flagsFrom(line));
+  if (m) TONER[m[1]] = new RegExp(patternFromDecl(line), flagsFrom(line));
 }
-const nameLine = src.split('\n').find(l => /PRINTER_NAME_RE = re\.compile\(/.test(l)) || '';
-const PRINTER_NAME_RE = new RegExp(patternFrom(nameLine), flagsFrom(nameLine));
+const PRINTER_NAME_RE = new RegExp(patternFromDecl(declFrom('PRINTER_NAME_RE')), 'm');
 
 let failed = 0;
 const ok = (c, msg) => { console.log((c ? '  ok      ' : '  FAILED  ') + msg); if (!c) failed++; };
@@ -135,6 +152,20 @@ ok(z && parseInt(z[1], 10) === 0, 'a 0% cartridge parses as 0, not as absent');
 const other = "    [13] printer-name (nameWithoutLanguage) = Brother DCP-T430W series";
 ok(String((PRINTER_NAME_RE.exec(other) || [])[1] || '').trim() === 'Brother DCP-T430W series',
   'the other Brother parses too, so a mismatch can be detected');
+
+// Brother reports the SERIAL as printer-name, so a value-only capture must not
+// swallow the rest of the response.
+const BROTHER = [
+  'Get-Printer-Attributes:',
+  '    printer-name (nameWithoutLanguage) = BRW145A41F176AD',
+  '    printer-make-and-model (nameWithoutLanguage) = Brother HL-L3240CDW series',
+  '    printer-toner-black-remaining (integer) = 91 (% of supply)',
+].join('\n');
+const nameHit = PRINTER_NAME_RE.exec(BROTHER);
+ok(nameHit && nameHit[1].trim() === 'BRW145A41F176AD',
+  'the serial is captured on its own: ' + (nameHit ? JSON.stringify(nameHit[1].trim()) : 'none'));
+ok(nameHit && !/\n/.test(nameHit[1]),
+  'the capture stops at the end of the line, not the end of the response');
 
 // --- both streams must be searched -----------------------------------------
 // ipptool writes the attribute dump to STDERR. Parsing only stdout saw a single

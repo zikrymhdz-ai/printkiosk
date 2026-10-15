@@ -335,7 +335,13 @@ def send_to_printer(pdf_path, job):
 # attributes", which looked exactly like an absent or broken printer.
 #
 # (?:\s*\([^)]*\))? absorbs that tag, so both forms now match.
-_TAG = r"(?:\s*\([^)]*\))?"
+#
+# Neither the tag nor the value may span lines. In the unquoted named-group form
+# the value pattern was [\x27"\x27]+, whose negated class happily matched newlines,
+# so an "identity" string swallowed the entire rest of the response. Excluding
+# CR and LF keeps every capture to the single line it came from.
+_TAG = r"(?:\s*\([^)\r\n]*\))?"
+_VALUE = r"[^\x27\"\r\n]+?"
 TONER_RE = {
     "toner_black": re.compile(r"printer-toner-black-remaining" + _TAG + r"\s*=\s*(\d+)"),
     "toner_cyan": re.compile(r"printer-toner-cyan-remaining" + _TAG + r"\s*=\s*(\d+)"),
@@ -351,12 +357,35 @@ TONER_RE = {
 # configured URI was ipp://Brother.local/... which does not resolve at all, so
 # neither the config nor the queue name can be trusted to say which device is
 # actually being polled. printer-name is the device telling us what it is.
-PRINTER_NAME_RE = re.compile(r"printer-name" + _TAG + r"\s*=\s*['\"]?([^'\"]+?)['\"]?\s*$", re.MULTILINE)
+PRINTER_NAME_RE = re.compile(
+    r"printer-name" + _TAG + r"\s*=\s*[\x27\"]?(" + _VALUE + r")[\x27\"]?\s*$", re.MULTILINE)
+# Some vendors put the model somewhere other than printer-name. Brother in
+# particular reports printer-name as the unit's SERIAL number
+# ("BRW145A41F176AD"), which never contains the model string, so comparing
+# EXPECTED_MODEL against printer-name alone rejected the correct printer as
+# "wrong printer" and suppressed its readings.
+#
+# printer-make-and-model and printer-info both carry "HL-L3240CDW" on this
+# device. The expected model is accepted if it appears in ANY of them.
+MAKE_MODEL_RE = re.compile(
+    r"printer-make-and-model" + _TAG + r"\s*=\s*[\x27\"]?(" + _VALUE + r")[\x27\"]?\s*$", re.MULTILINE)
+INFO_RE = re.compile(
+    r"printer-info" + _TAG + r"\s*=\s*[\x27\"]?(" + _VALUE + r")[\x27\"]?\s*$", re.MULTILINE)
+
+
+def _first(re, text):
+    m = re.search(text or "")
+    return m.group(1).strip() if m else None
 
 
 def reported_model(text):
-    m = PRINTER_NAME_RE.search(text or "")
-    return m.group(1).strip() if m else None
+    """Everything the device says it is, as a list of identity strings."""
+    found = []
+    for rx in (PRINTER_NAME_RE, MAKE_MODEL_RE, INFO_RE):
+        v = _first(rx, text)
+        if v and v not in found:
+            found.append(v)
+    return found or None
 
 
 # CUPS ships a known-good Get-Printer-Attributes request on the Pi. Preferred
@@ -656,15 +685,25 @@ def main():
             try:
                 levels, online, why, model = read_supplies()
 
-                # Guard against reporting the wrong device. There are two
-                # Brother printers on this network, so if the printer we
-                # reached is not the expected model, say so loudly instead of
-                # filing its toner levels and paper against the shop's HL.
+                # Guard against reporting the wrong device. There are two Brother
+                # printers on this network, so if the device we reached is not the
+                # expected model, say so loudly instead of filing its toner levels
+                # against the shop's HL.
+                #
+                # Brother reports printer-name as the unit SERIAL number, so the
+                # expected model appears in printer-make-and-model or printer-info
+                # instead. Accept it from any identity attribute rather than
+                # rejecting the correct printer.
                 expected = CONFIG.get("expected_model") or ""
-                if model and expected and expected.lower() not in model.lower():
-                    why = ('polled "%s" but EXPECTED_MODEL is %s - wrong printer'
-                           % (model, expected))
+                identity = model or []
+                if identity and expected and not any(expected.lower() in s.lower() for s in identity):
+                    why = ('polled %s but EXPECTED_MODEL is %s - wrong printer'
+                           % (identity, expected))
                     levels, online = None, False
+                elif identity and expected:
+                    # Prefer whichever identity string names the model, so the
+                    # dashboard does not show a serial where a model belongs.
+                    model = next((s for s in identity if expected.lower() in s.lower()), identity[0])
 
                 payload = {
                     "printer_name": CONFIG["printer"],

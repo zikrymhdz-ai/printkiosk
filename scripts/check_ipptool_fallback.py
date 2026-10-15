@@ -65,7 +65,12 @@ def load_worker(system_exists, ipptool):
     mod.CONFIG = {"printer_uri": "ipp://10.100.131.48:631/ipp/print"}
 
     def _compile(pattern, flags=0):
-        return re.compile(pattern)
+        # The flags MUST be passed through. An earlier shim ignored them, so
+        # every pattern compiled without re.MULTILINE, "$" stopped matching at
+        # end-of-line, and the identity lookups returned None - which looked
+        # exactly like a worker bug and nearly caused a correct parser to be
+        # "fixed" into a broken one.
+        return re.compile(pattern, flags)
 
     class _re:
         compile = staticmethod(_compile)
@@ -95,12 +100,16 @@ def load_worker(system_exists, ipptool):
     mod.tempfile = types.SimpleNamespace(gettempdir=lambda: tempfile.gettempdir())
     mod.shutil_which = lambda name: "/usr/bin/ipptool"
 
-    # The worker guards everything behind these at import time.
+    # The worker guards everything behind these at import time. Take one
+    # CONTIGUOUS slice: piecemeal per-line matching broke as soon as an
+    # assignment wrapped onto a second line, silently capturing half a
+    # definition and reporting nonsense.
     src = open(WORKER, encoding="utf-8").read()
-    code = src[src.index("_TAG = "):src.index("def report(job_id")]
-    # Drop the network/queue helpers the slice drags in; they are unused here.
+    code = src[src.index("_TAG = "):src.index("def _probe(test_path)")]
+    code += src[src.index("def _probe(test_path)"):src.index("def report(job_id")]
     keep, skip = [], False
-    needed = ("get_printer_attrs_test", "_probe", "read_supplies", "reported_model")
+    needed = ("get_printer_attrs_test", "_probe", "read_supplies",
+              "reported_model", "_first")
     for line in code.splitlines():
         if line.startswith("def ") and not any(n in line for n in needed):
             skip = True
@@ -109,12 +118,13 @@ def load_worker(system_exists, ipptool):
         if not skip:
             keep.append(line)
     exec(compile("\n".join(keep), WORKER, "exec"), mod.__dict__)
-    return mod.read_supplies, calls
+    mod_reported_model = mod.reported_model
+    return mod.read_supplies, calls, mod_reported_model
 
 
 def main():
     # 1. CUPS's file works -> used first, no fallback needed.
-    rs, calls = load_worker(
+    rs, calls, mod_reported_model = load_worker(
         "/usr/share/cups/ipptool/get-printer-attributes.test",
         lambda p: (0, "", GOOD_INDEXED))
     levels, online, why, model = rs()
@@ -124,7 +134,7 @@ def main():
        "toner parsed on the first try: %s" % levels)
 
     # 1b. The shape THIS Pi emits: a named group with no [n] index at all.
-    rs, calls = load_worker(
+    rs, calls, mod_reported_model = load_worker(
         "/usr/share/cups/ipptool/get-printer-attributes.test",
         lambda p: (0, "", GOOD_GROUPED))
     levels, online, why, model = rs()
@@ -133,7 +143,7 @@ def main():
     ok(online is True, "grouped output is reported as a reachable printer")
 
     # 2. CUPS file missing -> generated fallback used.
-    rs, calls = load_worker(None, lambda p: (0, "", GOOD_INDEXED))
+    rs, calls, mod_reported_model = load_worker(None, lambda p: (0, "", GOOD_INDEXED))
     levels, online, why, model = rs()
     ok(calls and calls[0].startswith(tempfile.gettempdir()),
        "falls back to the generated file when CUPS has none (%s)" % (calls[0] if calls else "-"))
@@ -141,7 +151,7 @@ def main():
 
     # 3. THE REAL CASE: nothing parses, ipptool still exits 0.
     #    Must NOT report a reachable printer with no data.
-    rs, calls = load_worker(None, lambda p: (0, "", REJECTED))
+    rs, calls, mod_reported_model = load_worker(None, lambda p: (0, "", REJECTED))
     levels, online, why, model = rs()
     ok(levels is None, "no levels invented when the request never completed")
     ok(online is False, "reported offline, not 'reachable'")
@@ -153,11 +163,35 @@ def main():
     def refused(p):
         return (1, "", "ipptool: connect: Connection refused")
 
-    rs, calls = load_worker("/usr/share/cups/ipptool/get-printer-attributes.test", refused)
+    rs, calls, mod_reported_model = load_worker("/usr/share/cups/ipptool/get-printer-attributes.test", refused)
     levels, online, why, model = rs()
     ok(levels is None and online is False, "a refused connection is offline")
 
-    # 5. ipptool absent.
+    # 5. THE REAL CASE: Brother reports the SERIAL as printer-name.
+    #    The correct printer must not be rejected as "wrong printer".
+    BROTHER = "\n".join([
+        "Get-Printer-Attributes:",
+        "    attributes-charset (charset) = utf-8",
+        "    printer-name (nameWithoutLanguage) = BRW145A41F176AD",
+        "    printer-make-and-model (nameWithoutLanguage) = Brother HL-L3240CDW series",
+        "    printer-info (text) = Brother HL-L3240CDW series",
+        "    printer-toner-black-remaining (integer) = 91 (% of supply)",
+        "    printer-toner-cyan-remaining (integer) = 88 (% of supply)",
+        "    printer-toner-magenta-remaining (integer) = 90 (% of supply)",
+        "    printer-toner-yellow-remaining (integer) = 92 (% of supply)",
+    ])
+    identity = mod_reported_model(BROTHER)
+    ok(identity and len(identity) >= 2,
+       "identity gathers the serial AND the model: %s" % identity)
+    ok(all("\n" not in s and len(s) < 80 for s in identity or []),
+       "each identity is a single short line, not the rest of the response")
+    expected = "HL-L3240CDW"
+    ok(any(expected.lower() in s.lower() for s in identity or []),
+       "the expected model is found in one of them")
+    ok(not ("BRW145A41F176AD".lower() == expected.lower()),
+       "the serial alone does not satisfy the model check")
+
+    # ipptool absent.
     src = open(WORKER, encoding="utf-8").read()
     ok("ipptool not installed" in src, "missing ipptool is reported plainly")
 
