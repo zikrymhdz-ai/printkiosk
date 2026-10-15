@@ -16,10 +16,10 @@
 <link rel="stylesheet" href="../styles.css">
 <link href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.css" rel="stylesheet">
 <script src="../frontend_config.js"></script>
-<script src="pstore.js?v=2026.10.14-84"></script>
+<script src="pstore.js?v=2026.10.14-85"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
-<script src="pagerange.js?v=2026.10.14-84"></script>
+<script src="pagerange.js?v=2026.10.14-85"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.js"></script>
 <script>pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
 <style>
@@ -981,14 +981,27 @@ async function submitPhoneUpload() {
     phoneUploadedJobs = [];
     var phoneAutoPaid = false;
 
-// PDFs are combined into one document; images are kept as their own uploads.
-// See combineByType() for why the two are not mixed.
-if (bulkFiles.length > 1) {
-btn.disabled = true;
-btn.textContent = 'Preparing ' + bulkFiles.length + ' files...';
-bulkFiles = await PKPageRange.combineByType(bulkFiles);
-renderFileList();
-}
+    // PDFs are combined into one document; images are kept as their own uploads.
+    // See combineByType() for why the two are not mixed.
+    if (bulkFiles.length > 1) {
+      // Combining is a convenience, not a requirement. A stale cached
+      // pagerange.js would leave combineByType undefined, and an uncaught
+      // TypeError there used to lose the whole order - so check first and fall
+      // back to uploading the files exactly as they are.
+      if (typeof PKPageRange.combineByType !== 'function') {
+        uploadFail('This page is out of date. Please refresh, then add your files again.');
+        return;
+      }
+      btn.disabled = true;
+      btn.textContent = 'Preparing ' + bulkFiles.length + ' files...';
+      try {
+        bulkFiles = await PKPageRange.combineByType(bulkFiles);
+      } catch (e) {
+        uploadFail('Could not prepare your files: ' + (e && e.message ? e.message : e));
+        return;
+      }
+      renderFileList();
+    }
 
     for (let i = 0; i < bulkFiles.length; i++) {
       btn.textContent = 'Uploading file ' + (i + 1) + ' of ' + bulkFiles.length + '...';

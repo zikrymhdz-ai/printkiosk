@@ -1,0 +1,31 @@
+# Cache rules for the behaviour-carrying scripts and pages.
+#
+# Without these, a browser (or the CDN) can keep serving an OLD pagerange.js
+# after a deploy. That is not a cosmetic problem: an older pagerange.js has no
+# combineByType(), so the upload page threw a raw TypeError and the order was
+# lost - which looked exactly like the merge feature being broken.
+#
+# The pages also stamp ?v=<app version> on these files, so a new deploy always
+# requests a new URL. These headers cover the case where the stamped URL is
+# requested anyway.
+
+/pagerange.js
+  Cache-Control: public, max-age=0, must-revalidate
+
+/pstore.js
+  Cache-Control: public, max-age=0, must-revalidate
+
+/frontend_config.js
+  Cache-Control: public, max-age=0, must-revalidate
+
+/website/customer.html
+  Cache-Control: public, max-age=0, must-revalidate
+
+/website/upload.html
+  Cache-Control: public, max-age=0, must-revalidate
+
+/website/pagerange.js
+  Cache-Control: public, max-age=0, must-revalidate
+
+/website/pstore.js
+  Cache-Control: public, max-age=0, must-revalidate

@@ -16,11 +16,11 @@
 <link rel="stylesheet" href="../styles.css">
 <link href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.css" rel="stylesheet">
 <script src="../frontend_config.js"></script>
-<script src="pstore.js?v=2026.10.14-84"></script>
+<script src="pstore.js?v=2026.10.14-85"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script>pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
 <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
-<script src="pagerange.js?v=2026.10.14-84"></script>
+<script src="pagerange.js?v=2026.10.14-85"></script>
 <script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/dist/face-api.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.js"></script>
 <style>
@@ -257,7 +257,7 @@
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
             </div>
             <div class="upload-zone-text">Drop files here or click to browse</div>
-            <div class="upload-zone-hint">PDF, DOC, DOCX, JPG, PNG â€” Max 20MB each â€” Multiple files allowed</div>
+            <div class="upload-zone-hint">PDF, DOC, DOCX, JPG, PNG &mdash; Max 20MB each &mdash; Multiple files allowed</div>
           </div>
           <input type="file" id="fileInput" accept=".pdf,.doc,.docx,.jpg,.jpeg,.png" multiple style="display:none">
           <div id="fileListContainer" style="display:none; margin-top:16px;">
@@ -271,7 +271,7 @@
             <div id="previewContainer" style="max-height:280px; overflow:auto; border-radius:var(--radius); border:1px solid var(--gray-200); background:var(--gray-50); padding:8px;"></div>
           </div>
           <div style="margin-top:16px; display:flex; justify-content:flex-end;">
-            <button class="btn btn-primary" id="step1Next" disabled onclick="goStep(2)">Next â€” Settings</button>
+            <button class="btn btn-primary" id="step1Next" disabled onclick="goStep(2)">Next &mdash; Settings</button>
           </div>
         </div>
       </div>
@@ -382,7 +382,7 @@
         </div>
         <div style="display:flex; justify-content:space-between; margin-top:16px;">
           <button class="btn btn-secondary" onclick="goStep(1)">Back</button>
-          <button class="btn btn-primary" onclick="goStep(3)">Next â€” Payment</button>
+          <button class="btn btn-primary" onclick="goStep(3)">Next &mdash; Payment</button>
         </div>
       </div>
 
@@ -451,13 +451,13 @@
               <div id="confirmingBox" style="display:none; margin-top:16px; padding:16px; background:var(--primary-light); border:1px solid var(--primary); border-radius:var(--radius); text-align:center;">
                 <div class="flex-center" style="gap:10px; justify-content:center;">
                   <span class="spinner" style="width:20px; height:20px; border:3px solid var(--primary); border-top-color:transparent; border-radius:50%; display:inline-block; animation:spin 0.8s linear infinite;"></span>
-                  <span style="font-weight:600; color:var(--primary-dark);">Confirming paymentâ€¦</span>
+                  <span style="font-weight:600; color:var(--primary-dark);">Confirming payment&hellip;</span>
                 </div>
                 <p class="text-sm text-muted" style="margin-top:8px;" id="confirmingHint">Please wait while we verify your payment. This can take a few seconds.</p>
                 <div class="pk-progress" style="margin-top:14px;"><div class="pk-progress-fill" id="confirmingBar" style="width:100%;"></div></div>
                 <p class="text-xs text-muted" style="margin-top:8px;">Time remaining <span class="pk-countdown" id="confirmingClock">5:00</span></p>
               </div>
-              <button class="btn btn-primary btn-block" style="margin-top:16px;" onclick="checkPaymentStatus()" id="checkPayBtn">I&apos;ve Paid â€” Check Status</button>
+              <button class="btn btn-primary btn-block" style="margin-top:16px;" onclick="checkPaymentStatus()" id="checkPayBtn">I&apos;ve Paid &mdash; Check Status</button>
               <div style="margin-top:12px;">
                 <button class="btn btn-secondary btn-block" onclick="cancelPayment()">Cancel</button>
               </div>
@@ -563,7 +563,7 @@
             <p class="text-sm text-muted" id="accountEmail">-</p>
           </div>
         </div>
-        <p class="text-sm text-muted" id="profilePicHint" style="display:none; margin:0 0 12px;">Saving pictureâ€¦</p>
+        <p class="text-sm text-muted" id="profilePicHint" style="display:none; margin:0 0 12px;">Saving picture&hellip;</p>
         <button class="btn btn-secondary btn-block" onclick="logout()" style="margin-top:4px;">Sign Out</button>
       </div>
 
@@ -663,7 +663,7 @@
 <div id="uploadOverlay" class="pk-overlay hidden">
   <div class="pk-overlay-card">
     <div class="pk-spinner"></div>
-    <h3 class="pk-overlay-title">Uploading file, please waitâ€¦</h3>
+    <h3 class="pk-overlay-title">Uploading file, please wait&hellip;</h3>
     <p class="pk-overlay-sub" id="uploadOverlaySub">Sending your document to the shop</p>
     <div class="pk-progress"><div class="pk-progress-fill" id="uploadProgressFill"></div></div>
     <p class="pk-overlay-note" id="uploadOverlayNote">Keep this page open.</p>
@@ -1509,7 +1509,7 @@ async function placeOrder() {
   btn.textContent = 'Uploading...';
 
   // Rebuilding a selected page range can take a moment, so show the loader early.
-  showUploadOverlay(true, { sub: 'Preparing your fileâ€¦', progress: 5 });
+  showUploadOverlay(true, { sub: 'Preparing your file&hellip;', progress: 5 });
 
   saveCurrentSettings();
   pendingUploadJobs = [];
@@ -1596,13 +1596,32 @@ job_id: signD.job_id,
     // PDFs are combined into one document; images keep their own upload, so
     // each photo retains its own independent settings. See combineByType().
     if (bulkFiles.length > 1) {
+      // Combining is a convenience, not a requirement. A stale cached
+      // pagerange.js would leave combineByType undefined, and an uncaught
+      // TypeError there loses the whole order - so check first, and say what
+      // to do rather than failing with a raw JavaScript error.
+      if (typeof PKPageRange.combineByType !== 'function') {
+        showUploadOverlay(false);
+        alert('This page is out of date. Please refresh, then add your files again.');
+        btn.disabled = false;
+        btn.textContent = 'Upload & Get PIN';
+        return;
+      }
       btn.disabled = true;
       showUploadOverlay(true, {
         sub: 'Preparing ' + bulkFiles.length + ' files\u2026',
         progress: 5,
         note: 'PDFs are combined; each photo keeps its own settings.'
       });
-      bulkFiles = await PKPageRange.combineByType(bulkFiles);
+      try {
+        bulkFiles = await PKPageRange.combineByType(bulkFiles);
+      } catch (e) {
+        showUploadOverlay(false);
+        alert('Could not prepare your files: ' + (e && e.message ? e.message : e));
+        btn.disabled = false;
+        btn.textContent = 'Upload & Get PIN';
+        return;
+      }
       renderFileList();
     }
 
@@ -1610,9 +1629,9 @@ job_id: signD.job_id,
       var isLast = (i === bulkFiles.length - 1);
       btn.textContent = 'Uploading file ' + (i + 1) + ' of ' + bulkFiles.length + '...';
       showUploadOverlay(true, {
-        sub: (bulkFiles.length > 1 ? 'Uploading file ' + (i + 1) + ' of ' + bulkFiles.length + 'â€¦' : 'Sending your document to the shopâ€¦'),
+        sub: (bulkFiles.length > 1 ? 'Uploading file ' + (i + 1) + ' of ' + bulkFiles.length + '&hellip;' : 'Sending your document to the shop&hellip;'),
         progress: Math.round((i / bulkFiles.length) * 100),
-        note: isLast ? 'Almost doneâ€¦' : 'Keep this page open.'
+        note: isLast ? 'Almost done&hellip;' : 'Keep this page open.'
       });
       const item = bulkFiles[i];
       const s = item.settings;
@@ -1688,7 +1707,7 @@ var d;
     return;
   }
 
-  showUploadOverlay(true, { sub: 'Finalising your orderâ€¦', progress: 100, note: 'Almost doneâ€¦' });
+  showUploadOverlay(true, { sub: 'Finalising your order&hellip;', progress: 100, note: 'Almost done&hellip;' });
   if (!pendingUploadJobs.length) { showUploadOverlay(false); alert('No files uploaded successfully'); btn.disabled = false; btn.textContent = 'Upload & Get PIN'; return; }
 
   // Ask the server what the whole order costs. The browser's own sum is not
@@ -2422,7 +2441,7 @@ function previewProfilePic(e) {
 
 function autosaveProfilePic(dataUrl) {
   var hint = document.getElementById('profilePicHint');
-  if (hint) { hint.textContent = 'Saving pictureâ€¦'; hint.style.display = 'block'; }
+  if (hint) { hint.textContent = 'Saving picture&hellip;'; hint.style.display = 'block'; }
   fetch(API('auth', 'update-profile'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Session-Token': token },

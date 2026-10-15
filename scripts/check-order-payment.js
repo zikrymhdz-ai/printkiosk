@@ -379,5 +379,33 @@ for (const [rel, page, imgId, noteId] of [
     rel + ' shows Confirm Settings outside the image-only block');
 }
 
+// --- a stale cached script must not throw and lose the order ----------------
+// A browser that kept an older pagerange.js has no combineByType(), and the
+// uncaught TypeError there lost the customer's whole order. Combining is a
+// convenience, so the page must detect that and say so plainly.
+for (const [label, page] of [['guest', guestPage], ['member', memberPage]]) {
+  ok(/typeof PKPageRange\.combineByType !== 'function'/.test(page),
+    label + ' checks combineByType exists before using it');
+  ok(/This page is out of date\. Please refresh/.test(page),
+    label + ' tells the customer to refresh instead of throwing');
+  ok(/catch \(e\)[\s\S]{0,200}Could not prepare your files/.test(page),
+    label + ' reports a preparation failure instead of dying silently');
+}
+
+// --- pages must not be served mojibake -------------------------------------
+// A PowerShell rewrite double-encoded the pages, so the file picker showed
+// "Next a-circumflex-euro-quote Settings". Nothing about that is a syntax
+// error, so every other check passed while the page was visibly broken.
+//
+// Both pages are kept pure ASCII by using HTML entities for dashes and
+// ellipses, so there is no non-ASCII byte left to corrupt.
+for (const [label, page] of [['guest', guestPage], ['member', memberPage]]) {
+  ok(!/[^\x00-\x7F]/.test(page),
+    label + ' page is pure ASCII, so there is nothing left to mis-encode');
+  ok(!/\uFFFD/.test(page), label + ' page contains no replacement characters');
+  ok(/Next &mdash; /.test(page),
+    label + ' page renders the Next button label with a proper dash');
+}
+
 if (failed) { console.log('  -> ' + failed + ' failed'); process.exit(1); }
 console.log('  ok      orders settle as one payment and earn a coin per file');
