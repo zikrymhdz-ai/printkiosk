@@ -159,6 +159,29 @@ window.PKPageRange = (function () {
     return (parts.pop() || '').toLowerCase();
   }
 
+  // Brightness, contrast and cropping are applied by the worker in
+  // image_to_pdf(), so they only ever affect JPG/PNG. A PDF cannot use them.
+  var IMAGE_EXT = ['jpg', 'jpeg', 'png'];
+
+  function isImage(name) {
+    return IMAGE_EXT.indexOf(extOf(name)) !== -1;
+  }
+
+  /* Settings that every file in a batch may share: colour, sides, copies,
+   * pages. The image-only adjustments are deliberately left out, so spreading
+   * settings across files cannot hand a PDF a brightness it can never apply.
+   */
+  function shareableSettings(settings) {
+    var s = settings || {};
+    var out = {};
+    for (var k in s) {
+      if (!Object.prototype.hasOwnProperty.call(s, k)) continue;
+      if (k === 'brightness' || k === 'contrast' || k === 'crop_mode') continue;
+      out[k] = s[k];
+    }
+    return out;
+  }
+
   function mergeIntoPdf(items) {
     if (typeof PDFLib === 'undefined') {
       return Promise.reject(new Error('PDF library not loaded'));
@@ -273,12 +296,76 @@ window.PKPageRange = (function () {
     }, Promise.resolve([]));
   }
 
+  /* Combine a batch BY TYPE, keeping the two kinds apart.
+   *
+   * PDFs are paged documents, so several of them genuinely are one document
+   * and are merged - after each file's own page selection has been applied.
+   *
+   * Images are NOT merged. Brightness and contrast are applied by the print
+   * worker, and only when the file it downloads is still an image; merging
+   * photos into one PDF would silently drop the adjustments the customer set.
+   * Keeping them separate also means each photo keeps its OWN settings, which
+   * is what "independent settings" means - two photos with different
+   * adjustments cannot share one combined document.
+   *
+   * A DOC/DOCX has no client-side renderer, so a document group is only merged
+   * when every member is a PDF. Anything else is left as its own job rather
+   * than failing the whole batch.
+   *
+   * Returns items shaped like the originals, so the upload loop is unchanged.
+   */
+  function combineByType(items) {
+    var docs = [];
+    var images = [];
+    items.forEach(function (it) {
+      (isImage(it.file.name) ? images : docs).push(it);
+    });
+
+    if (!docs.length) return Promise.resolve(images);
+
+    var allPdf = docs.every(function (it) { return extOf(it.file.name) === 'pdf'; });
+    if (docs.length < 2 || !allPdf) {
+      return Promise.resolve(docs.concat(images));
+    }
+
+    return prepareForMerge(docs).then(function (files) {
+      return mergeIntoPdf(files).then(function (merged) {
+        var anyColor = docs.some(function (it) {
+          return it.settings && it.settings.color === 'color';
+        });
+        var first = (docs[0] && docs[0].settings) || {};
+        return [{
+          file: merged.file,
+          thumb: null,
+          croppedFile: null,
+          pdfPages: merged.pages,
+          _mergedFrom: docs.map(function (it) { return it.file.name; }),
+          settings: {
+            color: anyColor ? 'color' : (first.color || 'bw'),
+            copies: first.copies || 1,
+            sides: first.sides || 'single',
+            pages: merged.pages,
+            page_spec: 'all',
+            // A merged document is no longer an image, so it carries no
+            // adjustment: sending one would be a value nothing can apply.
+            brightness: 0,
+            contrast: 0,
+            crop_mode: 'none'
+          }
+        }].concat(images);
+      });
+    });
+  }
+
   return {
     parse: parse,
     compress: compress,
     extractPdfPages: extractPdfPages,
     mergeIntoPdf: mergeIntoPdf,
     prepareForMerge: prepareForMerge,
+    combineByType: combineByType,
+    shareableSettings: shareableSettings,
+    isImage: isImage,
     extOf: extOf
   };
 })();

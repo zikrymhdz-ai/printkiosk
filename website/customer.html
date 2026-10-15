@@ -16,11 +16,11 @@
 <link rel="stylesheet" href="../styles.css">
 <link href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.css" rel="stylesheet">
 <script src="../frontend_config.js"></script>
-<script src="pstore.js?v=2026.10.14-83"></script>
+<script src="pstore.js?v=2026.10.14-84"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script>pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
 <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
-<script src="pagerange.js?v=2026.10.14-83"></script>
+<script src="pagerange.js?v=2026.10.14-84"></script>
 <script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/dist/face-api.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.js"></script>
 <style>
@@ -284,14 +284,14 @@
             <div class="card-header"><span class="card-title">Print Settings</span><span class="text-xs text-muted" id="settingsFileName"></span></div>
             <div class="form-group">
               <label>Color Mode</label>
-              <select id="colorMode" class="input" onchange="onSettingChange()">
+              <select id="colorMode" class="input" onchange="markSettingsDirty(); updateLivePreview()">
                 <option value="bw">Black & White</option>
                 <option value="color">Color</option>
               </select>
             </div>
             <div class="form-group">
               <label>Duplex</label>
-              <select id="sidesMode" class="input" onchange="onSettingChange()">
+              <select id="sidesMode" class="input" onchange="markSettingsDirty(); updateLivePreview()">
                 <option value="single">Single-sided</option>
                 <option value="double">Double-sided (30% cheaper)</option>
               </select>
@@ -299,7 +299,7 @@
             </div>
             <div class="form-group">
               <label>Copies</label>
-              <input type="number" id="copies" class="input" value="1" min="1" max="99" onchange="onSettingChange()">
+              <input type="number" id="copies" class="input" value="1" min="1" max="99" onchange="markSettingsDirty(); updateLivePreview()">
             </div>
             <div class="form-group">
               <label>Pages</label>
@@ -310,15 +310,15 @@
               <p class="text-sm text-muted" style="margin-bottom:12px; padding-top:12px; border-top:1px solid var(--gray-100);">Image adjustments (JPG/PNG)</p>
               <div class="form-group">
                 <label>Brightness (<span id="brightnessVal">0</span>)</label>
-                <input type="range" id="brightness" min="-100" max="100" value="0" oninput="document.getElementById('brightnessVal').textContent=this.value; onSettingChange()" style="width:100%;">
+                <input type="range" id="brightness" min="-100" max="100" value="0" oninput="document.getElementById('brightnessVal').textContent=this.value; markSettingsDirty(); updateLivePreview()" style="width:100%;">
               </div>
               <div class="form-group">
                 <label>Contrast (<span id="contrastVal">0</span>)</label>
-                <input type="range" id="contrast" min="-100" max="100" value="0" oninput="document.getElementById('contrastVal').textContent=this.value; onSettingChange()" style="width:100%;">
+                <input type="range" id="contrast" min="-100" max="100" value="0" oninput="document.getElementById('contrastVal').textContent=this.value; markSettingsDirty(); updateLivePreview()" style="width:100%;">
               </div>
               <div class="form-group">
                 <label>Crop Mode</label>
-                <select id="cropMode" class="input" onchange="onSettingChange()">
+                <select id="cropMode" class="input" onchange="markSettingsDirty(); updateLivePreview()">
                   <option value="none">None</option>
                   <option value="auto">Auto Crop</option>
                   <option value="manual">Manual Crop</option>
@@ -326,6 +326,13 @@
               </div>
             </div>
             <p id="imageSettingsNote" class="hidden text-sm text-muted">Image settings only available for image files.</p>
+            <!-- Outside #imageSettings on purpose: that block is hidden for
+                 documents, and colour, sides, copies and pages still need
+                 confirming. -->
+            <div style="margin-top:12px; padding-top:12px; border-top:1px solid var(--gray-100);">
+              <button class="btn btn-primary btn-block" id="adjustConfirmBtn" style="font-size:12px; padding:6px 12px; display:none;" onclick="confirmImageAdjustments()">Confirm Settings</button>
+              <p id="adjustPendingNote" class="hidden text-xs text-muted" style="margin-top:6px;">Not applied yet. Press <strong>Confirm Settings</strong> before uploading.</p>
+            </div>
             <div style="margin-top:12px; padding-top:12px; border-top:1px solid var(--gray-100);">
               <button class="btn btn-secondary btn-block" style="font-size:12px; padding:6px 12px;" onclick="applyToAllFiles()">Apply Settings to All Files</button>
             </div>
@@ -849,7 +856,7 @@ function currentPageSelection() {
 
 function onPagesInput() {
   updatePagesHint();
-  onSettingChange();
+  markSettingsDirty();
 }
 
 function updatePagesHint() {
@@ -945,9 +952,46 @@ function loadSettingsToUI() {
   updatePagesHint();
 
   var ext = f.name.split('.').pop().toLowerCase();
-  var isImage = ['jpg','jpeg','png'].includes(ext);
-  document.getElementById('imageSettings').style.display = isImage ? 'block' : 'none';
-  document.getElementById('imageSettingsNote').className = isImage ? 'hidden text-sm text-muted' : 'text-sm text-muted';
+  var isImg = PKPageRange.isImage(f.name);
+  document.getElementById('imageSettings').style.display = isImg ? 'block' : 'none';
+  document.getElementById('imageSettingsNote').className = isImg ? 'hidden text-sm text-muted' : 'text-sm text-muted';
+  // The sliders now hold this file's SAVED values, so nothing is pending. This
+  // also stops a Confirm left showing for one image from carrying to the next.
+  clearAdjustPending();
+}
+
+/* Settings are not applied the moment a control changes. The preview updates
+ * so the customer can judge the result, but the values are only committed when
+ * Confirm Settings is pressed - otherwise a stray change silently alters what
+ * gets printed and charged for, and each file stops having its own settings. */
+function markSettingsDirty() {
+  var btn = document.getElementById('adjustConfirmBtn');
+  var note = document.getElementById('adjustPendingNote');
+  if (btn) { btn.style.display = 'block'; btn.textContent = 'Confirm Settings'; }
+  if (note) {
+    note.classList.remove('hidden');
+    var item = bulkFiles[selectedFileIndex];
+    note.innerHTML = 'Not applied yet. Press <strong>Confirm Settings</strong> to use these values for <strong>'
+      + ((item && item.file && item.file.name) || 'this file') + '</strong>.';
+  }
+}
+
+function clearAdjustPending() {
+  var btn = document.getElementById('adjustConfirmBtn');
+  var note = document.getElementById('adjustPendingNote');
+  if (btn) { btn.style.display = 'none'; btn.textContent = 'Confirm Settings'; }
+  if (note) note.classList.add('hidden');
+}
+
+function settingsPending() {
+  var btn = document.getElementById('adjustConfirmBtn');
+  return !!(btn && btn.style.display !== 'none' && btn.style.display !== '');
+}
+
+function confirmImageAdjustments() {
+  onSettingChange();
+  clearAdjustPending();
+  toastMsg('Settings confirmed');
 }
 
 function onSettingChange() {
@@ -962,8 +1006,17 @@ function onSettingChange() {
 function applyToAllFiles() {
   saveCurrentSettings();
   var s = bulkFiles[selectedFileIndex].settings;
+  // Colour, sides, copies and pages are shared. Brightness, contrast and crop
+  // are NOT: the worker only applies them to JPG/PNG, so copying them onto a
+  // PDF showed a control that could never do anything, and then merged the
+  // wrong file's adjustment into the combined document.
   bulkFiles.forEach(function(item) {
-    item.settings = Object.assign({}, s);
+    var isImg = PKPageRange.isImage(item.file.name);
+    var shared = PKPageRange.shareableSettings(s);
+    shared.brightness = isImg ? (s.brightness || 0) : 0;
+    shared.contrast = isImg ? (s.contrast || 0) : 0;
+    shared.crop_mode = isImg ? (s.crop_mode || 'none') : 'none';
+    item.settings = Object.assign({}, shared);
   });
 }
 
@@ -1527,63 +1580,30 @@ job_id: signD.job_id,
 
   var autoPaidAll = false;
   try {
-    // Combine everything into ONE document, so a multi-file upload is a single
-    // job with one correctly counted page total and one amount to pay, instead
-    // of N jobs the payment has to be attributed across.
+    // Never upload unconfirmed settings: the printed and charged document must
+    // be the one the customer actually confirmed.
+    if (settingsPending()) {
+      var pendingItem = bulkFiles[selectedFileIndex];
+      showUploadOverlay(false);
+      alert('Confirm your settings for "'
+        + ((pendingItem && pendingItem.file && pendingItem.file.name) || 'this file')
+        + '" before uploading.');
+      btn.disabled = false;
+      btn.textContent = 'Upload & Get PIN';
+      return;
+    }
+
+    // PDFs are combined into one document; images keep their own upload, so
+    // each photo retains its own independent settings. See combineByType().
     if (bulkFiles.length > 1) {
       btn.disabled = true;
       showUploadOverlay(true, {
-        sub: 'Combining ' + bulkFiles.length + ' documents into one\u2026',
+        sub: 'Preparing ' + bulkFiles.length + ' files\u2026',
         progress: 5,
-        note: 'This makes the order easier to pay for and print.'
+        note: 'PDFs are combined; each photo keeps its own settings.'
       });
-      // Apply each file's own page selection FIRST. Merging the whole
-      // documents and then marking the result 'all' pages threw the selection
-      // away, so picking pages 3,5 of a 5-page PDF billed and printed all 5 -
-      // and the customer then paid the 2-page amount, which matched nothing.
-      var filesToMerge = await PKPageRange.prepareForMerge(bulkFiles);
-      var mergedFiles = await PKPageRange.mergeIntoPdf(filesToMerge);
-
-      var anyColorFiles = bulkFiles.some(function (it) {
-        return it.settings && it.settings.color === 'color';
-      });
-      var firstFileSettings = bulkFiles[0].settings || {};
-
-      // Brightness/contrast must survive the merge - zeroing them made a
-      // customer dial in an adjustment and then get the unadjusted file
-      // printed. They apply to the whole combined document, so if the files
-      // disagreed, say so rather than picking silently.
-      var wantBrightness = Number(firstFileSettings.brightness) || 0;
-      var wantContrast = Number(firstFileSettings.contrast) || 0;
-      var firstFileName = bulkFiles[0].file.name;
-      var adjustClash = bulkFiles.some(function (it) {
-        var s = it.settings || {};
-        return (Number(s.brightness) || 0) !== wantBrightness
-          || (Number(s.contrast) || 0) !== wantContrast;
-      });
-
-      bulkFiles = [{
-        file: mergedFiles.file,
-        thumb: null,
-        croppedFile: undefined,
-        pdfPages: mergedFiles.pages,
-        settings: {
-          color: anyColorFiles ? 'color' : (firstFileSettings.color || 'bw'),
-          copies: firstFileSettings.copies || 1,
-          sides: firstFileSettings.sides || 'single',
-          pages: mergedFiles.pages,
-          page_spec: 'all',
-          brightness: wantBrightness,
-          contrast: wantContrast,
-          crop_mode: 'none'
-        }
-      }];
+      bulkFiles = await PKPageRange.combineByType(bulkFiles);
       renderFileList();
-      if (adjustClash) {
-        alert('These documents are printed as one file, so they share one '
-          + 'brightness/contrast setting. Using ' + wantBrightness + ' / ' + wantContrast
-          + ' from "' + firstFileName + '".');
-      }
     }
 
     for (let i = 0; i < bulkFiles.length; i++) {

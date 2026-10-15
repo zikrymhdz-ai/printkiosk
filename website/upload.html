@@ -16,10 +16,10 @@
 <link rel="stylesheet" href="../styles.css">
 <link href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.css" rel="stylesheet">
 <script src="../frontend_config.js"></script>
-<script src="pstore.js?v=2026.10.14-83"></script>
+<script src="pstore.js?v=2026.10.14-84"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
-<script src="pagerange.js?v=2026.10.14-83"></script>
+<script src="pagerange.js?v=2026.10.14-84"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.js"></script>
 <script>pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
 <style>
@@ -100,14 +100,14 @@
 
       <div class="form-group" style="margin-bottom:20px;">
         <label>Color Mode</label>
-        <select id="pColorMode" class="input" onchange="onSettingChanged(); updatePhonePreview()">
+        <select id="pColorMode" class="input" onchange="markSettingsDirty(); updatePhonePreview()">
           <option value="bw">Black & White (RM 0.20/page)</option>
           <option value="color">Color (RM 1.10/page)</option>
         </select>
       </div>
       <div class="form-group" style="margin-bottom:20px;">
         <label>Duplex</label>
-        <select id="pSides" class="input" onchange="onSettingChanged(); updatePhoneSummary()">
+        <select id="pSides" class="input" onchange="markSettingsDirty(); updatePhoneSummary()">
           <option value="single">Single-sided (one side per sheet)</option>
           <option value="double">Double-sided (both sides, 30% cheaper per sheet)</option>
         </select>
@@ -119,7 +119,7 @@
       <div class="grid-2">
         <div class="form-group">
           <label>Copies</label>
-          <input type="number" id="pCopies" class="input" value="1" min="1" onchange="onSettingChanged()">
+          <input type="number" id="pCopies" class="input" value="1" min="1" onchange="markSettingsDirty()">
         </div>
         <div class="form-group">
           <label>Pages</label>
@@ -132,15 +132,15 @@
         <p class="text-sm text-muted" style="margin:16px 0 12px; padding-top:12px; border-top:1px solid var(--gray-100);">Image adjustments (JPG/PNG)</p>
         <div class="form-group">
           <label>Brightness (<span id="pBrightnessVal">0</span>)</label>
-          <input type="range" id="pBrightness" min="-100" max="100" value="0" oninput="document.getElementById('pBrightnessVal').textContent=this.value; onSettingChanged(); updatePhonePreview()" style="width:100%;">
+          <input type="range" id="pBrightness" min="-100" max="100" value="0" oninput="document.getElementById('pBrightnessVal').textContent=this.value; markSettingsDirty(); updatePhonePreview()" style="width:100%;">
         </div>
         <div class="form-group">
           <label>Contrast (<span id="pContrastVal">0</span>)</label>
-          <input type="range" id="pContrast" min="-100" max="100" value="0" oninput="document.getElementById('pContrastVal').textContent=this.value; onSettingChanged(); updatePhonePreview()" style="width:100%;">
+          <input type="range" id="pContrast" min="-100" max="100" value="0" oninput="document.getElementById('pContrastVal').textContent=this.value; markSettingsDirty(); updatePhonePreview()" style="width:100%;">
         </div>
         <div class="form-group">
           <label>Crop Mode</label>
-          <select id="pCropMode" class="input" onchange="onSettingChanged(); updatePhonePreview()">
+          <select id="pCropMode" class="input" onchange="markSettingsDirty(); updatePhonePreview()">
             <option value="none">None</option>
             <option value="auto">Auto Crop</option>
             <option value="manual">Manual Crop</option>
@@ -148,6 +148,12 @@
         </div>
       </div>
       <p id="pImageSettingsNote" class="hidden text-sm text-muted">Image settings only available for image files.</p>
+
+      <!-- Outside #pImageSettings on purpose: that block is hidden for
+           documents, and colour, sides, copies and pages still need
+           confirming. -->
+      <button class="btn btn-primary btn-block" id="pAdjustConfirmBtn" style="margin-top:14px; font-size:13px; display:none;" onclick="confirmImageAdjustments()">Confirm Settings</button>
+      <p id="pAdjustPendingNote" class="hidden text-xs text-muted" style="margin-top:6px;">Not applied yet. Press <strong>Confirm Settings</strong> before uploading.</p>
 
       <button class="btn btn-secondary btn-block" style="margin-top:14px; font-size:13px;" onclick="applyToAllFiles()">Apply These Settings to All Files</button>
 
@@ -594,7 +600,7 @@ function currentPhonePageSelection() {
 
 function onPhonePagesInput() {
   updatePhonePagesHint();
-  onSettingChanged();
+  markSettingsDirty();
 }
 
 function updatePhonePagesHint() {
@@ -649,6 +655,8 @@ function loadSettingsToUI() {
   document.getElementById('pContrastVal').textContent = s.contrast || 0;
   document.getElementById('pCropMode').value = s.crop_mode || 'none';
   phoneCroppedFile = item.croppedFile || null;
+  // The sliders now hold this file's SAVED values, so there is nothing pending.
+  clearAdjustPending();
   updatePhonePagesHint();
   var f = item.file;
   var ext = (f.name.split('.').pop() || '').toLowerCase();
@@ -662,10 +670,61 @@ function applyToAllFiles() {
   saveCurrentSettings();
   var src = getSelectedItem();
   if (!src) return;
-  bulkFiles.forEach(function(item) { item.settings = JSON.parse(JSON.stringify(src.settings)); item.croppedFile = null; });
+  // Colour, sides, copies and pages are shared. Brightness, contrast and crop
+  // are NOT: the worker only applies them to JPG/PNG, so copying them onto a
+  // PDF showed a control that could never do anything, and then merged the
+  // wrong file's adjustment into the combined document.
+  bulkFiles.forEach(function(item) {
+    var isImg = PKPageRange.isImage(item.file.name);
+    var shared = PKPageRange.shareableSettings(src.settings);
+    shared.brightness = isImg ? (src.settings.brightness || 0) : 0;
+    shared.contrast = isImg ? (src.settings.contrast || 0) : 0;
+    shared.crop_mode = isImg ? (src.settings.crop_mode || 'none') : 'none';
+    item.settings = shared;
+    // A crop belongs to the image it was made on. Blanketing every item with
+    // null also threw away the crop the customer had just made.
+    if (!isImg) item.croppedFile = null;
+  });
   toastMsg('Settings applied to all ' + bulkFiles.length + ' files');
   renderFileSelector();
   updatePhoneSummary();
+}
+
+/* Settings are not applied the moment a control changes. The preview updates
+ * so the customer can judge the result, but the values are only committed when
+ * Confirm Settings is pressed - otherwise a stray change to colour, sides,
+ * copies or pages silently alters what gets printed and charged for, and each
+ * file's settings stop being its own. */
+function markSettingsDirty() {
+  var btn = document.getElementById('pAdjustConfirmBtn');
+  var note = document.getElementById('pAdjustPendingNote');
+  if (btn) { btn.style.display = 'block'; btn.textContent = 'Confirm Settings'; }
+  if (note) {
+    note.classList.remove('hidden');
+    note.innerHTML = 'Not applied yet. Press <strong>Confirm Settings</strong> to use these values for <strong id="pAdjustPendingFile"></strong>.';
+    var item = getSelectedItem();
+    var nameEl = document.getElementById('pAdjustPendingFile');
+    if (nameEl) nameEl.textContent = item ? item.file.name : 'this file';
+  }
+}
+
+function clearAdjustPending() {
+  var btn = document.getElementById('pAdjustConfirmBtn');
+  var note = document.getElementById('pAdjustPendingNote');
+  if (btn) { btn.style.display = 'none'; btn.textContent = 'Confirm Settings'; }
+  if (note) note.classList.add('hidden');
+}
+
+function settingsPending() {
+  var btn = document.getElementById('pAdjustConfirmBtn');
+  return !!(btn && btn.style.display !== 'none' && btn.style.display !== '');
+}
+
+function confirmImageAdjustments() {
+  saveCurrentSettings();
+  clearAdjustPending();
+  onSettingChanged();
+  toastMsg('Settings confirmed');
 }
 
 function onSettingChanged() {
@@ -911,68 +970,25 @@ async function submitPhoneUpload() {
   }
 
   try {
+    // Never upload unconfirmed settings: the printed and charged document must
+    // be the one the customer actually confirmed.
+    if (settingsPending()) {
+      var pendingName = (getSelectedItem() || {}).file;
+      uploadFail('Confirm your settings for "' + ((pendingName && pendingName.name) || 'this file')
+        + '" before uploading.');
+      return;
+    }
     phoneUploadedJobs = [];
     var phoneAutoPaid = false;
 
-    // Combine everything into ONE document first, so this is a single job with
-    // a correctly counted page total and a single amount to pay. Uploading N
-    // files as N jobs meant the payment had to be attributed to a set of jobs,
-    // which is what kept going wrong.
-    if (bulkFiles.length > 1) {
-      btn.disabled = true;
-      btn.textContent = 'Combining ' + bulkFiles.length + ' documents...';
-      // Apply each file's own page selection FIRST. Merging whole documents and
-      // then marking the result 'all' pages threw the selection away, so picking
-      // pages 3,5 of a 5-page PDF billed and printed all 5 - and the customer
-      // then paid the 2-page amount, which matched nothing.
-      var filesToMerge = await PKPageRange.prepareForMerge(bulkFiles);
-      var merged = await PKPageRange.mergeIntoPdf(filesToMerge);
-
-      // Settings apply to the combined document as a whole: the page total comes
-      // from the merge, and colour is used if ANY part was colour, so nothing
-      // is silently printed in the wrong mode.
-      var anyColor = bulkFiles.some(function (it) {
-        return it.settings && it.settings.color === 'color';
-      });
-      var first = bulkFiles[0].settings || {};
-
-      // Brightness/contrast must survive the merge. Zeroing them here is what
-      // made a customer dial in an adjustment, see it in the preview, and then
-      // have the unadjusted file printed. They apply to the whole combined
-      // document, so if the files disagreed, say so instead of picking silently.
-      var wantBright = Number(first.brightness) || 0;
-      var wantContrast = Number(first.contrast) || 0;
-      var firstFileName = bulkFiles[0].file.name;
-      var adjustClash = bulkFiles.some(function (it) {
-        var s = it.settings || {};
-        return (Number(s.brightness) || 0) !== wantBright
-          || (Number(s.contrast) || 0) !== wantContrast;
-      });
-
-      bulkFiles = [{
-        file: merged.file,
-        thumb: null,
-        croppedFile: null,
-        pdfPages: merged.pages,
-        settings: {
-          color: anyColor ? 'color' : (first.color || 'bw'),
-          copies: first.copies || 1,
-          sides: first.sides || 'single',
-          pages: merged.pages,
-          page_spec: 'all',
-          brightness: wantBright,
-          contrast: wantContrast,
-          crop_mode: 'none'
-        }
-      }];
-      renderFileList();
-      if (adjustClash) {
-        alert('These documents are printed as one file, so they share one '
-          + 'brightness/contrast setting. Using ' + wantBright + ' / ' + wantContrast
-          + ' from "' + firstFileName + '".');
-      }
-      phoneCombinedPages = merged.pages;
-    }
+// PDFs are combined into one document; images are kept as their own uploads.
+// See combineByType() for why the two are not mixed.
+if (bulkFiles.length > 1) {
+btn.disabled = true;
+btn.textContent = 'Preparing ' + bulkFiles.length + ' files...';
+bulkFiles = await PKPageRange.combineByType(bulkFiles);
+renderFileList();
+}
 
     for (let i = 0; i < bulkFiles.length; i++) {
       btn.textContent = 'Uploading file ' + (i + 1) + ' of ' + bulkFiles.length + '...';

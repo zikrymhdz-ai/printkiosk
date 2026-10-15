@@ -194,6 +194,80 @@ function get(url) {
     ok(r.pages === 1, 'the cropped file is merged instead of the original (1 page, got ' + r.pages + ')');
   }
 
+  // 12. Documents and images are kept apart.
+  {
+    ok(typeof PK.combineByType === 'function', 'combineByType is exposed');
+    ok(typeof PK.shareableSettings === 'function', 'shareableSettings is exposed');
+    ok(typeof PK.isImage === 'function', 'isImage is exposed');
+
+    const item = (name, settings) => ({
+      file: null, settings: Object.assign(
+        { color: 'bw', copies: 1, sides: 'single', pages: 1, page_spec: 'all',
+          brightness: 0, contrast: 0, crop_mode: 'none' }, settings || {}),
+      _name: name,
+    });
+
+    // Two PDFs become one document.
+    const twoPdf = [
+      Object.assign(item('a.pdf'), { file: await pdfOf(2, 'a.pdf') }),
+      Object.assign(item('b.pdf'), { file: await pdfOf(3, 'b.pdf') }),
+    ];
+    const merged = await PK.combineByType(twoPdf);
+    ok(merged.length === 1, 'two PDFs become one document, got ' + merged.length);
+    ok(merged[0].pdfPages === 5, 'the combined PDF has 5 pages, got ' + merged[0].pdfPages);
+    ok(merged[0].settings.brightness === 0 && merged[0].settings.contrast === 0,
+      'the combined document carries no adjustment, because nothing can apply one to it');
+
+    // Two images stay separate, so each keeps its own adjustment.
+    const twoImg = [
+      Object.assign(item('p1.png'), { file: await pngOf('p1.png'), settings: { brightness: 30, contrast: 10 } }),
+      Object.assign(item('p2.png'), { file: await pngOf('p2.png'), settings: { brightness: -20, contrast: 5 } }),
+    ];
+    const kept = await PK.combineByType(twoImg);
+    ok(kept.length === 2, 'two images stay two files, got ' + kept.length);
+    ok(kept[0].settings.brightness === 30 && kept[0].settings.contrast === 10,
+      'the first photo keeps its own adjustment');
+    ok(kept[1].settings.brightness === -20 && kept[1].settings.contrast === 5,
+      'the second photo keeps its own, different adjustment');
+    ok(PK.isImage(kept[0].file.name) && PK.isImage(kept[1].file.name),
+      'photos are still uploaded as images, so the worker can adjust them');
+
+    // A document and a photo are never combined.
+    const mixed = [
+      Object.assign(item('a.pdf'), { file: await pdfOf(2, 'a.pdf') }),
+      Object.assign(item('p1.png'), { file: await pngOf('p1.png'), settings: { brightness: 40 } }),
+    ];
+    const split = await PK.combineByType(mixed);
+    ok(split.length === 2, 'a PDF and a photo stay two files, got ' + split.length);
+    ok(split.some(i => PK.isImage(i.file.name)), 'the photo is still there as an image');
+    ok(split.some(i => PK.extOf(i.file.name) === 'pdf'), 'the document is still there as a PDF');
+    const img = split.find(i => PK.isImage(i.file.name));
+    ok(img.settings.brightness === 40,
+      'the photo keeps its adjustment instead of losing it to the merge');
+
+    // A DOCX cannot be merged, so it must not take the whole batch down.
+    const withDoc = [
+      Object.assign(item('a.pdf'), { file: await pdfOf(2, 'a.pdf') }),
+      { file: new File([new Uint8Array([80, 75, 3, 4])], 'l.docx',
+          { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }),
+        settings: item('l.docx').settings },
+    ];
+    const safe = await PK.combineByType(withDoc);
+    ok(safe.length === 2, 'a DOCX in the batch is left on its own, got ' + safe.length);
+  }
+
+  // 13. shareableSettings must not hand image-only settings to a document.
+  {
+    const all = { color: 'color', copies: 3, sides: 'double', pages: 4,
+      page_spec: 'all', brightness: 50, contrast: 25, crop_mode: 'manual' };
+    const shared = PK.shareableSettings(all);
+    ok(shared.color === 'color' && shared.copies === 3 && shared.sides === 'double',
+      'print settings are shared');
+    ok(!('brightness' in shared), 'brightness is not shared');
+    ok(!('contrast' in shared), 'contrast is not shared');
+    ok(!('crop_mode' in shared), 'crop mode is not shared');
+  }
+
   if (failed) { console.log('  -> ' + failed + ' failed'); process.exit(1); }
   console.log('  ok      multiple documents become one job with the right page count');
 })().catch(e => { console.log('  ERROR ' + (e && e.message)); console.log(e && e.stack); process.exit(1); });

@@ -326,14 +326,57 @@ for (const [label, page] of [['guest', guestPage], ['member', memberPage]]) {
 ok(/currentOrderId\(\)/.test(guestPage) && /currentOrderId\(\)/.test(memberPage),
   'both pages send the same reference for every file in the batch');
 
-// --- the merge must not throw the customer's adjustments away --------------
+// --- documents and images are kept apart, and settings are per file ---------
 for (const [label, page] of [['guest', guestPage], ['member', memberPage]]) {
-  ok(!/brightness: 0,\s*\n\s*contrast: 0,\s*\n\s*crop_mode: 'none'/.test(page),
-    label + ' merge does not reset brightness/contrast to zero');
-  ok(/brightness: want/.test(page), label + ' merge carries brightness through');
-  ok(/contrast: want/.test(page), label + ' merge carries contrast through');
-  ok(/adjustClash/.test(page),
-    label + ' warns when files disagree about brightness/contrast');
+  ok(/PKPageRange\.combineByType\(/.test(page),
+    label + ' groups the batch by type instead of merging everything');
+  ok(!/PKPageRange\.mergeIntoPdf\(bulkFiles\b/.test(page),
+    label + ' no longer merges documents and photos into one file');
+  ok(/PKPageRange\.shareableSettings\(/.test(page),
+    label + ' shares only the settings every file can use');
+  ok(/PKPageRange\.isImage\(/.test(page),
+    label + ' checks whether a file is an image before copying adjustments');
+}
+
+// Brightness/contrast/crop are image-only: the worker applies them in
+// image_to_pdf(), so handing them to a PDF produces a control that cannot do
+// anything, and merging them into a combined document loses them entirely.
+ok(!/item\.settings = JSON\.parse\(JSON\.stringify\(src\.settings\)\)/.test(guestPage),
+  'the guest page no longer copies one file\'s settings wholesale onto the rest');
+ok(!/item\.settings = Object\.assign\(\{\}, s\);/.test(memberPage),
+  'the member page no longer copies one file\'s settings wholesale onto the rest');
+for (const [label, page] of [['guest', guestPage], ['member', memberPage]]) {
+  ok(/shared\.brightness = isImg \?/.test(page) && /shared\.contrast = isImg \?/.test(page),
+    label + ' only gives brightness/contrast to an image');
+  ok(/shared\.crop_mode = isImg \?/.test(page),
+    label + ' only gives crop mode to an image');
+}
+
+// --- a setting change must be confirmed before it is uploaded --------------
+for (const [label, page] of [['guest', guestPage], ['member', memberPage]]) {
+  ok(/function markSettingsDirty\(\)/.test(page), label + ' marks settings as unconfirmed');
+  ok(/function settingsPending\(\)/.test(page), label + ' can tell settings are unconfirmed');
+  ok(/if \(settingsPending\(\)\)/.test(page),
+    label + ' refuses to upload while a setting is unconfirmed');
+  ok(/function confirmImageAdjustments\(\)/.test(page), label + ' has a confirm action');
+  ok(/id="pAdjustConfirmBtn"|id="adjustConfirmBtn"/.test(page),
+    label + ' renders a Confirm Settings button');
+  ok(!/function markAdjustPending\(\)/.test(page),
+    label + ' has no leftover adjustments-only pending path');
+  ok(/textContent = 'Confirm Settings'/.test(page),
+    label + ' the button is labelled Confirm Settings, not adjustments only');
+}
+
+// The button must sit OUTSIDE the image-only block, or a document - which can
+// still change colour, sides, copies and pages - would have no way to confirm.
+for (const [rel, page, imgId, noteId] of [
+  ['website/upload.html', guestPage, 'pImageSettings', 'pImageSettingsNote'],
+  ['website/customer.html', memberPage, 'imageSettings', 'imageSettingsNote'],
+]) {
+  const note = page.indexOf('id="' + noteId + '"');
+  const btn = page.search(/id="pAdjustConfirmBtn"|id="adjustConfirmBtn"/);
+  ok(note !== -1 && btn > note,
+    rel + ' shows Confirm Settings outside the image-only block');
 }
 
 if (failed) { console.log('  -> ' + failed + ' failed'); process.exit(1); }
