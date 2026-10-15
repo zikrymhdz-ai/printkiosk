@@ -16,10 +16,10 @@
 <link rel="stylesheet" href="../styles.css">
 <link href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.css" rel="stylesheet">
 <script src="../frontend_config.js"></script>
-<script src="pstore.js?v=2026.10.14-87"></script>
+<script src="pstore.js?v=2026.10.14-88"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
-<script src="pagerange.js?v=2026.10.14-87"></script>
+<script src="pagerange.js?v=2026.10.14-88"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.js"></script>
 <script>pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
 <style>
@@ -84,7 +84,7 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
         </div>
         <div class="upload-zone-text">Tap to select files</div>
-        <div class="upload-zone-hint">PDF, DOC, DOCX, JPG, PNG -- 20MB max each, multiple allowed</div>
+        <div class="upload-zone-hint">PDF, DOC, DOCX, JPG, PNG -- 50MB max each, multiple allowed</div>
       </div>
       <input type="file" id="phoneFile" accept=".pdf,.doc,.docx,.jpg,.jpeg,.png" multiple style="display:none">
       <div id="phoneFileList" style="margin-top:12px; display:flex; flex-direction:column; gap:8px;"></div>
@@ -323,7 +323,7 @@ if (input) input.removeAttribute('multiple');
 var hint = document.querySelector('#uploadZoneDrop .upload-zone-hint')
 || document.querySelector('.upload-zone-hint');
 if (hint) {
-hint.textContent = 'PDF, DOC, DOCX, JPG, PNG - 20MB max - one file. '
+hint.textContent = 'PDF, DOC, DOCX, JPG, PNG - ' + MAX_FILE_MB + 'MB max - one file. '
 + 'Sign in to send several files together.';
 }
 
@@ -407,6 +407,11 @@ function currentOrderId() {
   return oid;
 }
 
+/* Must match MAX_FILE_MB in netlify/functions/upload.js. check-order-payment.js
+   fails if they drift, because a limit enforced in only one place produces
+   "it worked on one page" bugs. */
+const MAX_FILE_MB = 50;
+
 function addFiles(files) {
   // Belt and braces: the zone is inert after a guest's file is chosen, and this
   // refuses regardless of how addFiles was reached.
@@ -440,7 +445,7 @@ function addFiles(files) {
   files.slice(0, room).forEach(function(file) {
     var ext = (file.name.split('.').pop() || '').toLowerCase();
     if (!['pdf','doc','docx','jpg','jpeg','png'].includes(ext)) { errs += (errs ? '\n' : '') + file.name + ': unsupported type'; return; }
-    if (file.size > 20 * 1024 * 1024) { errs += (errs ? '\n' : '') + file.name + ': exceeds 20MB'; return; }
+    if (file.size > MAX_FILE_MB * 1024 * 1024) { errs += (errs ? '\n' : '') + file.name + ': exceeds ' + MAX_FILE_MB + 'MB'; return; }
     bulkFiles.push({ file: file, thumb: null, croppedFile: null, pdfPages: 0, settings: { color: 'bw', copies: 1, pages: 1, page_spec: 'all', brightness: 0, contrast: 0, crop_mode: 'none' } });
     added++;
   });

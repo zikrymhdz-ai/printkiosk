@@ -5,7 +5,13 @@ const { json, err, supabaseRequest, validateSession, generateJobId, calculatePri
 // payment arrives, and their PIN is collected on paper. Members may bundle up
 // to MAX_BUNDLE_FILES.
 const MAX_BUNDLE_FILES = 5;
-const MAX_FILE_BYTES = 20 * 1024 * 1024; // 20MB per file
+// Per-file upload ceiling. The client checks the same number before it starts,
+// and check-order-payment.js fails if the two ever drift - a limit that is
+// enforced in only one place produces "it worked on one page" bugs.
+//
+// Kept as one constant in MB so the message and the byte count cannot disagree.
+const MAX_FILE_MB = 50;
+const MAX_FILE_BYTES = MAX_FILE_MB * 1024 * 1024;
 
 // Validate and normalise the order reference a file belongs to.
 //
@@ -92,7 +98,7 @@ async function handleSignUpload(event) {
 
   const size = parseInt(body.file_size, 10);
   if (!size || size <= 0) return err('file_size required');
-  if (size > 20 * 1024 * 1024) return err('File too large. Maximum 20MB.');
+  if (size > MAX_FILE_BYTES) return err('File too large. Maximum ' + MAX_FILE_MB + 'MB.');
 
   const ext = getExtension(fileName);
   const contentType = EXT_MIME_MAP[ext] || 'application/octet-stream';
@@ -286,7 +292,7 @@ async function handleUpload(event) {
       return err('File type not allowed. Allowed: ' + ALLOWED_EXTENSIONS.join(', '));
     }
     if (file.data.length > MAX_FILE_BYTES) {
-      return err('File too large. Maximum 20MB.');
+      return err('File too large. Maximum ' + MAX_FILE_MB + 'MB.');
     }
 
     // Order identity. Every file in one upload batch carries the same order_id,

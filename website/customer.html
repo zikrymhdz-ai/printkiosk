@@ -16,11 +16,11 @@
 <link rel="stylesheet" href="../styles.css">
 <link href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.css" rel="stylesheet">
 <script src="../frontend_config.js"></script>
-<script src="pstore.js?v=2026.10.14-87"></script>
+<script src="pstore.js?v=2026.10.14-88"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script>pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
 <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
-<script src="pagerange.js?v=2026.10.14-87"></script>
+<script src="pagerange.js?v=2026.10.14-88"></script>
 <script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/dist/face-api.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.js"></script>
 <style>
@@ -257,7 +257,7 @@
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
             </div>
             <div class="upload-zone-text">Drop files here or click to browse</div>
-            <div class="upload-zone-hint">PDF, DOC, DOCX, JPG, PNG &mdash; Max 20MB each &mdash; Multiple files allowed</div>
+            <div class="upload-zone-hint">PDF, DOC, DOCX, JPG, PNG &mdash; Max 50MB each &mdash; Multiple files allowed</div>
           </div>
           <input type="file" id="fileInput" accept=".pdf,.doc,.docx,.jpg,.jpeg,.png" multiple style="display:none">
           <div id="fileListContainer" style="display:none; margin-top:16px;">
@@ -784,7 +784,11 @@ function goStep(n) {
 const uploadZone = document.getElementById('uploadZone');
 const fileInput = document.getElementById('fileInput');
 const allowedExts = ['pdf','doc','docx','jpg','jpeg','png'];
-const maxSize = 20 * 1024 * 1024;
+// Must match MAX_FILE_MB in netlify/functions/upload.js. check-order-payment.js
+// fails if they drift, because a limit enforced in only one place produces
+// "it worked on one page" bugs.
+const MAX_FILE_MB = 50;
+const maxSize = MAX_FILE_MB * 1024 * 1024;
 
 uploadZone.addEventListener('dragover', (e) => { e.preventDefault(); uploadZone.classList.add('dragover'); });
 uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('dragover'));
@@ -831,7 +835,7 @@ function addFiles(files) {
     var f = files[i];
     var ext = f.name.split('.').pop().toLowerCase();
     if (!allowedExts.includes(ext)) { alert(f.name + ': File type not allowed'); continue; }
-    if (f.size > maxSize) { alert(f.name + ': File too large (max 20MB)'); continue; }
+    if (f.size > maxSize) { alert(f.name + ': File too large (max ' + MAX_FILE_MB + 'MB)'); continue; }
     bulkFiles.push({ file: f, thumb: null, croppedFile: undefined, pdfPages: 0, settings: { color:'bw', copies:1, pages:1, page_spec:'all', brightness:0, contrast:0, crop_mode:'none' } });
   }
   renderFileList();

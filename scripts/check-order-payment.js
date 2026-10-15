@@ -121,7 +121,7 @@ const guestLimit = parseInt((guestPage.match(/var MAX_FILES_GUEST = (\d+)/) || [
 ok(guestLimit === 1, 'guest page allows exactly 1 file (' + guestLimit + ')');
 const memberLimit = parseInt((memberPage.match(/var MAX_ORDER_FILES = (\d+)/) || [])[1], 10);
 ok(memberLimit === 5, 'member page allows 5 files (' + memberLimit + ')');
-ok(/20 \* 1024 \* 1024/.test(upload), 'the 20MB per-file limit is still enforced server-side');
+ok(/MAX_FILE_BYTES/.test(upload), 'the per-file size limit is still enforced server-side');
 
 // --- the amount shown is the amount the server priced ---------------------
 ok(/seal-order/.test(guestPage) && /seal-order/.test(memberPage), 'both pages seal the order');
@@ -431,6 +431,38 @@ ok(/Safety net: files can be changed after passing step 2/.test(memberPage),
   'member page explains why it checks twice');
 ok((guestPage.match(/refuseMixedFileTypes\(\)/g) || []).length >= 2,
   'guest page keeps a backstop even though it is locked to one file');
+
+// --- the size limit must be the same everywhere ----------------------------
+// The server had MAX_FILE_BYTES as a constant but one check compared against a
+// hardcoded 20MB, so raising the constant would have left that path rejecting
+// at the old limit. A limit enforced in only one place produces "it worked on
+// one page" bugs, so the numbers are pinned together here.
+{
+  const serverMb = (upload.match(/const MAX_FILE_MB = (\d+);/) || [])[1];
+  ok(!!serverMb, 'the server declares a single MAX_FILE_MB');
+  ok(!/20 \* 1024 \* 1024/.test(upload),
+    'no hardcoded 20MB check is left in the server');
+  ok(!/Maximum 20MB/.test(upload), 'no hardcoded 20MB message is left in the server');
+
+  for (const [label, page] of [['guest', guestPage], ['member', memberPage]]) {
+    const clientMb = (page.match(/const MAX_FILE_MB = (\d+);/) || [])[1];
+    ok(!!clientMb, label + ' declares a single MAX_FILE_MB');
+    ok(clientMb === serverMb,
+      label + ' limit (' + clientMb + 'MB) matches the server (' + serverMb + 'MB)');
+    ok(!/20 \* 1024 \* 1024/.test(page),
+      label + ' has no hardcoded 20MB check left');
+    ok(new RegExp('20MB').test(page) === false,
+      label + ' shows no stale "20MB" text to the customer');
+  }
+
+  // The 5-file job limit is unchanged and is separate from the size limit.
+  const serverCap = (upload.match(/const MAX_BUNDLE_FILES = (\d+);/) || [])[1];
+  ok(serverCap === '5', 'the server still allows 5 files per order');
+  ok(/var MAX_ORDER_FILES = 5;/.test(memberPage),
+    'the member page still allows 5 files per order');
+  ok(/var MAX_ORDER_FILES = 5;/.test(guestPage),
+    'the guest page still allows 5 files per order');
+}
 
 if (failed) { console.log('  -> ' + failed + ' failed'); process.exit(1); }
 console.log('  ok      orders settle as one payment and earn a coin per file');
