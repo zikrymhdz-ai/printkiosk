@@ -329,6 +329,56 @@ function get(url) {
       'uppercase extensions are still detected as mixed');
   }
 
+  // 15. A file whose name does not match its bytes.
+  //     Adjusting a photo in the browser re-encodes it as PNG but used to keep
+  //     the original ".jpg" name, so mergeIntoPdf() handed PNG bytes to
+  //     embedJpg() and failed with "SOI not found in JPEG". The format is now
+  //     taken from the bytes, so a misleading name is harmless.
+  {
+    ok(typeof PK.sniffFormat === 'function', 'sniffFormat is exposed');
+
+    const pngBytes = new Uint8Array(await (await pngOf('real.png')).arrayBuffer());
+    const pdfBytes = new Uint8Array(await (await pdfOf(1, 'real.pdf')).arrayBuffer());
+
+    ok(PK.sniffFormat(pngBytes.buffer) === 'png', 'PNG bytes are recognised as PNG');
+    ok(PK.sniffFormat(pdfBytes.buffer) === 'pdf', 'PDF bytes are recognised as PDF');
+    ok(PK.sniffFormat(new Uint8Array([0xFF, 0xD8, 0xFF, 0xE0, 0, 0]).buffer) === 'jpeg',
+      'JPEG bytes are recognised as JPEG');
+    ok(PK.sniffFormat(new Uint8Array([80, 75, 3, 4]).buffer) === null,
+      'a DOCX is not mistaken for an image or a PDF');
+
+    // PNG bytes wearing a .jpg name must still merge.
+    const misnamed = new File([pngBytes], 'holiday.jpg', { type: 'image/jpeg' });
+    const merged = await PK.mergeIntoPdf([misnamed]);
+    ok(merged.pages === 1, 'a PNG named .jpg still becomes one page');
+
+    const pair = await PK.mergeIntoPdf([
+      new File([pdfBytes], 'doc.pdf', { type: 'application/pdf' }),
+      misnamed,
+    ]);
+    ok(pair.pages === 2, 'and still merges with a PDF alongside it, got ' + pair.pages);
+
+    // Genuinely unreadable bytes are refused with a usable message rather than
+    // a raw library error.
+    let msg = '';
+    try {
+      await PK.mergeIntoPdf([
+        { file: new File([pdfBytes], 'a.pdf') },
+        { file: new File([new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8])], 'broken.png') },
+      ]);
+    } catch (e) { msg = String(e && e.message); }
+    ok(/not a readable PDF, JPG or PNG/.test(msg),
+      'unreadable bytes give a clear reason: ' + msg);
+
+    // A lone unreadable file still passes through - it has nothing to merge with.
+    let soloOk = false;
+    try {
+      const solo = await PK.mergeIntoPdf([{ file: new File([pdfBytes], 'a.pdf') }]);
+      soloOk = solo && solo.pages === 1;
+    } catch (e) { /* ignore */ }
+    ok(soloOk, 'a single file is unaffected');
+  }
+
   if (failed) { console.log('  -> ' + failed + ' failed'); process.exit(1); }
   console.log('  ok      multiple documents become one job with the right page count');
 })().catch(e => { console.log('  ERROR ' + (e && e.message)); console.log(e && e.stack); process.exit(1); });

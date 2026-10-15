@@ -182,6 +182,21 @@ window.PKPageRange = (function () {
     return out;
   }
 
+  /* Identify a file from its own bytes, not from its name.
+   *
+   * Trusting the extension broke as soon as one step produced a file whose
+   * name no longer matched its contents: a photo adjusted in the browser is
+   * re-encoded as PNG, and handing those bytes to embedJpg() failed with
+   * "SOI not found in JPEG". A name is a label; these bytes are the truth.
+   */
+  function sniffFormat(buf) {
+    var b = new Uint8Array(buf);
+    if (b.length > 3 && b[0] === 0x25 && b[1] === 0x50 && b[2] === 0x44 && b[3] === 0x46) return 'pdf';
+    if (b.length > 7 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4E && b[3] === 0x47) return 'png';
+    if (b.length > 2 && b[0] === 0xFF && b[1] === 0xD8 && b[2] === 0xFF) return 'jpeg';
+    return null;
+  }
+
   function mergeIntoPdf(items) {
     if (typeof PDFLib === 'undefined') {
       return Promise.reject(new Error('PDF library not loaded'));
@@ -199,10 +214,11 @@ window.PKPageRange = (function () {
         var ext = extOf(name);
         sources.push({ name: name, pages: null });
 
-        if (ext === 'pdf') {
-          return file.arrayBuffer()
-            .then(function (buf) { return PDFLib.PDFDocument.load(buf); })
-            .then(function (src) {
+        return file.arrayBuffer().then(function (buf) {
+          var real = sniffFormat(buf);
+
+          if (real === 'pdf') {
+            return PDFLib.PDFDocument.load(buf).then(function (src) {
               var count = src.getPageCount();
               sources[sources.length - 1].pages = count;
               pages += count;
@@ -219,14 +235,14 @@ window.PKPageRange = (function () {
                   });
               });
             });
-        }
+          }
 
-        if (ext === 'png' || ext === 'jpg' || ext === 'jpeg') {
-          return file.arrayBuffer().then(function (buf) {
-            var ready = out ? Promise.resolve(out) : PDFLib.PDFDocument.create();
-            return ready.then(function (doc) {
+          if (real === 'png' || real === 'jpeg') {
+            var ready2 = out ? Promise.resolve(out) : PDFLib.PDFDocument.create();
+            return ready2.then(function (doc) {
               out = doc;
-              return (ext === 'png' ? out.embedPng(buf) : out.embedJpg(buf))
+              // Dispatch on the sniffed format, never on the file name.
+              return (real === 'png' ? out.embedPng(buf) : out.embedJpg(buf))
                 .then(function (img) {
                   // Page in points, from the image's pixel size.
                   var page = out.addPage([img.width, img.height]);
@@ -236,18 +252,25 @@ window.PKPageRange = (function () {
                   sources[sources.length - 1].pages = 1;
                 });
             });
-          });
-        }
+          }
 
-        // A DOC/DOCX sent on its own needs no merging, so let it through. Only
-        // refuse it when it would have to be combined with something else.
-        if (items.length === 1) {
-          return { file: file, pages: null, images: 0, sources: sources };
-        }
+          // Unreadable, or a DOC/DOCX which has no client-side renderer. A
+          // single such file needs no merging, so let it through; refuse it
+          // only when it would have to be combined with something else.
+          if (items.length === 1) {
+            return { file: file, pages: null, images: 0, sources: sources };
+          }
 
-        return Promise.reject(new Error(
-          name + ': DOC and DOCX cannot be combined with other documents. '
-          + 'Upload it on its own.'));
+          if (ext === 'doc' || ext === 'docx') {
+            return Promise.reject(new Error(
+              name + ': DOC and DOCX cannot be combined with other documents. '
+              + 'Upload it on its own.'));
+          }
+
+          return Promise.reject(new Error(
+            name + ': this file is not a readable PDF, JPG or PNG, so it cannot '
+            + 'be combined. Please upload it on its own.'));
+        });
       });
     }, Promise.resolve()).then(function () {
       if (!out || !pages) throw new Error('Nothing to combine');
@@ -359,7 +382,11 @@ window.PKPageRange = (function () {
 
           canvas.toBlob(function (blob) {
             if (!blob) { reject(new Error('Could not adjust ' + (file.name || 'image'))); return; }
-            resolve(new File([blob], file.name, { type: 'image/png' }));
+            // The bytes are now PNG, whatever the file was called. Keeping the
+            // old ".jpg" name made mergeIntoPdf() hand PNG data to embedJpg(),
+            // which failed with "SOI not found in JPEG".
+            var name = String(file.name || 'image').replace(/\.[^.]*$/, '') + '.png';
+            resolve(new File([blob], name, { type: 'image/png' }));
           }, 'image/png');
         } catch (e) {
           reject(e);
@@ -564,6 +591,7 @@ window.PKPageRange = (function () {
     extractPdfPages: extractPdfPages,
     mergeIntoPdf: mergeIntoPdf,
     prepareForMerge: prepareForMerge,
+    sniffFormat: sniffFormat,
     combineByType: combineByType,
     combineGroups: combineGroups,
     mergedItem: mergedItem,
