@@ -36,7 +36,16 @@ CONFIG = {
     "printer": os.environ.get("PRINTER_NAME", "Brother"),
     # Hostname form is used for supplies so it survives the printer getting a
     # new DHCP address. claim/report go through the API, not the printer.
+    #
+    # There are two Brother printers on this network (HL-L3240CDW and
+    # DCP-T430W) and "Brother.local" does not resolve, so this default cannot
+    # work and a brand name cannot say which device is meant. install.sh
+    # discovers the right one by model and writes the real dnssd:// URI here.
     "printer_uri": os.environ.get("PRINTER_URI", "ipp://Brother.local/ipp/print"),
+    # Model this shop is supposed to print on. If the device answers with a
+    # different printer-name, the worker reports "wrong printer" instead of
+    # filing another machine's toner levels against this one.
+    "expected_model": os.environ.get("EXPECTED_MODEL", "HL-L3240CDW"),
     "poll_seconds": int(os.environ.get("PRINT_POLL_SECONDS", "5")),
     "supply_seconds": int(os.environ.get("PRINT_SUPPLY_SECONDS", "300")),
     "watchdog_seconds": int(os.environ.get("PRINT_WATCHDOG_SECONDS", "120")),
@@ -321,6 +330,28 @@ TONER_RE = {
     "toner_yellow": re.compile(r"printer-toner-yellow-remaining\s*=\s*(\d+)"),
 }
 
+# The printer's own model string, read from the same Get-Printer-Attributes
+# response the toner levels come from.
+#
+# There are two Brother printers on this network (HL-L3240CDW and DCP-T430W),
+# so a brand name identifies neither. The queue is named "Brother" and the
+# configured URI was ipp://Brother.local/... which does not resolve at all, so
+# neither the config nor the queue name can be trusted to say which device is
+# actually being polled.
+#
+# printer-name is the device telling us what it is, which is the only
+# unambiguous identity available, and it costs nothing to read because the
+# attribute is already in the response.
+# ipptool prints the value in single quotes ('Brother HL-L3240CDW series'), so
+# the quote characters are excluded from the capture rather than stripped
+# afterwards - stripping only double quotes left stray ' on the stored value.
+PRINTER_NAME_RE = re.compile(r"printer-name\s*=\s*['\"]?([^'\"]+?)['\"]?\s*$", re.MULTILINE)
+
+
+def reported_model(text):
+    m = PRINTER_NAME_RE.search(text or "")
+    return m.group(1).strip() if m else None
+
 
 def read_supplies():
     """Ask the printer what it actually has. Returns (levels, online, why).
@@ -331,7 +362,7 @@ def read_supplies():
     nothing said why.
     """
     if not shutil_which("ipptool"):
-        return None, True, "ipptool not installed (apt install cups-ipp-utils)"
+        return None, True, "ipptool not installed (apt install cups-ipp-utils)", None
 
     try:
         proc = subprocess.run(
@@ -339,7 +370,7 @@ def read_supplies():
             capture_output=True, text=True, timeout=45,
         )
     except Exception as e:
-        return None, False, "ipptool could not run: %s" % e
+        return None, False, "ipptool could not run: %s" % e, None
 
     if proc.returncode != 0:
         detail = (proc.stderr or proc.stdout or "").strip().splitlines()
@@ -349,7 +380,7 @@ def read_supplies():
         # subnet, or the queue still points at the address it had before it was
         # moved, and the URI is the only thing that distinguishes them.
         return None, False, "cannot reach %s - %s" % (
-            CONFIG["printer_uri"], line)
+            CONFIG["printer_uri"], line), None
 
     text = proc.stdout
     levels = {}
@@ -362,8 +393,8 @@ def read_supplies():
         # Reachable but the driver gave us nothing usable -- report unknown
         # rather than a confident-looking 0%, which would page staff for "out
         # of toner" when the printer is actually fine.
-        return None, False, "reachable, but no toner attributes in the response"
-    return levels, True, ""
+        return None, False, "reachable, but no toner attributes in the response", None
+    return levels, True, "", reported_model(text)
 
 
 def shutil_which(name):
@@ -514,7 +545,23 @@ def main():
 
         if now - last_supply >= CONFIG["supply_seconds"]:
             try:
-                levels, online, why = read_supplies()
+                levels, online, why, model = read_supplies()
+
+                # Guard against reporting the wrong device. There are two
+                # Brother printers on this network, so if the printer we
+                # reached is not the expected model, say so loudly instead of
+                # filing its toner levels and paper against the shop's HL.
+                expected = CONFIG.get("expected_model") or ""
+                if model and expected and expected.lower() not in model.lower():
+                    why = ('polled "%s" but EXPECTED_MODEL is %s - wrong printer'
+                           % (model, expected))
+                    levels, online = None, False
+
+                payload = {
+                    "printer_name": CONFIG["printer"],
+                    "printer_uri": CONFIG["printer_uri"],
+                    "printer_model": model,
+                }
 
                 # Also report CUPS' own view of the printer. printer_alert()
                 # used to be consulted only at submit time and after an abort,
@@ -528,22 +575,20 @@ def main():
                     log("printer_alert failed: %s" % e)
 
                 if levels:
-                    api_post("report-supplies", {
-                        "levels": levels, "online": online, "printer_name": CONFIG["printer"],
-                        "alert": alert,
-                    })
-                    log("supplies: %s (online=%s)%s" % (
-                        levels, online, (" alert=%s" % alert) if alert else ""))
+                    api_post("report-supplies", dict(payload, **{
+                        "levels": levels, "online": online, "alert": alert,
+                    }))
+                    log("supplies: %s (online=%s, model=%s)%s" % (
+                        levels, online, model,
+                        (" alert=%s" % alert) if alert else ""))
                 else:
                     # Report the failure too. Otherwise the last-known levels sit
                     # in admin forever looking like live readings, which is how a
                     # 49-hour-old hand-entered value ended up being presented as
                     # if the printer had reported it.
-                    api_post("report-supplies", {
-                        "levels": {}, "online": False,
-                        "printer_name": CONFIG["printer"], "error": why,
-                        "alert": alert,
-                    })
+                    api_post("report-supplies", dict(payload, **{
+                        "levels": {}, "online": False, "error": why, "alert": alert,
+                    }))
                     log("supplies unavailable (%s) via %s%s" % (
                         why, CONFIG["printer_uri"], (" alert=%s" % alert) if alert else ""))
             except Exception as e:

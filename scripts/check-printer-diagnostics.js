@@ -53,7 +53,9 @@ ok(!/'Status unknown - printer not reporting'/.test(walkin),
 ok(/Cannot reach printer/.test(walkin), 'kiosk says the printer cannot be reached');
 ok(/data\.printer_error/.test(admin), 'admin reads the reason');
 ok(/function updatePrinterDiag/.test(admin), 'admin renders a diagnostics note');
-ok(/polling queue/.test(admin), 'admin shows which queue is being polled');
+// Identity moved to its own persistent line, because the queue name alone cannot
+// identify which Brother is installed.
+ok(/printerIdentity/.test(admin), 'admin shows which printer is installed');
 
 // --- the reason must identify WHICH address failed -------------------------
 ok(/cannot reach %s/.test(worker) && /CONFIG\["printer_uri"\]/.test(worker),
@@ -61,9 +63,12 @@ ok(/cannot reach %s/.test(worker) && /CONFIG\["printer_uri"\]/.test(worker),
 ok(/printer_target:\s*String\(body\.printer_name/.test(backend),
   'the polled queue name is recorded');
 
-// --- never overwrite a known target with an empty one ----------------------
-ok(/if \(!row\.printer_target\) delete row\.printer_target/.test(backend),
-  'an empty printer_name cannot blank out a known target');
+// --- never overwrite a known identity with an empty one -------------------
+// A poll that fails early (ipptool missing) sends no printer_name; blanking the
+// column would erase the last thing we knew about which machine is installed.
+ok(/for \(const f of \['printer_target', 'printer_model', 'printer_uri'\]\)/.test(backend)
+   && /if \(!row\[f\]\) delete row\[f\]/.test(backend),
+  'empty identity fields are dropped rather than blanking what we already know');
 
 if (failed) process.exit(1);
 console.log('  ok      an unreadable printer can explain itself');

@@ -282,13 +282,22 @@ async function reportSupplies(event) {
     // Where the worker is pointed, so "unreachable" can be told apart from
     // "pointing at the wrong address" after a move.
     printer_target: String(body.printer_name || '').slice(0, 80),
+    // Which device answered. There are two Brother printers on this network, so
+    // a brand name identifies neither; this is the model string the printer
+    // itself reports over IPP.
+    printer_model: String(body.printer_model || '').slice(0, 80),
+    printer_uri: String(body.printer_uri || '').slice(0, 200),
     // Recorded even when the read failed, so "checked recently but
     // unreachable" is distinguishable from "never checked".
     last_checked: new Date().toISOString()
   };
 
-  // Never overwrite a known target with an empty one.
-  if (!row.printer_target) delete row.printer_target;
+  // Never overwrite a known identity with an empty one. A poll that failed early
+  // (ipptool missing, say) sends no model, and blanking the column would erase
+  // the last thing we actually knew about which machine is installed.
+  for (const f of ['printer_target', 'printer_model', 'printer_uri']) {
+    if (!row[f]) delete row[f];
+  }
 
   // There is no standard IPP attribute for "how much paper is left in the
   // tray" -- most drivers only report which trays are loaded. So paper_level is
@@ -554,6 +563,8 @@ async function getPrinterStatus() {
     // something actionable rather than being the final word.
     printer_error: row.printer_error || null,
     printer_target: row.printer_target || null,
+    printer_model: row.printer_model || null,
+    printer_uri: row.printer_uri || null,
     can_print: canPrint,
     blocked_reason: blockedReason,
     warn: warn,
