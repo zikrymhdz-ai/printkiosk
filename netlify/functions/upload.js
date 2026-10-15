@@ -308,6 +308,10 @@ async function handleUpload(event) {
     pages = Math.max(1, parseInt(fields.pages) || 1);
     brightness = parseInt(fields.brightness) || 0;
     contrast = parseInt(fields.contrast) || 0;
+    // How many pages of a combined job the customer wanted in colour.
+    let colorPages = parseInt(fields.color_pages);
+    if (!Number.isFinite(colorPages)) colorPages = null;
+    if (colorPages !== null && (colorPages < 0 || colorPages > pages)) colorPages = null;
     cropMode = fields.crop_mode || 'none';
     finish = fields.finish || 'none';
     printPin = requestedPin(fields.print_pin);
@@ -329,7 +333,7 @@ async function handleUpload(event) {
 
     const pageSpec = String(fields.page_spec || '').trim() || 'all';
     const selectionMode = pageSpec === 'all' ? 'all' : 'custom';
-    const basePrice = calculatePrice(pages, colorMode, paperSize, sides, copies);
+    const basePrice = calculatePrice(pages, colorMode, paperSize, sides, copies, colorPages);
     const pricing = await assignUniqueMatchAmount(basePrice);
 
     const jobData = {
@@ -422,6 +426,10 @@ if (!fileUrl || !fileName) return err('file_url and file_name required');
     pages = Math.max(1, parseInt(body.pages) || 1);
     brightness = parseInt(body.brightness) || 0;
     contrast = parseInt(body.contrast) || 0;
+    // How many pages of a combined job the customer wanted in colour.
+    let colorPages = parseInt(body.color_pages);
+    if (!Number.isFinite(colorPages)) colorPages = null;
+    if (colorPages !== null && (colorPages < 0 || colorPages > pages)) colorPages = null;
     cropMode = body.crop_mode || 'none';
     finish = body.finish || 'none';
     printPin = requestedPin(body.print_pin);
@@ -431,7 +439,7 @@ if (!fileUrl || !fileName) return err('file_url and file_name required');
 
     const pageSpec = String(body.page_spec || '').trim() || 'all';
     const selectionMode = pageSpec === 'all' ? 'all' : 'custom';
-    const basePrice = calculatePrice(pages, colorMode, paperSize, sides, copies);
+    const basePrice = calculatePrice(pages, colorMode, paperSize, sides, copies, colorPages);
     const pricing = await assignUniqueMatchAmount(basePrice);
 
     const jobData = {

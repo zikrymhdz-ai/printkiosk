@@ -218,16 +218,29 @@ function get(url) {
     ok(merged[0].settings.brightness === 0 && merged[0].settings.contrast === 0,
       'the combined document carries no adjustment, because nothing can apply one to it');
 
-    // Two plain photos combine into ONE job, like two PDFs do.
+    // Colour photos need no baking at all, so they combine into ONE job here.
     const twoPlain = [
-      Object.assign(item('p1.png'), { file: await pngOf('p1.png') }),
-      Object.assign(item('p2.png'), { file: await pngOf('p2.png') }),
+      Object.assign(item('p1.png'), { file: await pngOf('p1.png'), settings: { color: 'color' } }),
+      Object.assign(item('p2.png'), { file: await pngOf('p2.png'), settings: { color: 'color' } }),
     ];
     const joined = await PK.combineByType(twoPlain);
-    ok(joined.length === 1, 'two photos become one job, got ' + joined.length);
+    ok(joined.length === 1, 'two colour photos become one job, got ' + joined.length);
     ok(joined[0].pdfPages === 2, 'the combined photos have 2 pages, got ' + joined[0].pdfPages);
     ok(joined[0].settings.brightness === 0 && joined[0].settings.contrast === 0,
       'the combined job carries no adjustment, because none was set');
+
+    // A black-and-white photo has to be converted before merging, and there is
+    // no canvas under Node. It must NOT be merged anyway, or the greyscale
+    // conversion would be silently skipped.
+    const twoBw = [
+      Object.assign(item('p1.png'), { file: await pngOf('p1.png'), settings: { color: 'bw' } }),
+      Object.assign(item('p2.png'), { file: await pngOf('p2.png'), settings: { color: 'bw' } }),
+    ];
+    const keptBw = await PK.combineByType(twoBw);
+    ok(keptBw.length === 2,
+      'black-and-white photos stay separate when they cannot be converted here, got ' + keptBw.length);
+    ok(keptBw.every(i => PK.isImage(i.file.name)),
+      'and they are still uploaded as images, so the worker prints them black and white');
 
     // Photos WITH adjustments still merge when the pixels can be baked in.
     // There is no canvas under Node, so this exercises the safe path instead:

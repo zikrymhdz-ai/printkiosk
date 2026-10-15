@@ -312,7 +312,7 @@ window.PKPageRange = (function () {
    * mid grey). Grayscale itself is left to the print option, exactly as it is
    * for a document, so colour handling stays consistent across both kinds.
    */
-  function adjustImageFile(file, brightness, contrast) {
+  function adjustImageFile(file, brightness, contrast, grayscale) {
     return new Promise(function (resolve, reject) {
       var url;
       try {
@@ -333,11 +333,17 @@ window.PKPageRange = (function () {
 
           var b = _clamp(brightness) / 100;
           var c = _clamp(contrast) / 100;
-          if (b || c) {
+          if (b || c || grayscale) {
             var data = ctx.getImageData(0, 0, canvas.width, canvas.height);
             var px = data.data;
             for (var i = 0; i < px.length; i += 4) {
               var r = px[i], g = px[i + 1], bl = px[i + 2];
+              if (grayscale) {
+                // Rec. 601 luma, the same weighting the preview's CSS
+                // grayscale filter uses.
+                var y = 0.2126 * r + 0.7152 * g + 0.0722 * bl;
+                r = g = bl = y;
+              }
               if (b) { r *= 1 + b; g *= 1 + b; bl *= 1 + b; }
               if (c) {
                 r = (r - 127.5) * (1 + c) + 127.5;
@@ -375,15 +381,21 @@ window.PKPageRange = (function () {
 
   /* Combine photos into ONE document.
    *
-   * Adjustments are baked in first (see adjustImageFile). If that is not
-   * possible - no canvas, or an adjustment is set - the photos are left as
-   * separate uploads instead, because the worker can still apply their
-   * adjustments itself, whereas a merged document could not.
+   * Each photo is rendered first with whatever the customer chose for it:
+   * brightness/contrast, and greyscale when it was set to black and white.
+   * Baking the greyscale in is what lets photos with DIFFERENT colour modes
+   * share one job - the combined PDF is printed as colour, and the pages the
+   * customer wanted in black and white are already black and white in the
+   * pixels. The price is then worked out per page, not per job.
+   *
+   * If that cannot be done - no canvas, or the read fails - the photos stay
+   * separate rather than being merged and losing what was chosen.
    */
   function combineImages(items) {
     var needsCanvas = items.some(function (it) {
       var s = it.settings || {};
-      return _clamp(s.brightness) !== 0 || _clamp(s.contrast) !== 0;
+      return _clamp(s.brightness) !== 0 || _clamp(s.contrast) !== 0
+        || (s.color || 'bw') !== 'color';
     });
     if (needsCanvas && !canAdjustPixels()) return Promise.resolve(null);
 
@@ -392,9 +404,10 @@ window.PKPageRange = (function () {
         var s = it.settings || {};
         var b = _clamp(s.brightness);
         var c = _clamp(s.contrast);
+        var gray = (s.color || 'bw') !== 'color';
         var src = (s.crop_mode === 'manual' && it.croppedFile) ? it.croppedFile : it.file;
-        if (!b && !c) { acc.push(src); return acc; }
-        return adjustImageFile(src, b, c).then(function (f) { acc.push(f); return acc; });
+        if (!b && !c && !gray) { acc.push(src); return acc; }
+        return adjustImageFile(src, b, c, gray).then(function (f) { acc.push(f); return acc; });
       });
     }, Promise.resolve([])).then(function (files) {
       return mergeIntoPdf(files);
@@ -416,19 +429,16 @@ window.PKPageRange = (function () {
    */
   /* Split a batch into groups that can safely be combined.
    *
-   * Combining is only correct when every member prices the SAME way, because
-   * one job carries one colour_mode column and calculatePrice() takes a single
-   * mode for all of its pages. With colour, sides and copies held equal:
+   * PHOTOS: grouped by sides and copies only. Photos may differ in colour,
+   * because a black-and-white one is baked into the pixels before merging, so
+   * one combined job can hold both - and the price is worked out per page.
+   * Sides and copies are per-job, not per-page, so those must still agree.
    *
-   *   sum of parts = (page1 + page2 + ...) x sidesMult x rate x copies
-   *   combined    = (total pages)    x sidesMult x rate x copies
+   * DOCUMENTS: grouped by colour, sides and copies. A PDF page cannot be made
+   * black and white without rasterising it, which would degrade the print, so
+   * documents that disagree on colour stay in separate jobs.
    *
-   * which are equal. So a group keyed on those three can be merged with no
-   * change to what the customer is charged. Anything that differs - one photo
-   * in colour and one in black and white - must stay a separate job, or it is
-   * charged at the colour rate and printed in colour.
-   *
-   * File type is part of the key too: a document and a photo are printed
+   * File type is part of the key: a document and a photo are printed
    * differently, and the page refuses that batch up front via mixedTypes().
    *
    * Returns [[items...], [items...], ...] in first-seen order.
@@ -438,9 +448,10 @@ window.PKPageRange = (function () {
     var byKey = {};
     (items || []).forEach(function (it) {
       var s = it.settings || {};
-      var kind = isImage(it.file.name) ? 'image' : 'document';
-      var key = kind + '|' + (s.color || 'bw') + '|' + (s.sides || 'single')
-        + '|' + (s.copies || 1);
+      var photo = isImage(it.file.name);
+      var key = photo
+        ? 'image|' + (s.sides || 'single') + '|' + (s.copies || 1)
+        : 'document|' + (s.color || 'bw') + '|' + (s.sides || 'single') + '|' + (s.copies || 1);
       if (!byKey[key]) {
         byKey[key] = [];
         groups.push(byKey[key]);
@@ -485,13 +496,23 @@ window.PKPageRange = (function () {
 
   /* Settings for a combined group.
    *
-   * Every member shares colour, sides and copies - that is what the grouping
-   * guarantees - so the first file's values are correct for all of them. The
-   * old behaviour, "colour if any part was colour", silently printed a
-   * black-and-white photo in colour AND charged the colour rate for it.
+   * Every member shares sides and copies - the grouping guarantees it. Colour
+   * may differ only for photos, whose black-and-white pages were already baked
+   * into the pixels, so the combined job is printed as colour whenever any page
+   * wanted colour, and colorPages records how many so the price can be worked
+   * out per page instead of charging the colour rate for all of them.
    */
   function mergedItem(members, merged) {
     var first = (members[0] && members[0].settings) || {};
+    var colorPages = 0;
+    members.forEach(function (it) {
+      var s = it.settings || {};
+      if ((s.color || 'bw') === 'color') colorPages += 1;
+    });
+    // Documents all share a colour by construction, so this is exact for them.
+    if (!isImage(members[0].file.name)) {
+      colorPages = (first.color || 'bw') === 'color' ? merged.pages : 0;
+    }
     return {
       file: merged.file,
       thumb: null,
@@ -499,14 +520,15 @@ window.PKPageRange = (function () {
       pdfPages: merged.pages,
       _mergedFrom: members.map(function (it) { return it.file.name; }),
       settings: {
-        color: first.color || 'bw',
+        color: colorPages > 0 ? 'color' : 'bw',
         copies: first.copies || 1,
         sides: first.sides || 'single',
         pages: merged.pages,
         page_spec: 'all',
         brightness: 0,
         contrast: 0,
-        crop_mode: 'none'
+        crop_mode: 'none',
+        color_pages: colorPages
       }
     };
   }
@@ -544,6 +566,7 @@ window.PKPageRange = (function () {
     prepareForMerge: prepareForMerge,
     combineByType: combineByType,
     combineGroups: combineGroups,
+    mergedItem: mergedItem,
     combineImages: combineImages,
     adjustImageFile: adjustImageFile,
     shareableSettings: shareableSettings,

@@ -140,13 +140,25 @@ const ok = (c, msg) => { console.log((c ? '  ok      ' : '  FAILED  ') + msg); i
     ok(g.length === 2, 'files differing in ' + label + ' are kept apart (groups: ' + g.length + ')');
   }
 
-  // Photos follow the same rule.
-  const photos = [
+  // Photos follow the same rule EXCEPT for colour: a black-and-white photo is
+  // baked into the pixels before merging, so photos differing only in colour do
+  // belong in one job. Sides and copies are per-job, so they still must match.
+  const photosMixedColour = [
     { file: png('c.png'), settings: settings({ color: 'color' }) },
     { file: png('w.png'), settings: settings({ color: 'bw' }) },
   ];
-  const pg = PK.combineGroups(photos);
-  ok(pg.length === 2, 'a colour photo and a B&W photo are kept apart');
+  ok(PK.combineGroups(photosMixedColour).length === 1,
+    'photos differing only in colour are grouped into one job');
+
+  for (const [label, a, b] of [['sides', { sides: 'double' }, { sides: 'single' }],
+    ['copies', { copies: 3 }, { copies: 1 }]]) {
+    const pair = [
+      { file: png('p1.png'), settings: settings(a) },
+      { file: png('p2.png'), settings: settings(b) },
+    ];
+    ok(PK.combineGroups(pair).length === 2,
+      'photos differing in ' + label + ' stay in separate jobs');
+  }
 
   // Unchanged: matching settings still merge, including several files.
   const alike = [];
@@ -156,6 +168,72 @@ const ok = (c, msg) => { console.log((c ? '  ok      ' : '  FAILED  ') + msg); i
   const mergedAlike = await PK.combineByType(alike);
   ok(mergedAlike.length === 1, 'five matching PDFs still become one job');
   ok(mergedAlike[0].pdfPages === 10, 'and it has 10 pages, got ' + mergedAlike[0].pdfPages);
+
+  // --- the requested behaviour: ONE job, mixed colour ----------------------
+  // Photos may differ in colour because the black-and-white ones are baked
+  // into the pixels first, so a single job can hold both and be priced per
+  // page. Node has no canvas, so combineImages declines and these stay separate
+  // here; the grouping rule is what is under test.
+  {
+    const mixedPhotos = [
+      { file: png('colour.png'), settings: settings({ color: 'color' }) },
+      { file: png('bw.png'), settings: settings({ color: 'bw' }) },
+    ];
+    // Grouping puts them together: colour is deliberately not part of the key.
+    const grouped = PK.combineGroups(mixedPhotos);
+    ok(grouped.length === 1,
+      'photos differing only in colour are grouped into ONE job (groups: ' + grouped.length + ')');
+
+    // The item that job would become, and what it must cost.
+    const merged = PK.mergedItem(mixedPhotos, { file: new File([new Uint8Array()], 'c.pdf'), pages: 2 });
+    ok(merged.settings.color_pages === 1,
+      'the job records 1 colour page of 2, got ' + merged.settings.color_pages);
+    ok(merged.settings.color === 'color',
+      'the job prints as colour, so the baked black-and-white page stays that way');
+
+    const price = calculatePrice(2, merged.settings.color, 'a4', merged.settings.sides, merged.settings.copies, merged.settings.color_pages);
+    const expected = 1 * 1.10 + 1 * 0.20;
+    ok(Math.abs(price - expected) < 0.005,
+      'it is charged 1 colour + 1 black-and-white page (RM' + price.toFixed(2) + ', expected RM' + expected.toFixed(2) + ')');
+
+    const naive = calculatePrice(2, 'color', 'a4', 'single', 1);
+    ok(price < naive,
+      'which is less than charging both pages at the colour rate (RM' + naive.toFixed(2) + ')');
+
+    // All-colour and all-bw stay exact.
+    const allColour = PK.mergedItem(
+      [{ file: png('a.png'), settings: settings({ color: 'color' }) },
+       { file: png('b.png'), settings: settings({ color: 'color' }) }],
+      { file: new File([new Uint8Array()], 'c.pdf'), pages: 2 });
+    ok(allColour.settings.color_pages === 2, 'two colour pages are recorded as 2');
+    ok(Math.abs(calculatePrice(2, 'color', 'a4', 'single', 1, 2) - 2.20) < 0.005,
+      'two colour pages cost 2 x RM1.10');
+
+    const allBw = PK.mergedItem(
+      [{ file: png('a.png'), settings: settings({ color: 'bw' }) },
+       { file: png('b.png'), settings: settings({ color: 'bw' }) }],
+      { file: new File([new Uint8Array()], 'c.pdf'), pages: 2 });
+    ok(allBw.settings.color_pages === 0, 'two black-and-white pages record 0 colour');
+    ok(Math.abs(calculatePrice(2, 'bw', 'a4', 'single', 1, 0) - 0.40) < 0.005,
+      'two black-and-white pages cost 2 x RM0.20');
+  }
+
+  // --- the server must not trust a nonsense split --------------------------
+  {
+    ok(Math.abs(calculatePrice(5, 'color', 'a4', 'single', 1, 99) - 5.50) < 0.005,
+      'a colour_pages larger than the page count falls back to all colour');
+    ok(Math.abs(calculatePrice(5, 'bw', 'a4', 'single', 1, -3) - 1.00) < 0.005,
+      'a negative colour_pages cannot make pages free');
+    ok(Math.abs(calculatePrice(3, 'bw', 'a4', 'single', 1, undefined) - 0.60) < 0.005,
+      'no split at all behaves exactly as before');
+    ok(Math.abs(calculatePrice(3, 'color', 'a4', 'single', 1, null) - 3.30) < 0.005,
+      'a null split behaves exactly as before');
+    // The split still respects sides and copies.
+    ok(Math.abs(calculatePrice(2, 'color', 'a4', 'double', 1, 1) - (1.10 + 0.20) * 0.7) < 0.005,
+      'the split is combined with double-sided, not applied to the flat total');
+    ok(Math.abs(calculatePrice(2, 'color', 'a4', 'single', 2, 1) - (1.10 + 0.20) * 2) < 0.005,
+      'the split is combined with copies, not applied to the flat total');
+  }
 
   if (failed) { console.log('  -> ' + failed + ' failed'); process.exit(1); }
   console.log('  ok      combining never changes what the customer is charged');

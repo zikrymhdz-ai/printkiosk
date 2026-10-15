@@ -16,11 +16,11 @@
 <link rel="stylesheet" href="../styles.css">
 <link href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.css" rel="stylesheet">
 <script src="../frontend_config.js"></script>
-<script src="pstore.js?v=2026.10.14-89"></script>
+<script src="pstore.js?v=2026.10.14-90"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script>pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
 <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
-<script src="pagerange.js?v=2026.10.14-89"></script>
+<script src="pagerange.js?v=2026.10.14-90"></script>
 <script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/dist/face-api.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.js"></script>
 <style>
@@ -1162,7 +1162,19 @@ function updateSummary() {
     var filePrice = s.color === 'color' ? 1.10 : 0.20;
     // Mirrors calculatePrice() in netlify/functions/_shared.js exactly.
     var sidesMult = s.sides === 'double' ? 0.7 : 1.0;
-    totalPrice += s.pages * s.copies * filePrice * sidesMult;
+    // A merged batch can mix colour and black-and-white pages, so charge each
+    // page its own rate - the same way the server does. Using the job's single
+    // colour_mode here would quote a different amount than the customer is
+    // charged, which is how a payment ends up not matching.
+    var pagesTotal = s.pages;
+    var fileTotal;
+    if (s.color_pages === undefined || s.color_pages === null) {
+      fileTotal = pagesTotal * filePrice;
+    } else {
+      var colourPages = Math.max(0, Math.min(pagesTotal, s.color_pages | 0));
+      fileTotal = colourPages * 1.10 + (pagesTotal - colourPages) * 0.20;
+    }
+    totalPrice += fileTotal * s.copies * sidesMult;
   });
   currentPrice = Math.round(totalPrice * 100) / 100;
 
@@ -1584,6 +1596,11 @@ job_id: signD.job_id,
     // Groups this file with the rest of the batch.
     order_id: orderId || '',
         color_mode: s.color || 'bw',
+        // A merged batch can hold colour and black-and-white pages together.
+        // Sending the split lets the server charge each page its own rate
+        // instead of billing a black-and-white photo at the colour price.
+        color_pages: (s.color_pages === undefined || s.color_pages === null)
+          ? undefined : s.color_pages,
         paper_size: 'a4',
         sides: s.sides || 'single',
         copies: s.copies || 1,

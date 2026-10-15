@@ -29,7 +29,7 @@ const PRICE_DOUBLE_SIDED_MULTIPLIER = 0.7;
 // Bumped whenever the kiosk front-end changes. The kiosk compares this against
 // the version it was loaded with and reloads itself, so an unattended screen
 // never keeps running a stale copy of walkin.html.
-const APP_VERSION = '2026.10.14-89';
+const APP_VERSION = '2026.10.14-90';
 
 const ALLOWED_EXTENSIONS = ['pdf', 'doc', 'docx', 'jpg', 'jpeg', 'png'];
 
@@ -288,13 +288,34 @@ async function validateSession(event) {
   return session;
 }
 
-function calculatePrice(pages, colorMode, paperSize, sides, copies) {
-  const pagePrice = colorMode === 'color' ? PRICE_COLOR_PER_PAGE : PRICE_BW_PER_PAGE;
+function calculatePrice(pages, colorMode, paperSize, sides, copies, colorPages) {
   const sizeMultiplier = paperSize === 'a3' ? PRICE_A3_MULTIPLIER : 1.0;
   const sidesMultiplier = sides === 'double' ? PRICE_DOUBLE_SIDED_MULTIPLIER : 1.0;
-  const effectivePages = pages * sidesMultiplier;
-  const pricePerCopy = effectivePages * pagePrice * sizeMultiplier;
-  const total = pricePerCopy * copies;
+  const n = Math.max(0, parseInt(pages, 10) || 0);
+
+  // A combined job can hold photos the customer wanted in colour AND photos
+  // they wanted in black and white: the black-and-white pages were converted
+  // before the files were combined, so one job is genuinely mixed. Charging
+  // the colour rate for every page billed the black-and-white photos at
+  // RM1.10 instead of RM0.20, so the per-page split is priced instead.
+  //
+  // Computed here, on the server, from a page COUNT - never a price sent by the
+  // browser. colorPages is only honoured when it is a real subset of the pages.
+  let base = 0;
+  if (colorPages !== undefined && colorPages !== null && colorPages !== '') {
+    const c = Math.max(0, parseInt(colorPages, 10) || 0);
+    if (c <= n) {
+      base = c * PRICE_COLOR_PER_PAGE + (n - c) * PRICE_BW_PER_PAGE;
+    } else {
+      base = n * PRICE_COLOR_PER_PAGE;
+    }
+  } else {
+    const pagePrice = colorMode === 'color' ? PRICE_COLOR_PER_PAGE : PRICE_BW_PER_PAGE;
+    base = n * pagePrice;
+  }
+
+  const effectivePages = base * sidesMultiplier;
+  const total = effectivePages * sizeMultiplier * (Math.max(1, parseInt(copies, 10) || 1));
   return Math.round(total * 100) / 100;
 }
 
