@@ -186,5 +186,23 @@ ok(worker.includes('[^\\n]*?=\\s*\\S'),
 ok(!worker.includes('^\\s*\\[\\d+\\]'),
   'detection no longer requires an [n] index prefix');
 
+// --- a guest is walked straight through, and cannot add a second file -----
+ok(/function applyGuestFileLimit\(\)/.test(guestPage), 'guest file limit is applied');
+ok(/input\.removeAttribute\('multiple'\)/.test(guestPage),
+  "a guest's picker drops `multiple`, so the OS chooser offers one file");
+ok(/one file/i.test(guestPage), 'the hint tells a guest it is one file');
+ok(/if \(added && uploadPageIsGuest\(\)\)/.test(guestPage),
+  'choosing their file advances a guest to step 2 automatically');
+ok(/goStep2\(\);[\s\S]{0,80}\}, 350\)/.test(guestPage),
+  'the automatic advance happens after the thumbnail renders');
+ok(guestPage.includes('id="continueStep1"') && /btn\.style\.display = 'none'/.test(guestPage),
+  "a guest's Continue button is hidden");
+ok(guestPage.includes('id="backToStep1"') && /back\.style\.display = 'none'/.test(guestPage),
+  'a guest cannot go back to file selection');
+// Members must be untouched by all of this.
+ok(/applyGuestFileLimit\(\);\s*\n\}/.test(guestPage), 'the limit is applied after session restore');
+ok(/if \(!uploadPageIsGuest\(\)\) return;/.test(guestPage),
+  'every guest-only change is skipped for a signed-in customer');
+
 if (failed) { console.log('  -> ' + failed + ' failed'); process.exit(1); }
 console.log('  ok      orders settle as one payment and earn a coin per file');

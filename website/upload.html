@@ -88,7 +88,7 @@
       </div>
       <input type="file" id="phoneFile" accept=".pdf,.doc,.docx,.jpg,.jpeg,.png" multiple style="display:none">
       <div id="phoneFileList" style="margin-top:12px; display:flex; flex-direction:column; gap:8px;"></div>
-      <button class="btn btn-primary btn-block btn-lg" style="margin-top:16px;" onclick="goStep2()" id="step1Btn" disabled>Next -- Settings</button>
+      <button class="btn btn-primary btn-block btn-lg" style="margin-top:16px;" onclick="goStep2()" id="continueStep1" id="step1Btn" disabled>Next -- Settings</button>
     </div>
 
     <!-- Step 2: Settings -->
@@ -194,7 +194,7 @@
       </div>
 
       <div style="display:flex; gap:8px; margin-top:16px;">
-        <button class="btn btn-secondary" style="flex:1;" onclick="goStep1()">Back</button>
+        <button class="btn btn-secondary" style="flex:1;" onclick="goStep1()" id="backToStep1">Back</button>
         <button class="btn btn-primary" style="flex:1;" onclick="submitPhoneUpload()">Upload & Pay</button>
       </div>
     </div>
@@ -280,20 +280,53 @@ PKS.init().then(function() {
     qToken = params.get('session');
     PKS.set('session_token', qToken);
   }
-  var badgeEl = document.getElementById('qModeBadge');
-  if (badgeEl) {
-    if (qGuest) {
-      badgeEl.textContent = 'Guest mode - no reward coins';
-      badgeEl.className = 'badge badge-gray';
-    } else if (qToken) {
-      badgeEl.textContent = 'Signed in - you will earn reward coins';
-      badgeEl.className = 'badge badge-success';
-    } else {
-      badgeEl.textContent = 'Not signed in - no reward coins';
-      badgeEl.className = 'badge badge-gray';
-    }
-  }
+var badgeEl = document.getElementById('qModeBadge');
+if (badgeEl) {
+if (qGuest) {
+badgeEl.textContent = 'Guest mode - no reward coins';
+badgeEl.className = 'badge badge-gray';
+} else if (qToken) {
+badgeEl.textContent = 'Signed in - you will earn reward coins';
+badgeEl.className = 'badge badge-success';
+} else {
+badgeEl.textContent = 'Not signed in - no reward coins';
+badgeEl.className = 'badge badge-gray';
+}
+}
+
+applyGuestFileLimit();
 });
+
+// A guest is one file, one order, one payment. Offering a multi-select picker
+// and a Continue button that lets them go back and add more only invites an
+// upload the server will refuse: a guest's second file would be silently a
+// separate order with its own PIN and its own amount, which is not what they
+// meant by sending two documents.
+//
+// So for a guest the picker drops `multiple` - the OS chooser will only offer
+// one file - the hint says so, and the flow advances on its own once a file is
+// chosen. Members are unaffected and keep the full multi-file experience.
+function applyGuestFileLimit() {
+if (!uploadPageIsGuest()) return;
+
+var input = document.getElementById('phoneFile');
+if (input) input.removeAttribute('multiple');
+
+var hint = document.querySelector('#uploadZoneDrop .upload-zone-hint')
+|| document.querySelector('.upload-zone-hint');
+if (hint) {
+hint.textContent = 'PDF, DOC, DOCX, JPG, PNG - 20MB max - one file. '
++ 'Sign in to send several files together.';
+}
+
+var btn = document.getElementById('continueStep1');
+if (btn) btn.style.display = 'none';
+
+// No way back to file selection: a guest has already chosen their one file and
+// the picker there offers nothing they are allowed to use.
+var back = document.getElementById('backToStep1');
+if (back) back.style.display = 'none';
+}
 
 function getSelectedItem() {
   return bulkFiles[selectedFileIndex] || null;
@@ -355,9 +388,19 @@ function addFiles(files) {
     bulkFiles.push({ file: file, thumb: null, croppedFile: null, pdfPages: 0, settings: { color: 'bw', copies: 1, pages: 1, page_spec: 'all', brightness: 0, contrast: 0, crop_mode: 'none' } });
     added++;
   });
-  if (errs) alert('Some files were skipped:\n' + errs);
-  if (added) generateThumbnails();
-  renderFileList();
+if (errs) alert('Some files were skipped:\n' + errs);
+if (added) generateThumbnails();
+renderFileList();
+
+// A guest has exactly one file, so there is nothing to add and nothing to
+// choose: move them straight on to step 2 instead of making them press
+// Continue on a page that only ever holds one file.
+if (added && uploadPageIsGuest()) {
+setTimeout(function() {
+if (bulkFiles.length && !document.getElementById('step1').classList.contains('active')) return;
+goStep2();
+}, 350);
+}
 }
 
 function generateThumbnails() {
