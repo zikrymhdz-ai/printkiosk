@@ -16,11 +16,11 @@
 <link rel="stylesheet" href="../styles.css">
 <link href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.css" rel="stylesheet">
 <script src="../frontend_config.js"></script>
-<script src="pstore.js?v=2026.10.14-86"></script>
+<script src="pstore.js?v=2026.10.14-87"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script>pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
 <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
-<script src="pagerange.js?v=2026.10.14-86"></script>
+<script src="pagerange.js?v=2026.10.14-87"></script>
 <script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/dist/face-api.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.js"></script>
 <style>
@@ -1528,7 +1528,7 @@ async function placeOrder() {
   btn.textContent = 'Uploading...';
 
   // Rebuilding a selected page range can take a moment, so show the loader early.
-  showUploadOverlay(true, { sub: 'Preparing your file&hellip;', progress: 5 });
+  showUploadOverlay(true, { sub: 'Preparing your file...', progress: 5 });
 
   saveCurrentSettings();
   pendingUploadJobs = [];
@@ -1637,9 +1637,9 @@ job_id: signD.job_id,
       }
       btn.disabled = true;
       showUploadOverlay(true, {
-        sub: 'Preparing ' + bulkFiles.length + ' files\u2026',
+        sub: 'Preparing ' + bulkFiles.length + ' files...',
         progress: 5,
-        note: 'PDFs are combined; each photo keeps its own settings.'
+        note: 'Files of the same type are combined into one document.'
       });
       try {
         bulkFiles = await PKPageRange.combineByType(bulkFiles);
@@ -1657,9 +1657,9 @@ job_id: signD.job_id,
       var isLast = (i === bulkFiles.length - 1);
       btn.textContent = 'Uploading file ' + (i + 1) + ' of ' + bulkFiles.length + '...';
       showUploadOverlay(true, {
-        sub: (bulkFiles.length > 1 ? 'Uploading file ' + (i + 1) + ' of ' + bulkFiles.length + '&hellip;' : 'Sending your document to the shop&hellip;'),
+        sub: (bulkFiles.length > 1 ? 'Uploading file ' + (i + 1) + ' of ' + bulkFiles.length + '...' : 'Sending your document to the shop...'),
         progress: Math.round((i / bulkFiles.length) * 100),
-        note: isLast ? 'Almost done&hellip;' : 'Keep this page open.'
+        note: isLast ? 'Almost done...' : 'Keep this page open.'
       });
       const item = bulkFiles[i];
       const s = item.settings;
@@ -1735,7 +1735,7 @@ var d;
     return;
   }
 
-  showUploadOverlay(true, { sub: 'Finalising your order&hellip;', progress: 100, note: 'Almost done&hellip;' });
+  showUploadOverlay(true, { sub: 'Finalising your order...', progress: 100, note: 'Almost done...' });
   if (!pendingUploadJobs.length) { showUploadOverlay(false); alert('No files uploaded successfully'); btn.disabled = false; btn.textContent = 'Upload & Get PIN'; return; }
 
   // Ask the server what the whole order costs. The browser's own sum is not
@@ -2469,7 +2469,7 @@ function previewProfilePic(e) {
 
 function autosaveProfilePic(dataUrl) {
   var hint = document.getElementById('profilePicHint');
-  if (hint) { hint.textContent = 'Saving picture&hellip;'; hint.style.display = 'block'; }
+  if (hint) { hint.textContent = 'Saving picture...'; hint.style.display = 'block'; }
   fetch(API('auth', 'update-profile'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Session-Token': token },

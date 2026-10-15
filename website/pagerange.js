@@ -296,17 +296,117 @@ window.PKPageRange = (function () {
     }, Promise.resolve([]));
   }
 
+  function canAdjustPixels() {
+    return typeof document !== 'undefined'
+      && typeof document.createElement === 'function'
+      && typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function';
+  }
+
+  /* Bake brightness/contrast into an image, in the browser.
+   *
+   * The print worker applies these only when the file it downloads is still an
+   * image. Combining photos into one PDF would therefore silently discard the
+   * customer's adjustments, so they are applied here first - using the same
+   * formulas, and the same order, as the preview and the worker:
+   * grayscale, then brightness (a plain multiply), then contrast (linear about
+   * mid grey). Grayscale itself is left to the print option, exactly as it is
+   * for a document, so colour handling stays consistent across both kinds.
+   */
+  function adjustImageFile(file, brightness, contrast) {
+    return new Promise(function (resolve, reject) {
+      var url;
+      try {
+        url = URL.createObjectURL(file);
+      } catch (e) {
+        reject(new Error('Could not read ' + (file.name || 'image')));
+        return;
+      }
+      var img = new Image();
+      img.onload = function () {
+        URL.revokeObjectURL(url);
+        try {
+          var canvas = document.createElement('canvas');
+          canvas.width = img.naturalWidth || img.width;
+          canvas.height = img.naturalHeight || img.height;
+          var ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0);
+
+          var b = _clamp(brightness) / 100;
+          var c = _clamp(contrast) / 100;
+          if (b || c) {
+            var data = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            var px = data.data;
+            for (var i = 0; i < px.length; i += 4) {
+              var r = px[i], g = px[i + 1], bl = px[i + 2];
+              if (b) { r *= 1 + b; g *= 1 + b; bl *= 1 + b; }
+              if (c) {
+                r = (r - 127.5) * (1 + c) + 127.5;
+                g = (g - 127.5) * (1 + c) + 127.5;
+                bl = (bl - 127.5) * (1 + c) + 127.5;
+              }
+              px[i] = r < 0 ? 0 : (r > 255 ? 255 : r);
+              px[i + 1] = g < 0 ? 0 : (g > 255 ? 255 : g);
+              px[i + 2] = bl < 0 ? 0 : (bl > 255 ? 255 : bl);
+            }
+            ctx.putImageData(data, 0, 0);
+          }
+
+          canvas.toBlob(function (blob) {
+            if (!blob) { reject(new Error('Could not adjust ' + (file.name || 'image'))); return; }
+            resolve(new File([blob], file.name, { type: 'image/png' }));
+          }, 'image/png');
+        } catch (e) {
+          reject(e);
+        }
+      };
+      img.onerror = function () {
+        URL.revokeObjectURL(url);
+        reject(new Error('Could not read ' + (file.name || 'image')));
+      };
+      img.src = url;
+    });
+  }
+
+  function _clamp(v) {
+    var n = parseInt(v, 10);
+    if (isNaN(n)) return 0;
+    return Math.max(-100, Math.min(100, n));
+  }
+
+  /* Combine photos into ONE document.
+   *
+   * Adjustments are baked in first (see adjustImageFile). If that is not
+   * possible - no canvas, or an adjustment is set - the photos are left as
+   * separate uploads instead, because the worker can still apply their
+   * adjustments itself, whereas a merged document could not.
+   */
+  function combineImages(items) {
+    var needsCanvas = items.some(function (it) {
+      var s = it.settings || {};
+      return _clamp(s.brightness) !== 0 || _clamp(s.contrast) !== 0;
+    });
+    if (needsCanvas && !canAdjustPixels()) return Promise.resolve(null);
+
+    return items.reduce(function (chain, it) {
+      return chain.then(function (acc) {
+        var s = it.settings || {};
+        var b = _clamp(s.brightness);
+        var c = _clamp(s.contrast);
+        var src = (s.crop_mode === 'manual' && it.croppedFile) ? it.croppedFile : it.file;
+        if (!b && !c) { acc.push(src); return acc; }
+        return adjustImageFile(src, b, c).then(function (f) { acc.push(f); return acc; });
+      });
+    }, Promise.resolve([])).then(function (files) {
+      return mergeIntoPdf(files);
+    });
+  }
+
   /* Combine a batch BY TYPE, keeping the two kinds apart.
    *
-   * PDFs are paged documents, so several of them genuinely are one document
-   * and are merged - after each file's own page selection has been applied.
-   *
-   * Images are NOT merged. Brightness and contrast are applied by the print
-   * worker, and only when the file it downloads is still an image; merging
-   * photos into one PDF would silently drop the adjustments the customer set.
-   * Keeping them separate also means each photo keeps its OWN settings, which
-   * is what "independent settings" means - two photos with different
-   * adjustments cannot share one combined document.
+   * Within a type the files genuinely are one document, so they are merged:
+   * several PDFs become one paged document, several photos become one sheet
+   * sequence. A document and a photo are never combined - the page is expected
+   * to refuse that up front with mixedTypes().
    *
    * A DOC/DOCX has no client-side renderer, so a document group is only merged
    * when every member is a PDF. Anything else is left as its own job rather
@@ -321,40 +421,65 @@ window.PKPageRange = (function () {
       (isImage(it.file.name) ? images : docs).push(it);
     });
 
-    if (!docs.length) return Promise.resolve(images);
+    var work = Promise.resolve([]);
 
-    var allPdf = docs.every(function (it) { return extOf(it.file.name) === 'pdf'; });
-    if (docs.length < 2 || !allPdf) {
-      return Promise.resolve(docs.concat(images));
+    if (images.length > 1) {
+      work = work.then(function () {
+        return combineImages(images).then(function (merged) {
+          if (!merged) return images; // could not bake adjustments: keep separate
+          return [mergedItem(images, merged)];
+        });
+      });
+    } else {
+      work = work.then(function () { return images; });
     }
 
-    return prepareForMerge(docs).then(function (files) {
-      return mergeIntoPdf(files).then(function (merged) {
-        var anyColor = docs.some(function (it) {
-          return it.settings && it.settings.color === 'color';
+    if (docs.length > 1) {
+      var allPdf = docs.every(function (it) { return extOf(it.file.name) === 'pdf'; });
+      if (allPdf) {
+        work = work.then(function (acc) {
+          return prepareForMerge(docs).then(function (files) {
+            return mergeIntoPdf(files).then(function (merged) {
+              return acc.concat([mergedItem(docs, merged)]);
+            });
+          });
         });
-        var first = (docs[0] && docs[0].settings) || {};
-        return [{
-          file: merged.file,
-          thumb: null,
-          croppedFile: null,
-          pdfPages: merged.pages,
-          _mergedFrom: docs.map(function (it) { return it.file.name; }),
-          settings: {
-            color: anyColor ? 'color' : (first.color || 'bw'),
-            copies: first.copies || 1,
-            sides: first.sides || 'single',
-            pages: merged.pages,
-            page_spec: 'all',
-            // A merged document is no longer an image, so it carries no
-            // adjustment: sending one would be a value nothing can apply.
-            brightness: 0,
-            contrast: 0,
-            crop_mode: 'none'
-          }
-        }].concat(images);
-      });
+      } else {
+        work = work.then(function (acc) { return acc.concat(docs); });
+      }
+    } else if (docs.length === 1) {
+      work = work.then(function (acc) { return acc.concat(docs); });
+    }
+
+    return work;
+  }
+
+  // Settings for a combined group. Colour is colour if ANY part was colour, so
+  // nothing is silently printed in the wrong mode; everything else comes from
+  // the first file. No adjustment survives, because a combined document is no
+  // longer an image - the values were already baked into the pixels.
+  function mergedItem(members, merged) {
+    var anyColor = members.some(function (it) {
+      return it.settings && it.settings.color === 'color';
     });
+    var first = (members[0] && members[0].settings) || {};
+    return {
+      file: merged.file,
+      thumb: null,
+      croppedFile: null,
+      pdfPages: merged.pages,
+      _mergedFrom: members.map(function (it) { return it.file.name; }),
+      settings: {
+        color: anyColor ? 'color' : (first.color || 'bw'),
+        copies: first.copies || 1,
+        sides: first.sides || 'single',
+        pages: merged.pages,
+        page_spec: 'all',
+        brightness: 0,
+        contrast: 0,
+        crop_mode: 'none'
+      }
+    };
   }
 
   /* Which kinds of file are in this batch?
@@ -389,6 +514,8 @@ window.PKPageRange = (function () {
     mergeIntoPdf: mergeIntoPdf,
     prepareForMerge: prepareForMerge,
     combineByType: combineByType,
+    combineImages: combineImages,
+    adjustImageFile: adjustImageFile,
     shareableSettings: shareableSettings,
     mixedTypes: mixedTypes,
     isImage: isImage,

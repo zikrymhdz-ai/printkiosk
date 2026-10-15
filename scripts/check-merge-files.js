@@ -218,19 +218,34 @@ function get(url) {
     ok(merged[0].settings.brightness === 0 && merged[0].settings.contrast === 0,
       'the combined document carries no adjustment, because nothing can apply one to it');
 
-    // Two images stay separate, so each keeps its own adjustment.
+    // Two plain photos combine into ONE job, like two PDFs do.
+    const twoPlain = [
+      Object.assign(item('p1.png'), { file: await pngOf('p1.png') }),
+      Object.assign(item('p2.png'), { file: await pngOf('p2.png') }),
+    ];
+    const joined = await PK.combineByType(twoPlain);
+    ok(joined.length === 1, 'two photos become one job, got ' + joined.length);
+    ok(joined[0].pdfPages === 2, 'the combined photos have 2 pages, got ' + joined[0].pdfPages);
+    ok(joined[0].settings.brightness === 0 && joined[0].settings.contrast === 0,
+      'the combined job carries no adjustment, because none was set');
+
+    // Photos WITH adjustments still merge when the pixels can be baked in.
+    // There is no canvas under Node, so this exercises the safe path instead:
+    // an adjustment that cannot be baked must NOT be silently dropped.
     const twoImg = [
       Object.assign(item('p1.png'), { file: await pngOf('p1.png'), settings: { brightness: 30, contrast: 10 } }),
       Object.assign(item('p2.png'), { file: await pngOf('p2.png'), settings: { brightness: -20, contrast: 5 } }),
     ];
     const kept = await PK.combineByType(twoImg);
-    ok(kept.length === 2, 'two images stay two files, got ' + kept.length);
+    ok(typeof document === 'undefined', 'no canvas in this environment');
+    ok(kept.length === 2,
+      'with adjustments and no canvas the photos are kept separate, not merged and lost');
     ok(kept[0].settings.brightness === 30 && kept[0].settings.contrast === 10,
       'the first photo keeps its own adjustment');
     ok(kept[1].settings.brightness === -20 && kept[1].settings.contrast === 5,
       'the second photo keeps its own, different adjustment');
-    ok(PK.isImage(kept[0].file.name) && PK.isImage(kept[1].file.name),
-      'photos are still uploaded as images, so the worker can adjust them');
+    ok(kept.every(i => PK.isImage(i.file.name)),
+      'they are still uploaded as images, so the worker can adjust them');
 
     // A document and a photo are never combined.
     const mixed = [
