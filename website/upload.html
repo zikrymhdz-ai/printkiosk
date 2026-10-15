@@ -927,9 +927,17 @@ formData.append('file', blob, fileName);
   // Ask the server what the whole order costs. The browser's own sum is not
   // trusted: the amount quoted to the customer must be exactly the one the
   // payment matcher looks for, or they pay and it never settles.
-  if (currentOrderId()) {
-    try {
-      var sealRes = await fetch(API('upload', 'seal-order'), {
+// Only members have an order to price. A guest is always a single file whose
+// job total is already the amount to pay, and seal-order is staff/member-only,
+// so calling it for a guest fails with "Only signed-in customers can place a
+// multi-file order" and the upload never reaches step 2.
+//
+// Gating this on currentOrderId() was the mistake: that helper now always
+// returns an identifier (the server strips it for guests), so it was true for
+// everyone.
+if (!uploadPageIsGuest()) {
+  try {
+    var sealRes = await fetch(API('upload', 'seal-order'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

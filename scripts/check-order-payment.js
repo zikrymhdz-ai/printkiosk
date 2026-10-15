@@ -152,5 +152,17 @@ if (loop) {
 ok(/coins \+= r\.coinsEarned \|\| 0/.test(payment),
   'the order total coins are summed from each file');
 
+// A guest must never reach seal-order: it is member-only, and calling it
+// failed the upload with "Only signed-in customers can place a multi-file
+// order" so a guest could never get past step 1.
+ok(/if \(!uploadPageIsGuest\(\)\) \{/.test(guestPage),
+  'seal-order is skipped for guests');
+ok(!/if \(currentOrderId\(\)\) \{[\s\S]{0,80}seal-order/.test(guestPage),
+  'seal-order is not gated on the order id, which every visitor now has');
+
+// Guests are always single file, server-side, regardless of what they send.
+ok(/if \(!userId\) \{[\s\S]{0,120}return \{ orderId: null \}/.test(upload),
+  'a guest order reference is discarded, so a guest cannot form a bundle');
+
 if (failed) { console.log('  -> ' + failed + ' failed'); process.exit(1); }
 console.log('  ok      orders settle as one payment and earn a coin per file');

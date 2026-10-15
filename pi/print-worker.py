@@ -359,8 +359,30 @@ def reported_model(text):
     return m.group(1).strip() if m else None
 
 
+# CUPS ships a known-good Get-Printer-Attributes request on the Pi. Preferred
+# over our generated copy, which ipptool has twice rejected as invalid.
+CUPS_SYSTEM_TEST = "/usr/share/cups/ipptool/get-printer-attributes.test"
+
+
+def _probe(test_path):
+    """Run ipptool with one test file. Returns (text, returncode, error)."""
+    try:
+        proc = subprocess.run(
+            ["ipptool", "-tv", CONFIG["printer_uri"], test_path],
+            capture_output=True, text=True, timeout=45,
+        )
+    except Exception as e:
+        return None, None, "ipptool could not run: %s" % e
+    # ipptool writes the attribute dump to stderr, not stdout. Parsing only
+    # stdout once meant this saw a single echoed argument
+    # ('"/tmp/pk-get-printer-attributes.test":') and concluded the printer was
+    # unreadable while it was answering perfectly. Both streams are searched.
+    text = (proc.stdout or "") + "\n" + (proc.stderr or "")
+    return text, proc.returncode, None
+
+
 def read_supplies():
-    """Ask the printer what it actually has. Returns (levels, online, why).
+    """Ask the printer what it actually has. Returns (levels, online, why, model).
 
     `why` exists so a failure is diagnosable from the journal. The first
     version swallowed every error, so a printer that could never be reached
@@ -370,42 +392,61 @@ def read_supplies():
     if not shutil_which("ipptool"):
         return None, True, "ipptool not installed (apt install cups-ipp-utils)", None
 
-    try:
-        proc = subprocess.run(
-            ["ipptool", "-tv", CONFIG["printer_uri"], get_printer_attrs_test()],
-            capture_output=True, text=True, timeout=45,
-        )
-    except Exception as e:
-        return None, False, "ipptool could not run: %s" % e, None
+    # Two candidate test files, tried in order.
+    #
+    # The generated file has been rejected twice ("Unexpected token ATTRIBUTE
+    # seen on line 4") with syntax that matches the CUPS original, and it cannot
+    # be verified from a machine without ipptool. CUPS ships a known-good
+    # get-printer-attributes.test on the Pi itself, so it is preferred outright
+    # and the generated file is only a fallback for a system without CUPS.
+    # That removes our ability to break this entirely.
+    candidates = []
+    if CUPS_SYSTEM_TEST and os.path.exists(CUPS_SYSTEM_TEST):
+        candidates.append(CUPS_SYSTEM_TEST)
+    candidates.append(get_printer_attrs_test())
+    candidates = list(dict.fromkeys(candidates))
 
-    if proc.returncode != 0:
-        detail = (proc.stderr or proc.stdout or "").strip().splitlines()
-        line = detail[0] if detail else "no output"
-        # Name the URI that failed. ipptool's own error ("connect: Connection
-        # refused") is identical whether the printer is off, on a different
-        # subnet, or the queue still points at the address it had before it was
-        # moved, and the URI is the only thing that distinguishes them.
-        return None, False, "cannot reach %s - %s" % (
-            CONFIG["printer_uri"], line), None
+    text = None
+    first_error = ""
+    transport_error = ""
+    for test_path in candidates:
+        text, code, err = _probe(test_path)
+        if err:
+            first_error = first_error or err
+            text = None
+            continue
 
-    text = (proc.stdout or "") + "\n" + (proc.stderr or "")
+        if code != 0:
+            detail = (text or "").strip().splitlines()
+            line = detail[0] if detail else "no output"
+            first_error = first_error or line
+            # A transport failure is about the printer, not about which test
+            # file was used, so trying the other candidate cannot help.
+            low = (text or "").lower()
+            if "cannot connect" in low or "connection refused" in low \
+                    or "no route to host" in low or "could not resolve" in low:
+                transport_error = "cannot reach %s - %s" % (CONFIG["printer_uri"], line)
+                break
+            continue
 
-    # ipptool exits 0 even when it cannot parse the test file, so its exit
-    # status alone does not mean the printer answered. When the output contains
-    # no attribute lines at all, the request never completed - and reporting
-    # that as "reachable" is what made a request that was never sent look like
-    # a healthy printer with missing toner data.
-    if not re.search(r"^\s*\[\d+\]", text, re.MULTILINE):
-        detail = (proc.stderr or proc.stdout or "").strip().replace("\n", " | ")[:200]
+        # ipptool exits 0 even when it cannot parse the test file, so its exit
+        # status alone does not mean the printer answered. Attribute lines are
+        # the only real evidence that a request completed.
+        if re.search(r"^\s*\[\d+\]", text or "", re.MULTILINE):
+            break
+
+        first_error = first_error or (text or "").strip().replace("\n", " | ")[:200]
+        text = None
+
+    if transport_error:
+        return None, False, transport_error, None
+
+    if text is None:
         return None, False, (
-            "ipptool returned no attributes - the request did not complete. "
-            + (detail or "(no output)")
+            "ipptool returned no attributes - no request completed. "
+            + (first_error or "(no output)")
         ), None
-    # ipptool writes the attribute dump to stderr, not stdout. Parsing only
-    # stdout meant this saw a single echoed argument
-    # ('"/tmp/pk-get-printer-attributes.test":'), found no toner attributes in
-    # it, and reported the printer as unreadable while it was answering
-    # perfectly. Both streams are now searched.
+
     levels = {}
     for key, rx in TONER_RE.items():
         m = rx.search(text)
