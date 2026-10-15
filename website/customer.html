@@ -16,11 +16,11 @@
 <link rel="stylesheet" href="../styles.css">
 <link href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.css" rel="stylesheet">
 <script src="../frontend_config.js"></script>
-<script src="pstore.js?v=2026.10.14-85"></script>
+<script src="pstore.js?v=2026.10.14-86"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script>pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
 <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
-<script src="pagerange.js?v=2026.10.14-85"></script>
+<script src="pagerange.js?v=2026.10.14-86"></script>
 <script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/dist/face-api.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.js"></script>
 <style>
@@ -737,7 +737,26 @@ function switchPage(page) {
 }
 
 /* ===== STEPPER ===== */
+/* Documents and photos are printed differently: a PDF is paged and combined,
+ * a photo is a single sheet the worker adjusts in its own right. Mixing them in
+ * one order gives a document that belongs to neither, so the batch is refused
+ * here - with the actual file types named - rather than failing later.
+ * The detection lives in pagerange.js so both pages agree. */
+function refuseMixedFileTypes() {
+  var t = PKPageRange.mixedTypes(bulkFiles);
+  if (!t.mixed) return false;
+  alert('You have added different file types to this order: '
+    + t.all.join(' and ') + '.\n\n'
+    + 'PrintKiosk cannot print documents and photos in the same order. '
+    + 'Please finish this order with one type, then start a new upload for the other.');
+  return true;
+}
+
 function goStep(n) {
+  // Blocked at the door, while the customer can still see and fix their
+  // selection, rather than part-way through the upload.
+  if (n === 2 && refuseMixedFileTypes()) return;
+
   document.querySelectorAll('#pageUpload .slide-section').forEach(s => s.classList.remove('active'));
   document.getElementById('step' + n).classList.add('active');
   for (let i = 1; i <= 3; i++) {
@@ -1580,6 +1599,15 @@ job_id: signD.job_id,
 
   var autoPaidAll = false;
   try {
+    // Safety net: files can be changed after passing step 2, so re-check here
+    // rather than relying on the Next button alone.
+    if (refuseMixedFileTypes()) {
+      showUploadOverlay(false);
+      btn.disabled = false;
+      btn.textContent = 'Upload & Get PIN';
+      return;
+    }
+
     // Never upload unconfirmed settings: the printed and charged document must
     // be the one the customer actually confirmed.
     if (settingsPending()) {

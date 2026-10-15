@@ -268,6 +268,39 @@ function get(url) {
     ok(!('crop_mode' in shared), 'crop mode is not shared');
   }
 
+  // 14. A mixed batch must be DETECTED so the page can refuse it by name.
+  {
+    ok(typeof PK.mixedTypes === 'function', 'mixedTypes is exposed');
+    const it = (name) => ({ file: { name: name } });
+
+    ok(PK.mixedTypes([it('a.pdf'), it('b.pdf')]).mixed === false,
+      'two PDFs are not a mixed batch');
+    ok(PK.mixedTypes([it('a.png'), it('b.jpg')]).mixed === false,
+      'two images are not a mixed batch');
+    ok(PK.mixedTypes([it('a.pdf'), it('b.png')]).mixed === true,
+      'a PDF and a photo IS a mixed batch');
+    ok(PK.mixedTypes([it('a.pdf'), it('b.docx'), it('c.png')]).mixed === true,
+      'a document and a photo is mixed even with a DOCX present');
+
+    const m = PK.mixedTypes([it('a.pdf'), it('b.png')]);
+    ok(m.docs.join() === 'PDF' && m.images.join() === 'PNG',
+      'the real types are reported so the message can name them');
+    ok(m.all.indexOf('PDF') !== -1 && m.all.indexOf('PNG') !== -1,
+      'both types are listed for the message');
+
+    // Repeats collapse, so the message does not read "PDF and PDF".
+    const dup = PK.mixedTypes([it('a.pdf'), it('b.pdf'), it('c.png')]);
+    ok(dup.all.join() === 'PDF,PNG', 'repeated types collapse: ' + dup.all.join());
+
+    ok(PK.mixedTypes([]).mixed === false, 'an empty batch is not mixed');
+    ok(PK.mixedTypes([it('a.pdf')]).mixed === false, 'a single document is not mixed');
+    ok(PK.mixedTypes([it('a.png')]).mixed === false, 'a single photo is not mixed');
+
+    // Case must not matter: a .PDF and a .PNG are still mixed.
+    ok(PK.mixedTypes([it('a.PDF'), it('b.PNG')]).mixed === true,
+      'uppercase extensions are still detected as mixed');
+  }
+
   if (failed) { console.log('  -> ' + failed + ' failed'); process.exit(1); }
   console.log('  ok      multiple documents become one job with the right page count');
 })().catch(e => { console.log('  ERROR ' + (e && e.message)); console.log(e && e.stack); process.exit(1); });

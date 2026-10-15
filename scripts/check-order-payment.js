@@ -407,5 +407,30 @@ for (const [label, page] of [['guest', guestPage], ['member', memberPage]]) {
     label + ' page renders the Next button label with a proper dash');
 }
 
+// --- a mixed batch is refused by name, at Next and again at upload ---------
+for (const [label, page] of [['guest', guestPage], ['member', memberPage]]) {
+  ok(/function refuseMixedFileTypes\(\)/.test(page),
+    label + ' has a mixed-file-type check');
+  ok(/PKPageRange\.mixedTypes\(bulkFiles\)/.test(page),
+    label + ' uses the shared detection so both pages agree');
+  ok(/You have added different file types/.test(page),
+    label + ' tells the customer which types were added');
+  ok(/cannot print documents and photos in the same order/.test(page),
+    label + ' explains why, in plain words');
+  ok(/t\.all\.join\(' and '\)/.test(page),
+    label + ' names the actual extensions rather than a generic message');
+}
+
+// The member page must block at Next, while the customer can still fix their
+// selection, and again at upload in case files changed after step 2.
+ok(/if \(n === 2 && refuseMixedFileTypes\(\)\) return;/.test(memberPage),
+  'member page refuses the mixed batch on the Next button');
+ok((memberPage.match(/refuseMixedFileTypes\(\)/g) || []).length >= 3,
+  'member page also re-checks at upload time');
+ok(/Safety net: files can be changed after passing step 2/.test(memberPage),
+  'member page explains why it checks twice');
+ok((guestPage.match(/refuseMixedFileTypes\(\)/g) || []).length >= 2,
+  'guest page keeps a backstop even though it is locked to one file');
+
 if (failed) { console.log('  -> ' + failed + ' failed'); process.exit(1); }
 console.log('  ok      orders settle as one payment and earn a coin per file');

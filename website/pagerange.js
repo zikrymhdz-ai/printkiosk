@@ -357,6 +357,31 @@ window.PKPageRange = (function () {
     });
   }
 
+  /* Which kinds of file are in this batch?
+   *
+   * Documents and photos are printed differently - a PDF is paged and gets
+   * combined, a photo is a single sheet the worker adjusts in its own right -
+   * so mixing them in one order produces a document belonging to neither.
+   * Returns the distinct extensions found on each side plus a mixed flag, so
+   * the page can name the actual types in its message.
+   */
+  function mixedTypes(items) {
+    var docs = [];
+    var images = [];
+    (items || []).forEach(function (it) {
+      var name = (it && it.file && it.file.name) || '';
+      var ext = extOf(name).toUpperCase() || 'FILE';
+      var bucket = isImage(name) ? images : docs;
+      if (bucket.indexOf(ext) === -1) bucket.push(ext);
+    });
+    return {
+      docs: docs,
+      images: images,
+      mixed: docs.length > 0 && images.length > 0,
+      all: docs.concat(images)
+    };
+  }
+
   return {
     parse: parse,
     compress: compress,
@@ -365,6 +390,7 @@ window.PKPageRange = (function () {
     prepareForMerge: prepareForMerge,
     combineByType: combineByType,
     shareableSettings: shareableSettings,
+    mixedTypes: mixedTypes,
     isImage: isImage,
     extOf: extOf
   };
