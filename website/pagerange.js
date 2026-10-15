@@ -140,5 +140,111 @@ window.PKPageRange = (function () {
       });
   }
 
-  return { parse: parse, compress: compress, extractPdfPages: extractPdfPages };
+  /* Combine several documents into ONE pdf, so a multi-file upload becomes a
+   * single job with a single, correctly-counted page total.
+   *
+   * Why: each file used to create its own print job, so a customer uploading
+   * three documents paid once for three jobs and the amount had to be
+   * attributed to the set. Combining client-side makes it one job, one order
+   * and one amount - which is what "I uploaded several files" actually means.
+   *
+   * Only PDF and images can be merged here. DOC/DOCX have no client-side
+   * renderer, so they are refused with a clear reason rather than silently
+   * dropping pages.
+   *
+   * Returns { file, pages, images, sources }.
+   */
+  function extOf(name) {
+    var parts = String(name || '').split('.');
+    return (parts.pop() || '').toLowerCase();
+  }
+
+  function mergeIntoPdf(items) {
+    if (typeof PDFLib === 'undefined') {
+      return Promise.reject(new Error('PDF library not loaded'));
+    }
+
+    var out = null;
+    var pages = 0;
+    var images = 0;
+    var sources = [];
+
+    return items.reduce(function (chain, item) {
+      return chain.then(function () {
+        var file = item && item.file ? item.file : item;
+        var name = file.name || 'document';
+        var ext = extOf(name);
+        sources.push({ name: name, pages: null });
+
+        if (ext === 'pdf') {
+          return file.arrayBuffer()
+            .then(function (buf) { return PDFLib.PDFDocument.load(buf); })
+            .then(function (src) {
+              var count = src.getPageCount();
+              sources[sources.length - 1].pages = count;
+              pages += count;
+              // PDFDocument.create() is ASYNC since pdf-lib 1.17.0 and returns
+              // a Promise. Assigning it straight to `out` gives a Promise, and
+              // out.copyPages is then undefined - the exact error this had.
+              var ready = out ? Promise.resolve(out) : PDFLib.PDFDocument.create();
+              return ready.then(function (doc) {
+                out = doc;
+                // copyPages is also async on 1.17.x.
+                return Promise.resolve(out.copyPages(src, src.getPageIndices()))
+                  .then(function (copied) {
+                    copied.forEach(function (p) { out.addPage(p); });
+                  });
+              });
+            });
+        }
+
+        if (ext === 'png' || ext === 'jpg' || ext === 'jpeg') {
+          return file.arrayBuffer().then(function (buf) {
+            var ready = out ? Promise.resolve(out) : PDFLib.PDFDocument.create();
+            return ready.then(function (doc) {
+              out = doc;
+              return (ext === 'png' ? out.embedPng(buf) : out.embedJpg(buf))
+                .then(function (img) {
+                  // Page in points, from the image's pixel size.
+                  var page = out.addPage([img.width, img.height]);
+                  page.drawImage(img, { x: 0, y: 0, width: img.width, height: img.height });
+                  images++;
+                  pages += 1;
+                  sources[sources.length - 1].pages = 1;
+                });
+            });
+          });
+        }
+
+        // A DOC/DOCX sent on its own needs no merging, so let it through. Only
+        // refuse it when it would have to be combined with something else.
+        if (items.length === 1) {
+          return { file: file, pages: null, images: 0, sources: sources };
+        }
+
+        return Promise.reject(new Error(
+          name + ': DOC and DOCX cannot be combined with other documents. '
+          + 'Upload it on its own.'));
+      });
+    }, Promise.resolve()).then(function () {
+      if (!out || !pages) throw new Error('Nothing to combine');
+      return out.save().then(function (bytes) {
+        var label = items.length + '-documents.pdf';
+        return {
+          file: new File([bytes], label, { type: 'application/pdf' }),
+          pages: pages,
+          images: images,
+          sources: sources
+        };
+      });
+    });
+  }
+
+  return {
+    parse: parse,
+    compress: compress,
+    extractPdfPages: extractPdfPages,
+    mergeIntoPdf: mergeIntoPdf,
+    extOf: extOf
+  };
 })();

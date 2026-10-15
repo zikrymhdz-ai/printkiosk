@@ -261,6 +261,8 @@ let phoneCurrentJobId = null;
 // Server-priced total for the whole order. Null for a guest's single file, where
 // the job total is already the amount to pay.
 let phoneOrderTotal = null;
+// Page total of the combined document, once several files have been merged.
+let phoneCombinedPages = 0;
 let phoneUploadedJobs = [];
 let qToken = '';
 let qGuest = false;
@@ -378,6 +380,14 @@ var MAX_FILES_GUEST = 1;
 // therefore matches what the server will actually do.
 function uploadPageIsGuest() {
   return !localStorage.getItem('session_token') && !sessionStorage.getItem('pk_token');
+}
+
+// The order reference identifies ONE batch. It must not outlive that batch:
+// the server counts existing files under the same order_id, so reusing it on
+// the next upload made the first file of every subsequent order fail with "an
+// order can contain at most 5 files".
+function resetOrderId() {
+  try { sessionStorage.removeItem('pk_order_id'); } catch (e) {}
 }
 
 // One order reference per batch. It is what lets a single payment settle every
@@ -894,6 +904,47 @@ async function submitPhoneUpload() {
   try {
     phoneUploadedJobs = [];
     var phoneAutoPaid = false;
+
+    // Combine everything into ONE document first, so this is a single job with
+    // a correctly counted page total and a single amount to pay. Uploading N
+    // files as N jobs meant the payment had to be attributed to a set of jobs,
+    // which is what kept going wrong.
+    if (bulkFiles.length > 1) {
+      btn.disabled = true;
+      btn.textContent = 'Combining ' + bulkFiles.length + ' documents...';
+      var merged = await PKPageRange.mergeIntoPdf(bulkFiles.map(function (it) {
+        return (it.settings && it.settings.crop_mode === 'manual' && it.croppedFile)
+          ? it.croppedFile : it.file;
+      }));
+
+      // Settings apply to the combined document as a whole: the page total comes
+      // from the merge, and colour is used if ANY part was colour, so nothing
+      // is silently printed in the wrong mode.
+      var anyColor = bulkFiles.some(function (it) {
+        return it.settings && it.settings.color === 'color';
+      });
+      var first = bulkFiles[0].settings || {};
+
+      bulkFiles = [{
+        file: merged.file,
+        thumb: null,
+        croppedFile: null,
+        pdfPages: merged.pages,
+        settings: {
+          color: anyColor ? 'color' : (first.color || 'bw'),
+          copies: first.copies || 1,
+          sides: first.sides || 'single',
+          pages: merged.pages,
+          page_spec: 'all',
+          brightness: 0,
+          contrast: 0,
+          crop_mode: 'none'
+        }
+      }];
+      renderFileList();
+      phoneCombinedPages = merged.pages;
+    }
+
     for (let i = 0; i < bulkFiles.length; i++) {
       btn.textContent = 'Uploading file ' + (i + 1) + ' of ' + bulkFiles.length + '...';
       var item = bulkFiles[i];
@@ -1032,10 +1083,12 @@ if (!uploadPageIsGuest()) {
         },
         body: JSON.stringify({ order_id: currentOrderId() })
       });
-      var sealData = await sealRes.json();
-      if (!sealData.success) throw new Error(sealData.error || 'Could not price this order');
-      phoneOrderTotal = sealData.order_total;
-    } catch (sealErr) {
+var sealData = await sealRes.json();
+    if (!sealData.success) throw new Error(sealData.error || 'Could not price this order');
+    phoneOrderTotal = sealData.order_total;
+    // This batch is complete; the next upload must be a new order.
+    resetOrderId();
+  } catch (sealErr) {
       uploadFail(sealErr.message || 'Could not price this order');
       return;
     }

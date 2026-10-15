@@ -769,8 +769,15 @@ fileInput.addEventListener('change', () => { if (fileInput.files.length) addFile
 // for the whole thing. Guests use upload.html, which allows a single file.
 var MAX_ORDER_FILES = 5;
 
-// One order reference per batch, so a single payment settles every file in it.
-function currentOrderId() {
+// The order reference identifies ONE batch and must not outlive it: the server
+  // counts files already under the same order_id, so reusing it made the first
+  // file of the next upload fail with "an order can contain at most 5 files".
+  function resetOrderId() {
+    try { sessionStorage.removeItem('pk_order_id'); } catch (e) {}
+  }
+
+  // One order reference per batch, so a single payment settles everything in it.
+  function currentOrderId() {
   var oid = sessionStorage.getItem('pk_order_id');
   if (!oid) {
     oid = 'o' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
@@ -1512,6 +1519,45 @@ job_id: signD.job_id,
 
   var autoPaidAll = false;
   try {
+    // Combine everything into ONE document, so a multi-file upload is a single
+    // job with one correctly counted page total and one amount to pay, instead
+    // of N jobs the payment has to be attributed across.
+    if (bulkFiles.length > 1) {
+      btn.disabled = true;
+      showUploadOverlay(true, {
+        sub: 'Combining ' + bulkFiles.length + ' documents into one\u2026',
+        progress: 5,
+        note: 'This makes the order easier to pay for and print.'
+      });
+      var mergedFiles = await PKPageRange.mergeIntoPdf(bulkFiles.map(function (it) {
+        return (it.settings && it.settings.crop_mode === 'manual' && it.croppedFile)
+          ? it.croppedFile : it.file;
+      }));
+
+      var anyColorFiles = bulkFiles.some(function (it) {
+        return it.settings && it.settings.color === 'color';
+      });
+      var firstFileSettings = bulkFiles[0].settings || {};
+
+      bulkFiles = [{
+        file: mergedFiles.file,
+        thumb: null,
+        croppedFile: undefined,
+        pdfPages: mergedFiles.pages,
+        settings: {
+          color: anyColorFiles ? 'color' : (firstFileSettings.color || 'bw'),
+          copies: firstFileSettings.copies || 1,
+          sides: firstFileSettings.sides || 'single',
+          pages: mergedFiles.pages,
+          page_spec: 'all',
+          brightness: 0,
+          contrast: 0,
+          crop_mode: 'none'
+        }
+      }];
+      renderFileList();
+    }
+
     for (let i = 0; i < bulkFiles.length; i++) {
       var isLast = (i === bulkFiles.length - 1);
       btn.textContent = 'Uploading file ' + (i + 1) + ' of ' + bulkFiles.length + '...';
@@ -1610,6 +1656,8 @@ var d;
     var sealData = await sealRes.json();
     if (!sealData.success) throw new Error(sealData.error || 'Could not price this order');
     sealedOrderTotal = sealData.order_total;
+    // This batch is done; the next upload must be a new order.
+    resetOrderId();
   } catch (sealErr) {
     showUploadOverlay(false);
     alert(sealErr.message || 'Could not price this order. Nothing has been charged.');
