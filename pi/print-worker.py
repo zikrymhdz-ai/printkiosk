@@ -126,10 +126,68 @@ def is_image(path):
     return os.path.splitext(path)[1].lower() in IMAGE_EXT
 
 
-def image_to_pdf(src, dst, grayscale):
+def _clamp_adjust(value):
+    """Brightness/contrast arrive as strings from the DB and the sliders run
+    -100..100. Anything outside that, or unparseable, is treated as no
+    adjustment rather than being allowed to produce a black or blank page."""
+    try:
+        v = int(round(float(value)))
+    except (TypeError, ValueError):
+        return 0
+    if v == 0:
+        return 0
+    return max(-100, min(100, v))
+
+
+def adjust_image(im, grayscale, brightness=0, contrast=0):
+    """Apply the print adjustments to a decoded image, in the same order as the
+    preview's CSS filter (grayscale -> brightness -> contrast) so the print
+    matches the screen the customer approved.
+
+    Kept separate from the PDF writing so the pixel work can be checked
+    directly - Pillow cannot read a PDF back in, so asserting on the output
+    file would test nothing.
+    """
+    from PIL import ImageEnhance
+
+    if grayscale:
+        im = im.convert("L").convert("RGB")
+
+    brightness = _clamp_adjust(brightness)
+    contrast = _clamp_adjust(contrast)
+    if brightness:
+        im = ImageEnhance.Brightness(im).enhance(1.0 + brightness / 100.0)
+    if contrast:
+        # CSS contrast() is linear about MID GREY with slope f. Pillow's
+        # ImageEnhance.Contrast instead blends toward the image's own mean, which
+        # moves the pivot and does not match the preview the customer approved.
+        # Do the CSS formula explicitly, via a per-channel lookup table.
+        f = 1.0 + contrast / 100.0
+
+        def _curve(v, f=f):
+            x = (v - 127.5) * f + 127.5
+            if x < 0:
+                return 0
+            if x > 255:
+                return 255
+            return int(x + 0.5)
+
+        lut = [_curve(i) for i in range(256)]
+        im = im.point(lut * len(im.getbands()))
+
+    return im
+
+
+def image_to_pdf(src, dst, grayscale, brightness=0, contrast=0):
     """The kiosk accepts JPEGs/PNGs directly. CUPS will not print those here, so
     flatten to a single-page PDF ourselves. Doing it here also means we are the
-    ones applying greyscale, instead of hoping the driver honours ColorModel."""
+    ones applying greyscale, instead of hoping the driver honours ColorModel.
+
+    brightness/contrast are the values the customer dialled in. They used to be
+    stored on the job and then dropped on the floor, so the preview showed an
+    adjusted image and the printer produced the original - the customer got
+    something other than what they chose.
+    """
     from PIL import Image, ImageOps
 
     with Image.open(src) as im:
@@ -143,8 +201,7 @@ def image_to_pdf(src, dst, grayscale):
         elif im.mode != "RGB":
             im = im.convert("RGB")
 
-        if grayscale:
-            im = im.convert("L").convert("RGB")
+        im = adjust_image(im, grayscale, brightness, contrast)
 
         # A4 at 300dpi -- well beyond what the HL-L3240CDW resolves.
         im.save(dst, "PDF", resolution=300.0)
@@ -683,8 +740,13 @@ def process(job):
         if is_image(src):
             pdf = os.path.join(workdir, "print.pdf")
             grayscale = (job.get("color_mode") or "bw").lower() != "color"
-            image_to_pdf(src, pdf, grayscale)
-            log("%s: image converted to PDF (%s)" % (public_id, "greyscale" if grayscale else "colour"))
+            brightness = _clamp_adjust(job.get("brightness"))
+            contrast = _clamp_adjust(job.get("contrast"))
+            image_to_pdf(src, pdf, grayscale, brightness, contrast)
+            log("%s: image converted to PDF (%s%s)" % (
+                public_id, "greyscale" if grayscale else "colour",
+                "" if not (brightness or contrast)
+                else ", brightness %+d, contrast %+d" % (brightness, contrast)))
         else:
             pdf = src
 

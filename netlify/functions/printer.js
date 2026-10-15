@@ -127,7 +127,7 @@ async function requestPrint(event) {
 // Atomically claim the oldest job the customer actually asked for.
 async function claimJob() {
   const pick = await supabaseRequest('GET', '/print_jobs', null, {
-    'select': 'id,job_id,file_path,file_name,file_type,pages,color_mode,paper_size,sides,copies,page_spec,print_attempts',
+    'select': 'id,job_id,file_path,file_name,file_type,pages,color_mode,paper_size,sides,copies,page_spec,print_attempts,brightness,contrast',
     'status': 'eq.print_requested',
     'order': 'print_requested_at.asc',
     'limit': '1'

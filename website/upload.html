@@ -422,6 +422,15 @@ function addFiles(files) {
       + ' not added - an order holds up to ' + limit + ' file' + (limit === 1 ? '' : 's') + '.';
   }
 
+  // A new batch must never inherit the order reference of an earlier one. The
+  // server counts every job that already carries this order_id, so a stale
+  // reference - left behind by an abandoned, interrupted or failed upload -
+  // made the FIRST file of the next batch fail with "an order can contain at
+  // most 5 files", before any file was accepted. Nothing is uploaded until
+  // submit, so rotating at the start of a batch is safe and keeps every file
+  // in one batch sharing a single reference.
+  if (room > 0 && bulkFiles.length === 0) resetOrderId();
+
   files.slice(0, room).forEach(function(file) {
     var ext = (file.name.split('.').pop() || '').toLowerCase();
     if (!['pdf','doc','docx','jpg','jpeg','png'].includes(ext)) { errs += (errs ? '\n' : '') + file.name + ': unsupported type'; return; }
@@ -925,6 +934,19 @@ async function submitPhoneUpload() {
       });
       var first = bulkFiles[0].settings || {};
 
+      // Brightness/contrast must survive the merge. Zeroing them here is what
+      // made a customer dial in an adjustment, see it in the preview, and then
+      // have the unadjusted file printed. They apply to the whole combined
+      // document, so if the files disagreed, say so instead of picking silently.
+      var wantBright = Number(first.brightness) || 0;
+      var wantContrast = Number(first.contrast) || 0;
+      var firstFileName = bulkFiles[0].file.name;
+      var adjustClash = bulkFiles.some(function (it) {
+        var s = it.settings || {};
+        return (Number(s.brightness) || 0) !== wantBright
+          || (Number(s.contrast) || 0) !== wantContrast;
+      });
+
       bulkFiles = [{
         file: merged.file,
         thumb: null,
@@ -936,12 +958,17 @@ async function submitPhoneUpload() {
           sides: first.sides || 'single',
           pages: merged.pages,
           page_spec: 'all',
-          brightness: 0,
-          contrast: 0,
+          brightness: wantBright,
+          contrast: wantContrast,
           crop_mode: 'none'
         }
       }];
       renderFileList();
+      if (adjustClash) {
+        alert('These documents are printed as one file, so they share one '
+          + 'brightness/contrast setting. Using ' + wantBright + ' / ' + wantContrast
+          + ' from "' + firstFileName + '".');
+      }
       phoneCombinedPages = merged.pages;
     }
 

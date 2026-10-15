@@ -302,5 +302,39 @@ ok(/Guests can send one file/.test(guestPage), 'and explains why another is not 
 ok(!/id="[^"]+"[^>]*\sid="/.test(guestPage), 'no element carries two id attributes');
 ok(guestPage.includes('id="step1Btn"'), 'the Next button keeps its original id');
 
+// --- one order reference per batch -----------------------------------------
+// resolveOrderId counts EVERY job that already carries the order_id, whatever
+// its status. A reference left behind by an abandoned or failed batch
+// therefore poisoned every later upload: the first file of the next batch was
+// refused with "an order can contain at most 5 files" before anything was
+// accepted, which is what a folder upload kept hitting.
+ok(/already >= MAX_BUNDLE_FILES/.test(upload),
+  'the server refuses to add file 6 to one order');
+for (const [label, page] of [['guest', guestPage], ['member', memberPage]]) {
+  ok(/function resetOrderId\(\)/.test(page), label + ' page can rotate the order reference');
+  ok(/sessionStorage\.removeItem\('pk_order_id'\)/.test(page),
+    label + ' rotation actually clears the stored reference');
+  ok(/if \(room > 0 && bulkFiles\.length === 0\) resetOrderId\(\);/.test(page),
+    label + ' starts every new batch on a fresh reference');
+  ok(/sealedOrderTotal = sealData\.order_total;[\s\S]{0,200}resetOrderId\(\);/.test(memberPage)
+    || /phoneOrderTotal = sealData\.order_total;[\s\S]{0,200}resetOrderId\(\);/.test(page),
+    label + ' rotates again once the order is sealed and priced');
+}
+
+// Every file in one batch must still share a single reference, otherwise the
+// payment can never be attributed to the whole set.
+ok(/currentOrderId\(\)/.test(guestPage) && /currentOrderId\(\)/.test(memberPage),
+  'both pages send the same reference for every file in the batch');
+
+// --- the merge must not throw the customer's adjustments away --------------
+for (const [label, page] of [['guest', guestPage], ['member', memberPage]]) {
+  ok(!/brightness: 0,\s*\n\s*contrast: 0,\s*\n\s*crop_mode: 'none'/.test(page),
+    label + ' merge does not reset brightness/contrast to zero');
+  ok(/brightness: want/.test(page), label + ' merge carries brightness through');
+  ok(/contrast: want/.test(page), label + ' merge carries contrast through');
+  ok(/adjustClash/.test(page),
+    label + ' warns when files disagree about brightness/contrast');
+}
+
 if (failed) { console.log('  -> ' + failed + ' failed'); process.exit(1); }
 console.log('  ok      orders settle as one payment and earn a coin per file');

@@ -793,6 +793,14 @@ function addFiles(files) {
     alert('An order can hold up to ' + limit + ' files. Remove one to add another.');
     return;
   }
+  // A new batch must never inherit the order reference of an earlier one. The
+  // server counts every job already carrying this order_id, so a stale
+  // reference - left by an abandoned, interrupted or failed upload - made the
+  // FIRST file of the next batch fail with "an order can contain at most 5
+  // files", before accepting anything. Nothing is uploaded until submit, so
+  // rotating here is safe and keeps one reference per batch.
+  if (room > 0 && bulkFiles.length === 0) resetOrderId();
+
   for (var i = 0; i < Math.min(files.length, room); i++) {
     var f = files[i];
     var ext = f.name.split('.').pop().toLowerCase();
@@ -1539,6 +1547,19 @@ job_id: signD.job_id,
       });
       var firstFileSettings = bulkFiles[0].settings || {};
 
+      // Brightness/contrast must survive the merge - zeroing them made a
+      // customer dial in an adjustment and then get the unadjusted file
+      // printed. They apply to the whole combined document, so if the files
+      // disagreed, say so rather than picking silently.
+      var wantBrightness = Number(firstFileSettings.brightness) || 0;
+      var wantContrast = Number(firstFileSettings.contrast) || 0;
+      var firstFileName = bulkFiles[0].file.name;
+      var adjustClash = bulkFiles.some(function (it) {
+        var s = it.settings || {};
+        return (Number(s.brightness) || 0) !== wantBrightness
+          || (Number(s.contrast) || 0) !== wantContrast;
+      });
+
       bulkFiles = [{
         file: mergedFiles.file,
         thumb: null,
@@ -1550,12 +1571,17 @@ job_id: signD.job_id,
           sides: firstFileSettings.sides || 'single',
           pages: mergedFiles.pages,
           page_spec: 'all',
-          brightness: 0,
-          contrast: 0,
+          brightness: wantBrightness,
+          contrast: wantContrast,
           crop_mode: 'none'
         }
       }];
       renderFileList();
+      if (adjustClash) {
+        alert('These documents are printed as one file, so they share one '
+          + 'brightness/contrast setting. Using ' + wantBrightness + ' / ' + wantContrast
+          + ' from "' + firstFileName + '".');
+      }
     }
 
     for (let i = 0; i < bulkFiles.length; i++) {
