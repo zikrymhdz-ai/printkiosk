@@ -89,8 +89,34 @@ ok(eleventh && eleventh.offset === 10,
 
 // --- guests are limited to one file, members to five ----------------------
 ok(/const MAX_BUNDLE_FILES = 5/.test(upload), 'server caps an order at 5 files');
-ok(/Guests can upload one file at a time/.test(upload),
-  'server rejects an order reference from a guest');
+
+// resolveOrderId must never reject a valid upload. An earlier version returned
+// "Missing order reference" whenever a signed-in upload arrived without one,
+// which made any client/server disagreement a hard failure - the real case was
+// a signed-in customer opening the kiosk guest link, where ?guest=1 clears the
+// local token but the session is still valid server-side.
+const rid = upload.match(/async function resolveOrderId[\s\S]*?\n\}/);
+ok(!!rid, 'resolveOrderId found');
+if (rid) {
+  ok(!/Missing order reference/.test(rid[0]), 'no missing-order-reference rejection');
+  ok(!/Guests can upload one file at a time/.test(rid[0]),
+    'a guest order reference is stripped, not refused');
+  ok(/if \(!userId\) \{[\s\S]{0,120}return \{ orderId: null \}/.test(rid[0]),
+    'a guest is always a single-file order');
+  ok(/if \(!sent \|\| !\/\^/.test(rid[0]),
+    'a member with no usable reference falls back to a single-file order');
+  ok(/already >= MAX_BUNDLE_FILES/.test(rid[0]),
+    'only the bundle cap is a hard limit');
+}
+
+// The client must send the reference unconditionally: the server decides what
+// it means. Gating it on the client's own guest guess is what caused this.
+ok(/formData\.append\('order_id', currentOrderId\(\)\);/.test(guestPage)
+   && !/if \(currentOrderId\(\)\) formData\.append\('order_id'/.test(guestPage),
+  'upload.html always sends order_id instead of gating it on its guest guess');
+ok(/return !localStorage\.getItem\('session_token'\) && !sessionStorage\.getItem\('pk_token'\)/.test(guestPage),
+  'the file limit follows the token, which is what the server also sees');
+
 const guestLimit = parseInt((guestPage.match(/var MAX_FILES_GUEST = (\d+)/) || [])[1], 10);
 ok(guestLimit === 1, 'guest page allows exactly 1 file (' + guestLimit + ')');
 const memberLimit = parseInt((memberPage.match(/var MAX_ORDER_FILES = (\d+)/) || [])[1], 10);

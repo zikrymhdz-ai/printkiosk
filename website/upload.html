@@ -310,16 +310,19 @@ document.getElementById('phoneFile').addEventListener('change', function() {
 var MAX_ORDER_FILES = 5;
 var MAX_FILES_GUEST = 1;
 
+// Membership decides the file limit, not qGuest.
+//
+// qGuest is set by ?guest=1, which the kiosk QR uses. It also clears the local
+// token, but a session can still be present server-side, and the server is what
+// ultimately decides whether this is a member. Keying the limit off the token
+// therefore matches what the server will actually do.
 function uploadPageIsGuest() {
-  // qGuest is set from ?guest=1 (the kiosk QR), which also clears the session.
-  // Both are checked so a stale token cannot turn a guest order into a bundle.
-  return qGuest || !localStorage.getItem('session_token');
+  return !localStorage.getItem('session_token') && !sessionStorage.getItem('pk_token');
 }
 
 // One order reference per batch. It is what lets a single payment settle every
 // file the customer sent together.
 function currentOrderId() {
-  if (uploadPageIsGuest()) return '';
   var oid = sessionStorage.getItem('pk_order_id');
   if (!oid) {
     oid = 'o' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
@@ -884,9 +887,12 @@ async function submitPhoneUpload() {
         var blob = await upFile.arrayBuffer().then(function(b) { return new Blob([b], { type: upFile.type || 'application/octet-stream' }); });
 formData.append('file', blob, fileName);
     formData.append('print_pin', orderPin);
-    // Groups this file with the others in the same order. Empty for a guest,
-    // who sends one file at a time.
-    if (currentOrderId()) formData.append('order_id', currentOrderId());
+    // Always sent, even when this page thinks it is a guest: the server strips
+    // it for guests and uses it for members. Sending it unconditionally means a
+    // signed-in customer who opened the kiosk guest link (?guest=1 clears the
+    // local token) can still bundle instead of being refused an order
+    // reference it believed it had sent.
+    formData.append('order_id', currentOrderId());
         formData.append('color_mode', s.color || 'bw');
         formData.append('paper_size', 'a4');
         formData.append('sides', s.sides || 'single');

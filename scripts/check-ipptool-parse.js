@@ -17,6 +17,7 @@ const fs = require('fs');
 const vm = require('vm');
 
 const src = fs.readFileSync('netlify/../pi/print-worker.py', 'utf8');
+const worker = src;
 
 // TONER_RE is a dict literal, so it needs brace matching. The others are single
 // statements containing re.compile(...) and no braces at all, where brace
@@ -134,6 +135,19 @@ ok(z && parseInt(z[1], 10) === 0, 'a 0% cartridge parses as 0, not as absent');
 const other = "    [13] printer-name (nameWithoutLanguage) = Brother DCP-T430W series";
 ok(String((PRINTER_NAME_RE.exec(other) || [])[1] || '').trim() === 'Brother DCP-T430W series',
   'the other Brother parses too, so a mismatch can be detected');
+
+// --- both streams must be searched -----------------------------------------
+// ipptool writes the attribute dump to STDERR. Parsing only stdout saw a single
+// echoed argument and concluded the printer was unreadable while it was
+// answering perfectly.
+ok(/text = \(proc\.stdout or ""\) \+ "\\n" \+ \(proc\.stderr or ""\)/.test(worker),
+  'read_supplies searches both stdout and stderr');
+// Substring rather than a regex: the literal "[:600]" is what ships, and a
+// regex for it proved to be fussier than the fact it asserts.
+ok(worker.includes('[:600]'),
+  'a 600-char sample of the real response is reported when parsing fails');
+ok(/Got: /.test(worker),
+  'the failure message includes what ipptool actually returned');
 
 if (failed) { console.log('  -> ' + failed + ' failed'); process.exit(1); }
 console.log('  ok      ipptool output parses in both shapes');

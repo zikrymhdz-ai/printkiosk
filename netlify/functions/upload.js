@@ -11,23 +11,34 @@ const MAX_FILE_BYTES = 20 * 1024 * 1024; // 20MB per file
 //
 // Guests get one file per order and no order at all, because an unattributable
 // guest bundle cannot be matched to a payment later. Members may bundle up to
-// MAX_BUNDLE_FILES; the cap is enforced here rather than in the UI, because a
-// sixth file would create an order the payment step could not settle.
+// MAX_BUNDLE_FILES.
+//
+// This never rejects. An earlier version returned "Missing order reference" when
+// a signed-in upload arrived without one, which turned any disagreement between
+// what the client thought it was sending and what the server saw into a hard
+// upload failure. The real case was upload.html opened via the kiosk guest QR
+// (?guest=1 clears the token) while a session was still present server-side, so
+// the client withheld order_id, the server saw a member, and refused.
+//
+// Instead: guests have the reference stripped and are always a single file;
+// members use whatever the client sent, and a missing one simply means a
+// single-file order. Only the bundle cap is a hard limit, because exceeding it
+// would build an order the payment step could not settle.
 async function resolveOrderId(raw, userId) {
-  const orderId = String(raw || '').trim().slice(0, 40);
+  const sent = String(raw || '').trim().slice(0, 40);
 
   if (!userId) {
-    if (orderId) {
-      return { error: 'Guests can upload one file at a time. Please sign in to send several files together.' };
-    }
+    // A guest is always single-file. Any order reference they sent is dropped
+    // rather than refused.
     return { orderId: null };
   }
 
-  if (!orderId) return { error: 'Missing order reference' };
-  if (!/^[A-Za-z0-9_-]{8,40}$/.test(orderId)) return { error: 'Invalid order reference' };
+  if (!sent || !/^[A-Za-z0-9_-]{8,40}$/.test(sent)) {
+    return { orderId: null };
+  }
 
   const existing = await supabaseRequest('GET', '/print_jobs', null, {
-    'order_id': 'eq.' + orderId,
+    'order_id': 'eq.' + sent,
     'select': 'id'
   });
   const already = !existing.error && Array.isArray(existing.data) ? existing.data.length : 0;
@@ -35,7 +46,7 @@ async function resolveOrderId(raw, userId) {
     return { error: 'An order can contain at most ' + MAX_BUNDLE_FILES + ' files. Start a new upload to send more.' };
   }
 
-  return { orderId: orderId };
+  return { orderId: sent };
 }
 
 exports.handler = async (event) => {

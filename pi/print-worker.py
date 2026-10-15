@@ -388,7 +388,12 @@ def read_supplies():
         return None, False, "cannot reach %s - %s" % (
             CONFIG["printer_uri"], line), None
 
-    text = proc.stdout
+    text = (proc.stdout or "") + "\n" + (proc.stderr or "")
+    # ipptool writes the attribute dump to stderr, not stdout. Parsing only
+    # stdout meant this saw a single echoed argument
+    # ('"/tmp/pk-get-printer-attributes.test":'), found no toner attributes in
+    # it, and reported the printer as unreadable while it was answering
+    # perfectly. Both streams are now searched.
     levels = {}
     for key, rx in TONER_RE.items():
         m = rx.search(text)
@@ -406,7 +411,7 @@ def read_supplies():
         # response, so failing to find either that or the toner attributes means
         # our assumptions about the text format are wrong, not that the printer
         # is odd.
-        sample = (text or "").strip().replace("\n", " | ")[:300]
+        sample = (text or "").strip().replace("\n", " | ")[:600]
         return None, False, (
             "reachable, but no toner attributes in the response. Got: " + (sample or "(empty)")
         ), reported_model(text)
