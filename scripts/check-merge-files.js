@@ -153,11 +153,13 @@ function get(url) {
     const back = await PDFDoc.load(await r.file.arrayBuffer());
     ok(back.getPageCount() === 3, 'the merged file really has 3 pages, not 6');
 
-    // The image is 1x1px, so its page is 1x1pt; the PDF sheets are 200x300pt.
-    // Checking the sizes proves the image was kept and the order is right.
+    // The image is 1x1px, so its page is fitted to A4 (never 1x1pt); the PDF
+    // sheets keep their own 200x300pt size. Checking both proves the image was
+    // kept and the order is right.
     const p1 = back.getPage(0).getSize();
     const p2 = back.getPage(1).getSize();
-    ok(p1.width === 1 && p1.height === 1, 'page 1 is the image, not a blank sheet');
+    ok(p1.width === 595 && p1.height === 595, 'page 1 is the image, fitted to A4, got '
+      + Math.round(p1.width) + 'x' + Math.round(p1.height));
     ok(p2.width === 200 && p2.height === 300, 'page 2 is a sheet taken from the PDF');
     ok(back.getPageCount() === 3, 'page 3 is the PDF sheet for page 5');
   }
@@ -417,6 +419,47 @@ function get(url) {
       'the customer is told what to do instead: ' + raw);
     ok(fn('some other failure', 500, 10) === 'some other failure',
       'unrelated errors are left alone rather than rewritten');
+  }
+
+  // 17. Image pages must be a printable size.
+  //     pdf-lib's addPage takes POINTS, but an image's width/height are PIXELS.
+  //     Passing them straight through made a 12MP phone photo into a 55 x 41
+  //     inch page - six times A4 - and the printer sat on "Receiving data" and
+  //     printed nothing. A single photo was fine because the worker converts
+  //     those itself at 300dpi, which is why only merged batches stalled.
+  {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'website', 'pagerange.js'), 'utf8');
+    const start = src.indexOf('var A4_LONG = 842');
+    const branch = src.slice(start, src.indexOf('images++;', start));
+
+    ok(start !== -1, 'the image branch computes a corrected page size');
+    ok(!/addPage\(\[img\.width, img\.height\]\)/.test(src),
+      'pixels are never passed to addPage as if they were points');
+    ok(/A4_LONG = 842, A4_SHORT = 595/.test(branch),
+      'the page is bounded by A4 in either orientation');
+    ok(/Math\.max\(1, pageW\)[\s\S]*Math\.max\(1, pageH\)/.test(branch),
+      'even a 1px thumbnail cannot produce a zero-sized page');
+    ok(/addPage\(\[pageW, pageH\]\)/.test(branch), 'the corrected size is what gets used');
+
+    // The arithmetic, for a real 12MP phone photo and a thumbnail.
+    const fit = (w0, h0) => {
+      const ar = w0 / h0;
+      let pageW, pageH;
+      if (ar >= 1) { pageW = Math.min(842, 595 * ar); pageH = pageW / ar; }
+      else { pageH = Math.min(595, 842 / ar); pageW = pageH * ar; }
+      return [Math.max(1, pageW), Math.max(1, pageH)];
+    };
+    const [pw, ph] = fit(4000, 3000);
+    ok(pw <= 842 && ph <= 595,
+      'a 4000x3000 landscape photo becomes ' + Math.round(pw) + 'x' + Math.round(ph)
+      + 'pt, which fits A4 landscape');
+    ok(Math.abs(pw / ph - 4000 / 3000) < 0.01, 'with its aspect ratio intact');
+    const [tw, th] = fit(1, 1);
+    ok(tw === 595 && th === 595, 'a square photo becomes 595x595pt');
+    const [nw, nh] = fit(1, 1000000);
+    ok(nw >= 1 && nh >= 1 && nw <= 595, 'an extreme portrait still yields a valid page');
+    ok(595 * 842 < (4000 * 3000), 'the old behaviour would have produced a page '
+      + Math.round(4000 / 72) + 'x' + Math.round(3000 / 72) + ' inches');
   }
 
   if (failed) { console.log('  -> ' + failed + ' failed'); process.exit(1); }

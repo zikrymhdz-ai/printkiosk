@@ -244,9 +244,34 @@ window.PKPageRange = (function () {
               // Dispatch on the sniffed format, never on the file name.
               return (real === 'png' ? out.embedPng(buf) : out.embedJpg(buf))
                 .then(function (img) {
-                  // Page in points, from the image's pixel size.
-                  var page = out.addPage([img.width, img.height]);
-                  page.drawImage(img, { x: 0, y: 0, width: img.width, height: img.height });
+                  // pdf-lib's addPage takes POINTS, but img.width/height are
+                  // PIXELS. Passing them straight through turned a 12MP phone
+                  // photo into a 55 x 41 inch page - six times A4 - and the
+                  // printer sat on "Receiving data" and never printed anything.
+                  // A single photo was fine because the worker converts those
+                  // itself at 300dpi, which is why only merged batches stalled.
+                  //
+                  // The page is sized to the image's own aspect ratio, bounded
+                  // by A4 in either orientation, and the image fills it. That is
+                  // always printable - a 1px thumbnail no longer produces a
+                  // 0.24pt page - and a landscape photo gets a landscape sheet
+                  // rather than being squashed onto portrait.
+                  var A4_LONG = 842, A4_SHORT = 595;
+                  var ar = img.width / img.height;
+                  if (!isFinite(ar) || ar <= 0) ar = 1;
+                  var pageW, pageH;
+                  if (ar >= 1) {
+                    pageW = Math.min(A4_LONG, A4_SHORT * ar);
+                    pageH = pageW / ar;
+                  } else {
+                    pageH = Math.min(A4_SHORT, A4_LONG / ar);
+                    pageW = pageH * ar;
+                  }
+                  // Guard against a degenerate page even for a 1-pixel image.
+                  pageW = Math.max(1, pageW);
+                  pageH = Math.max(1, pageH);
+                  var page = out.addPage([pageW, pageH]);
+                  page.drawImage(img, { x: 0, y: 0, width: pageW, height: pageH });
                   images++;
                   pages += 1;
                   sources[sources.length - 1].pages = 1;
