@@ -50,38 +50,40 @@ exports.handler = async (event) => {
 // Kept as its own function so the per-order rule lives in exactly one place:
 // confirmJobPaid() calls it for a single-file order, and the multi-file path
 // calls it once after settling every file.
-async function awardOrderCoins(anchorJob, fileCount) {
-  if (!anchorJob || !anchorJob.user_id) return { ok: true, coinsEarned: 0 };
-
-  const coinsEarned = 1;
+// One coin per FILE printed, not per payment.
+//
+// This was briefly changed to one coin per order on the reasoning that a
+// customer makes a single payment. That was wrong: the reward is for having
+// something printed, so five files earn five coins even when they arrive
+// together in one order and one transfer. Reverted to per file.
+async function awardFileCoin(job) {
+  if (!job || !job.user_id) return 0;
 
   const userResult = await supabaseRequest('GET', '/users', null, {
-    'id': 'eq.' + anchorJob.user_id,
+    'id': 'eq.' + job.user_id,
     'select': 'coins'
   });
 
   if (userResult.error || !userResult.data || userResult.data.length === 0) {
-    return { ok: true, coinsEarned: 0 };
+    return 0;
   }
 
-  const newBalance = (parseInt(userResult.data[0].coins, 10) || 0) + coinsEarned;
+  const newBalance = (parseInt(userResult.data[0].coins, 10) || 0) + 1;
 
-  await supabaseRequest('PATCH', '/users?id=eq.' + anchorJob.user_id, { coins: newBalance });
+  await supabaseRequest('PATCH', '/users?id=eq.' + job.user_id, { coins: newBalance });
   await supabaseRequest('POST', '/coin_transactions', {
-    user_id: anchorJob.user_id,
-    print_job_id: anchorJob.id,
+    user_id: job.user_id,
+    print_job_id: job.id,
     type: 'earned',
-    amount: coinsEarned,
-    description: 'Print order' + (fileCount > 1 ? ' (' + fileCount + ' files)' : '')
-      + ' - ' + anchorJob.job_id,
+    amount: 1,
+    description: 'Print job ' + job.job_id,
     balance_after: newBalance
   });
 
-  return { ok: true, coinsEarned: coinsEarned };
+  return 1;
 }
 
-async function confirmJobPaid(job, method, reference, opts) {
-  const skipCoins = !!(opts && opts.skipCoins);
+async function confirmJobPaid(job, method, reference) {
 
   const paymentResult = await supabaseRequest('POST', '/payments', {
     print_job_id: job.id,
@@ -105,13 +107,9 @@ async function confirmJobPaid(job, method, reference, opts) {
   if (updateResult.error) return { ok: false, error: 'Failed to update job status' };
 
   let coinsEarned = 0;
-  // Coins are credited per ORDER, not per file. A five-file order is one payment
-  // and earns one coin; crediting per job paid out five for a single payment.
-  if (job.user_id && !skipCoins) {
-    const awarded = await awardOrderCoins(job, 1);
-    if (!awarded.ok) return awarded;
-    coinsEarned = awarded.coinsEarned;
-  }
+  // One coin per file. In a multi-file order confirmJobPaid runs once per file,
+  // so each one is credited separately - which is the intended behaviour.
+  coinsEarned = await awardFileCoin(job);
 
   await supabaseRequest('POST', '/alerts', {
     type: 'payment_received',
@@ -256,13 +254,11 @@ async function handleNlsReceived(event) {
   const orderJobs = order.jobs;
 
   if (orderJobs.length > 1) {
-    // Settle every file in the order, crediting coins ONCE for the order rather
-    // than once per file: the customer made one payment, so they earned one
-    // coin. Previously a five-file order paid five coins.
+    // Settle every file in the order. confirmJobPaid credits one coin per file,
+    // so a five-file order earns five coins even though the customer paid once.
+    let coins = 0;
     for (let i = 0; i < orderJobs.length; i++) {
-      const r = await confirmJobPaid(orderJobs[i], 'DuitNow (order)', ref, {
-        skipCoins: true
-      });
+      const r = await confirmJobPaid(orderJobs[i], 'DuitNow (order)', ref);
       if (!r.ok) {
         await supabaseRequest('POST', '/alerts', {
           type: 'payment_received',
@@ -273,14 +269,14 @@ async function handleNlsReceived(event) {
         });
         return json({ success: false, matched: false, reason: 'settle_failed', amount: amount });
       }
+      coins += r.coinsEarned || 0;
     }
-
-    const coins = await awardOrderCoins(orderJobs[0], orderJobs.length);
 
     await supabaseRequest('POST', '/alerts', {
       type: 'payment_received',
       message: 'Payment RM ' + amount.toFixed(2) + ' settled an order of '
-        + orderJobs.length + ' files: ' + orderJobs.map(j => j.job_id).join(', '),
+        + orderJobs.length + ' files: ' + orderJobs.map(j => j.job_id).join(', ')
+        + ' (' + coins + ' coins)',
       severity: 'info',
       is_read: false
     });
@@ -290,7 +286,9 @@ async function handleNlsReceived(event) {
       matched: true,
       order: true,
       job_ids: orderJobs.map(j => j.job_id),
-      amount: amount
+      amount: amount,
+      // One coin per file, so the total scales with what was printed.
+      coins_earned: coins
     });
   }
 

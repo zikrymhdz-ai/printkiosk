@@ -104,15 +104,27 @@ ok(/sealedOrderTotal = sealData\.order_total/.test(memberPage), 'member page use
 ok(/has migration 20261015_orders run\?/i.test(upload),
   'a missing migration is reported clearly rather than silently mis-pricing');
 
-// --- coins are per order, not per file ------------------------------------
-ok(/async function awardOrderCoins/.test(payment), 'the coin rule lives in one function');
-const award = extractFn(payment, 'awardOrderCoins') || '';
-ok(/const coinsEarned = 1/.test(award), 'exactly one coin is credited');
-ok(!/fileCount\s*\*|Math\.min\(.*coinsEarned/.test(award),
-  'the coin is not multiplied by the number of files');
-ok(/skipCoins/.test(payment), 'per-file settlement skips coins so they are not paid repeatedly');
-ok(/awardOrderCoins\(orderJobs\[0\], orderJobs\.length\)/.test(payment),
-  'a multi-file order credits coins exactly once');
+// --- coins are per FILE, not per payment ----------------------------------
+// Corrected: this was briefly changed to one coin per order on the reasoning
+// that the customer makes a single payment. The reward is for having something
+// printed, so five files earn five coins even when they arrive together in one
+// order and one transfer.
+ok(/async function awardFileCoin/.test(payment), 'the coin rule lives in one function');
+const award = extractFn(payment, 'awardFileCoin') || '';
+ok(/\+ 1\b/.test(award), 'exactly one coin is credited');
+ok(!/fileCount|orderFiles|\* order/i.test(award),
+  'the coin is never scaled by the number of files in an order');
+ok(!/skipCoins/.test(payment), 'there is no way to suppress a file\'s coin');
+// Each file of an order must go through confirmJobPaid, which awards its own.
+const loop = payment.match(/for \(let i = 0; i < orderJobs\.length; i\+\+\) \{[\s\S]*?\n\s*\}/);
+ok(!!loop, 'per-file settlement loop found');
+if (loop) {
+  ok(/confirmJobPaid\(orderJobs\[i\]/.test(loop[0]),
+    'every file is settled individually, so every file earns its coin');
+  ok(!/skipCoins/.test(loop[0]), 'the loop does not skip coins');
+}
+ok(/coins \+= r\.coinsEarned \|\| 0/.test(payment),
+  'the order total coins are summed from each file');
 
 if (failed) { console.log('  -> ' + failed + ' failed'); process.exit(1); }
-console.log('  ok      orders settle as one payment and earn one coin');
+console.log('  ok      orders settle as one payment and earn a coin per file');
