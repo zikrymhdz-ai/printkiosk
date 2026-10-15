@@ -402,11 +402,11 @@ async function handleCheckStatus(event) {
   const result = ids.length === 1
     ? await supabaseRequest('GET', '/print_jobs', null, {
       'job_id': 'eq.' + ids[0],
-      'select': 'job_id,status,paid,payment_ref,total_price'
+      'select': 'job_id,status,paid,payment_ref,total_price,order_total,created_at'
     })
     : await supabaseRequest('GET', '/print_jobs', null, {
       'job_id': 'in.(' + ids.join(',') + ')',
-      'select': 'job_id,status,paid,payment_ref,total_price'
+      'select': 'job_id,status,paid,payment_ref,total_price,order_total,created_at'
     });
 
   if (result.error || !result.data || result.data.length === 0) {
@@ -419,6 +419,19 @@ async function handleCheckStatus(event) {
   const allPaid = rows.length === ids.length && rows.every(function (r) { return r.paid === true; });
   const anyUnpaid = rows.some(function (r) { return r.paid !== true; });
 
+  // Why a payment can be invisible, so the kiosk can say so instead of just
+  // spinning. The matcher only considers orders created within
+  // MATCH_WINDOW_MIN, so an order older than that can never be settled by a
+  // payment no matter how correct the amount is - previously the customer was
+  // told to "wait and press Check again" forever, with no way to know why.
+  const oldest = rows.reduce(function (acc, r) {
+    if (!r.created_at) return acc;
+    const t = Date.parse(r.created_at);
+    if (isNaN(t)) return acc;
+    return acc === null || t < acc ? t : acc;
+  }, null);
+  const ageMin = oldest === null ? null : Math.floor((Date.now() - oldest) / 60000);
+
   return json({
     success: true,
     job: rows[0],
@@ -427,7 +440,13 @@ async function handleCheckStatus(event) {
     paid_count: rows.filter(function (r) { return r.paid === true; }).length,
     // true only when every file in the order is settled.
     all_paid: allPaid,
-    pending: anyUnpaid
+    pending: anyUnpaid,
+    // The amount the matcher is actually searching for, using the same rule it
+    // uses, so the kiosk quotes the same figure.
+    expected_amount: Math.round(orderAmountOf(rows) * 100) / 100,
+    order_age_minutes: ageMin,
+    match_window_minutes: MATCH_WINDOW_MIN,
+    outside_match_window: ageMin !== null && ageMin > MATCH_WINDOW_MIN
   });
 }
 

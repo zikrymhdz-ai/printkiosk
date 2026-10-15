@@ -855,7 +855,7 @@ function throttledUnknownLog(distance) {
 /* ===== REMOTE KIOSK CONTROL (admin) ===== */
 // Must match APP_VERSION in netlify/functions/_shared.js. If the deployed
 // version differs, the kiosk reloads itself so it never runs a stale page.
-var KIOSK_APP_VERSION = '2026.10.14-95';
+var KIOSK_APP_VERSION = '2026.10.14-96';
 
 // Latest printer verdict from the backend: can we print, and if not why.
 // Refreshed by loadPrinterStatus() and consulted by printTapped() at the
@@ -2277,6 +2277,11 @@ async function confirmPayment() {
   var deadline = Date.now() + 120000;
   var paidAll = false;
   var coins = 0;
+  // Kept from the last poll so the failure message can be specific. "We cannot
+  // see your payment yet" on its own sent people away while the real reason -
+  // a wrong amount, or an order too old to match - was never stated.
+  var lastAge = null;
+  var outsideWindow = false;
 
   while (Date.now() < deadline) {
     btn.textContent = 'Waiting for payment...';
@@ -2287,6 +2292,10 @@ async function confirmPayment() {
         const r = await fetch(API('payment', 'check-status') + '&job_id=' + encodeURIComponent(jobs[i].job_id));
         const d = await r.json();
         paid = !!(d && d.success && d.job && d.job.paid);
+        if (d && typeof d.order_age_minutes === 'number') {
+          lastAge = d.order_age_minutes;
+          outsideWindow = !!d.outside_match_window;
+        }
       } catch (e) { /* transient: keep looking */ }
       if (!paid) { paidAll = false; break; }
     }
@@ -2303,10 +2312,18 @@ async function confirmPayment() {
   } else {
     btn.disabled = false; btn.textContent = 'Check again';
     var tip = document.getElementById('payWaitingTip');
+    var shown = orderAmountOf(jobs).toFixed(2);
     if (tip) {
       tip.style.display = 'block';
-      tip.textContent = 'We cannot see your payment yet. If you have already paid, '
-        + 'wait a moment and press "Check again". Otherwise please pay the exact amount shown above.';
+      if (outsideWindow) {
+        tip.textContent = 'We still cannot see a payment of RM ' + shown + '. This order is '
+          + lastAge + ' minutes old, and a payment can only be matched to an order for the first '
+          + '60 minutes. Please ask a member of staff - your payment is not lost.';
+      } else {
+        tip.textContent = 'We cannot see your payment yet. We are looking for exactly RM '
+          + shown + '. If you have already paid, wait a moment and press "Check again". '
+          + 'Otherwise please pay that exact amount.';
+      }
     }
   }
 }
