@@ -88,7 +88,7 @@
       </div>
       <input type="file" id="phoneFile" accept=".pdf,.doc,.docx,.jpg,.jpeg,.png" multiple style="display:none">
       <div id="phoneFileList" style="margin-top:12px; display:flex; flex-direction:column; gap:8px;"></div>
-      <button class="btn btn-primary btn-block btn-lg" style="margin-top:16px;" onclick="goStep2()" id="continueStep1" id="step1Btn" disabled>Next -- Settings</button>
+      <button class="btn btn-primary btn-block btn-lg" style="margin-top:16px;" onclick="goStep2()" id="step1Btn" disabled>Next &mdash; Settings</button>
     </div>
 
     <!-- Step 2: Settings -->
@@ -319,13 +319,40 @@ hint.textContent = 'PDF, DOC, DOCX, JPG, PNG - 20MB max - one file. '
 + 'Sign in to send several files together.';
 }
 
-var btn = document.getElementById('continueStep1');
+var btn = document.getElementById('step1Btn');
 if (btn) btn.style.display = 'none';
 
 // No way back to file selection: a guest has already chosen their one file and
 // the picker there offers nothing they are allowed to use.
 var back = document.getElementById('backToStep1');
 if (back) back.style.display = 'none';
+}
+
+// A guest's single file is final for this page.
+//
+// Everything that could add, change or remove it is switched off once chosen:
+// the upload zone stops responding to taps and drops, the hidden file input is
+// disabled, and the per-file Remove button is not rendered. Without all three,
+// a guest could tap the zone again, or remove their file and add another, and
+// end up with a second file the server would reject as a second order.
+var guestFileChosen = false;
+
+function lockGuestFilePicker() {
+  guestFileChosen = true;
+
+  var zone = document.getElementById('uploadZoneDrop');
+  if (zone) {
+    zone.style.pointerEvents = 'none';
+    zone.style.cursor = 'default';
+    zone.style.opacity = '0.5';
+    var t = zone.querySelector('.upload-zone-text');
+    if (t) t.textContent = 'File added';
+    var h = zone.querySelector('.upload-zone-hint');
+    if (h) h.textContent = 'Guests can send one file. Sign in to send several.';
+  }
+
+  var input = document.getElementById('phoneFile');
+  if (input) input.disabled = true;
 }
 
 function getSelectedItem() {
@@ -365,6 +392,10 @@ function currentOrderId() {
 }
 
 function addFiles(files) {
+  // Belt and braces: the zone is inert after a guest's file is chosen, and this
+  // refuses regardless of how addFiles was reached.
+  if (guestFileChosen && uploadPageIsGuest()) return;
+
   var added = 0;
   var errs = '';
   var limit = uploadPageIsGuest() ? MAX_FILES_GUEST : MAX_ORDER_FILES;
@@ -392,14 +423,15 @@ if (errs) alert('Some files were skipped:\n' + errs);
 if (added) generateThumbnails();
 renderFileList();
 
-// A guest has exactly one file, so there is nothing to add and nothing to
-// choose: move them straight on to step 2 instead of making them press
-// Continue on a page that only ever holds one file.
+// A guest has exactly one file. Lock the picker first, then move them
+// straight on to step 2 rather than making them press Continue on a page that
+// can only ever hold one file.
 if (added && uploadPageIsGuest()) {
-setTimeout(function() {
-if (bulkFiles.length && !document.getElementById('step1').classList.contains('active')) return;
-goStep2();
-}, 350);
+  lockGuestFilePicker();
+  setTimeout(function() {
+    if (bulkFiles.length && !document.getElementById('step1').classList.contains('active')) return;
+    goStep2();
+  }, 350);
 }
 }
 
@@ -417,6 +449,7 @@ function generateThumbnails() {
 }
 
 function removeFile(idx) {
+  if (uploadPageIsGuest()) return;
   bulkFiles.splice(idx, 1);
   if (selectedFileIndex >= bulkFiles.length) selectedFileIndex = Math.max(0, bulkFiles.length - 1);
   renderFileList();
@@ -433,23 +466,34 @@ function renderFileList() {
     return '<div style="display:flex; align-items:center; gap:10px; padding:10px 12px; background:var(--success-light); border-radius:var(--radius); border:1px solid #bbf7d0;">' +
       '<span style="font-size:13px; font-weight:600; background:var(--success); color:white; border-radius:50%; width:20px; height:20px; display:inline-flex; align-items:center; justify-content:center; flex-shrink:0;">' + (i + 1) + '</span>' +
       (item.thumb ? '<img src="' + item.thumb + '" style="width:32px; height:32px; object-fit:cover; border-radius:6px; flex-shrink:0;">' : '') +
-      '<div style="flex:1; min-width:0;">' +
-        '<p style="font-size:13px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">' + f.name + '</p>' +
-        '<p class="text-xs text-muted">' + (f.size / 1024 / 1024).toFixed(2) + ' MB</p>' +
+'<div style="flex:1; min-width:0;">' +
+      '<p style="font-size:13px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white' +
+      '<p class="text-xs text-muted">' + (f.size / 1024 / 1024).toFixed(2) + ' MB</p>' +
       '</div>' +
-      '<button onclick="removeFile(' + i + ')" aria-label="Remove" style="background:none; border:none; cursor:pointer; color:var(--gray-400); padding:4px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>' +
+      // A guest's one file is final: no Remove, because removing it and adding
+      // another would produce a second file the server treats as a second order.
+      (uploadPageIsGuest() ? '' : '<button onclick="removeFile(' + i + ')" aria-label="Remove" style="background:none; border:'),
     '</div>';
-  }).join('');
+}).join('');
   document.getElementById('step1Btn').disabled = false;
   if (info) info.style.display = 'none';
 }
 
-document.getElementById('uploadZoneDrop').addEventListener('dragover', function(e) { e.preventDefault(); });
+// Every route into addFiles checks this first: tap, drag-drop, or a stale
+// programmatic call.
+document.getElementById('uploadZoneDrop').addEventListener('dragover', function(e) {
+  if (guestFileChosen) return;
+  e.preventDefault();
+});
 document.getElementById('uploadZoneDrop').addEventListener('drop', function(e) {
   e.preventDefault();
+  if (guestFileChosen) return;
   addFiles(Array.prototype.slice.call(e.dataTransfer.files || []));
 });
-document.getElementById('uploadZoneDrop').addEventListener('click', function() { document.getElementById('phoneFile').click(); });
+document.getElementById('uploadZoneDrop').addEventListener('click', function() {
+  if (guestFileChosen) return;
+  document.getElementById('phoneFile').click();
+});
 
 function goStep1() {
   document.querySelectorAll('.step').forEach(s => s.classList.remove('active'));

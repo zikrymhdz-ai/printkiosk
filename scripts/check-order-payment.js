@@ -195,8 +195,8 @@ ok(/if \(added && uploadPageIsGuest\(\)\)/.test(guestPage),
   'choosing their file advances a guest to step 2 automatically');
 ok(/goStep2\(\);[\s\S]{0,80}\}, 350\)/.test(guestPage),
   'the automatic advance happens after the thumbnail renders');
-ok(guestPage.includes('id="continueStep1"') && /btn\.style\.display = 'none'/.test(guestPage),
-  "a guest's Continue button is hidden");
+ok(guestPage.includes("getElementById('step1Btn')") && /btn\.style\.display = 'none'/.test(guestPage),
+  "a guest's Next button is hidden");
 ok(guestPage.includes('id="backToStep1"') && /back\.style\.display = 'none'/.test(guestPage),
   'a guest cannot go back to file selection');
 // Members must be untouched by all of this.
@@ -281,6 +281,26 @@ ok(/sealed\.length === jobs\.length/.test(payment),
   ok(Math.abs(sealed[0].order_total - sumTotals) > 0.005,
     'so the two differ by exactly the amount that caused the miss');
 }
+
+// --- a guest's one file is final -------------------------------------------
+ok(/function lockGuestFilePicker\(\)/.test(guestPage), 'the picker can be locked');
+ok(/zone\.style\.pointerEvents = 'none'/.test(guestPage), 'the upload zone stops accepting taps');
+ok(/input\.disabled = true/.test(guestPage), 'the hidden file input is disabled');
+ok(/if \(guestFileChosen\) return;/.test(guestPage),
+  'the click, drop and dragover handlers all refuse once locked');
+ok(/if \(guestFileChosen && uploadPageIsGuest\(\)\) return;/.test(guestPage),
+  'addFiles refuses regardless of how it was reached');
+ok(/function removeFile\(idx\) \{\s*\n\s*if \(uploadPageIsGuest\(\)\) return;/.test(guestPage),
+  'a guest cannot remove their file and add another');
+ok(guestPage.includes("uploadPageIsGuest() ? '' : '<button onclick=\"removeFile("),
+  'the Remove button is not rendered for a guest at all');
+ok(/File added/.test(guestPage), 'the zone says the file has been added');
+ok(/Guests can send one file/.test(guestPage), 'and explains why another is not possible');
+
+// The duplicate id introduced earlier made getElementById('step1Btn') return
+// null, which threw inside renderFileList whenever the list was empty.
+ok(!/id="[^"]+"[^>]*\sid="/.test(guestPage), 'no element carries two id attributes');
+ok(guestPage.includes('id="step1Btn"'), 'the Next button keeps its original id');
 
 if (failed) { console.log('  -> ' + failed + ' failed'); process.exit(1); }
 console.log('  ok      orders settle as one payment and earn a coin per file');
