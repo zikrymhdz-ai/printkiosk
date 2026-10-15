@@ -174,7 +174,10 @@ async function handleNlsReceived(event) {
   const jobsResult = await supabaseRequest('GET', '/print_jobs', null, {
     'paid': 'eq.false',
     'status': 'eq.pending',
-    'select': 'id,job_id,user_id,total_price,file_name,created_at,page_spec,pages,copies,color_mode',
+    // session_id is needed to group GUEST jobs by owner. Without it a guest's
+      // files all fell into one shared bucket and could be combined across
+      // unrelated customers.
+      'select': 'id,job_id,user_id,session_id,total_price,file_name,created_at,page_spec,pages,copies,color_mode',
     'created_at': 'gte.' + cutoff,
     'order': 'created_at.desc'
   });
@@ -184,15 +187,86 @@ async function handleNlsReceived(event) {
   // total distinct, so the amount is the strongest signal we have.
   const matches = jobs.filter(j => Math.abs(parseFloat(j.total_price) - amount) < 0.005);
 
-  if (!matches.length) {
+if (!matches.length) {
+  // No single job carries this total. Try a bundle: the customer may have
+  // uploaded several files and paid the combined amount once.
+  const amountCents = toCents(amount);
+  const grouped = {};
+  for (const j of jobs) {
+    const cents = toCents(j.total_price);
+    if (cents <= 0) continue;
+    const k = ownerKey(j);
+    (grouped[k] = grouped[k] || []).push({ job: j, cents: cents });
+  }
+
+  let bundles = [];
+  for (const k of Object.keys(grouped)) {
+    bundles = bundles.concat(findBundles(grouped[k], amountCents));
+  }
+
+  if (bundles.length === 1) {
+    // Exactly one reading - settle every file in it.
+    const bundle = bundles[0];
+    const total = bundle.reduce(function (s, j) { return s + parseFloat(j.total_price); }, 0);
+
+    for (const j of bundle) {
+      const r = await confirmJobPaid(j, 'DuitNow (multi-file)', ref);
+      if (!r.ok) {
+        await supabaseRequest('POST', '/alerts', {
+          type: 'payment_received',
+          message: 'Multi-file payment for ' + bundle.map(x => x.job_id).join(' + ')
+            + ' failed partway: ' + r.error + '. Check these jobs by hand.',
+          severity: 'error',
+          is_read: false
+        });
+        return json({ success: false, matched: false, reason: 'settle_failed', amount: amount });
+      }
+    }
+
     await supabaseRequest('POST', '/alerts', {
       type: 'payment_received',
-      message: 'Payment detected RM ' + amount.toFixed(2) + ' (REF ' + ref + ' or ' + ts + ') but no matching pending job',
+      message: 'Payment RM ' + total.toFixed(2) + ' settled ' + bundle.length + ' files: '
+        + bundle.map(j => j.job_id).join(', '),
       severity: 'info',
       is_read: false
     });
-    return json({ success: false, matched: false, reason: 'no_match', amount });
+
+    return json({
+      success: true,
+      matched: true,
+      multi: true,
+      job_ids: bundle.map(j => j.job_id),
+      amount: amount
+    });
   }
+
+  if (bundles.length > 1) {
+    // More than one combination of files adds up to this payment. Do not guess.
+    await supabaseRequest('POST', '/payment_review_queue', {
+      amount: amount,
+      payer_text: rawText,
+      notification_ref: ref,
+      reason: bundles.length + ' different file combinations each total RM '
+        + amount.toFixed(2) + ' - staff must decide which documents this paid for'
+    });
+    await supabaseRequest('POST', '/alerts', {
+      type: 'payment_received',
+      message: 'Payment detected RM ' + amount.toFixed(2) + ' (REF ' + ref + ') matches '
+        + bundles.length + ' different file combinations - parked for review',
+      severity: 'warning',
+      is_read: false
+    });
+    return json({ success: false, matched: false, reason: 'ambiguous_bundle', amount: amount });
+  }
+
+  await supabaseRequest('POST', '/alerts', {
+    type: 'payment_received',
+    message: 'Payment detected RM ' + amount.toFixed(2) + ' (REF ' + ref + ' or ' + ts + ') but no matching job or file combination was found',
+    severity: 'info',
+    is_read: false
+  });
+  return json({ success: false, matched: false, reason: 'no_match', amount });
+}
 
   let job = matches[0];
   let disambiguatedBy = 'amount';
@@ -403,18 +477,110 @@ async function handleCheckStatus(event) {
 
   if (!jobId) return err('Job ID required');
 
-  const result = await supabaseRequest('GET', '/print_jobs', null, {
-    'job_id': 'eq.' + jobId,
-    'select': 'status,paid,payment_ref,total_price'
-  });
+  // A multi-file upload sends its ids comma-joined ("PRN-A,PRN-B"). This used
+  // to build 'eq.' + jobId, so PostgREST compared that whole string against a
+  // single job_id column and matched nothing - every poll of a two-file order
+  // 404'd and the payment screen never advanced, even once the money landed.
+  const ids = String(jobId).split(',').map(function (s) { return s.trim(); })
+    .filter(Boolean);
+  if (!ids.length) return err('Job ID required');
+
+  const result = ids.length === 1
+    ? await supabaseRequest('GET', '/print_jobs', null, {
+      'job_id': 'eq.' + ids[0],
+      'select': 'job_id,status,paid,payment_ref,total_price'
+    })
+    : await supabaseRequest('GET', '/print_jobs', null, {
+      'job_id': 'in.(' + ids.join(',') + ')',
+      'select': 'job_id,status,paid,payment_ref,total_price'
+    });
 
   if (result.error || !result.data || result.data.length === 0) {
     return err('Print job not found', 404);
   }
 
-  return json({ success: true, job: result.data[0] });
+  // Report the whole order, not just the first row. The order is settled when
+  // every file is paid, so the client can stop polling.
+  const rows = result.data;
+  const allPaid = rows.length === ids.length && rows.every(function (r) { return r.paid === true; });
+  const anyUnpaid = rows.some(function (r) { return r.paid !== true; });
+
+  return json({
+    success: true,
+    job: rows[0],
+    jobs: rows,
+    total_jobs: ids.length,
+    paid_count: rows.filter(function (r) { return r.paid === true; }).length,
+    // true only when every file in the order is settled.
+    all_paid: allPaid,
+    pending: anyUnpaid
+  });
 }
 
+module.exports.confirmJobPaid = confirmJobPaid;
 // Exported so the admin dashboard can confirm a parked (ambiguous) payment
 // without duplicating the coins/job/settlement logic.
-module.exports.confirmJobPaid = confirmJobPaid;
+// ---------------------------------------------------------------------------
+// Multi-file orders
+//
+// Uploading two files creates two separate print_jobs, but the customer pays
+// ONCE for the combined total. The matcher below compares the payment amount to
+// a single job's total_price, so a two-file payment of RM1.52 matched nothing at
+// all: no job has that total, and the payment was reported as "no_match" while
+// the customer stood at the kiosk.
+//
+// So a payment may also be matched against a SUBSET of jobs whose totals sum to
+// it. Constraints, all deliberate:
+//
+//   - only within one session/user, so one customer's jobs can never be
+//     combined with another's to hit the right number
+//   - only jobs already pending and unpaid inside MATCH_WINDOW_MIN
+//   - only exact to the cent, so coincidence is not a factor
+//   - a maximum of 5 files, matching what the UI will actually let you upload
+//
+// If more than one subset sums to the same amount the result is genuinely
+// ambiguous, and guessing would credit the wrong documents. Those are parked
+// for staff review instead.
+const MAX_BUNDLE_FILES = 5;
+const CENT = 0.005;
+
+// Exact subset search over integer cents, so floating point cannot make
+// 0.41 + 1.11 miss 1.52.
+function toCents(v) {
+  return Math.round((parseFloat(v) || 0) * 100);
+}
+
+function findBundles(candidates, amountCents) {
+  const found = [];
+  const target = amountCents;
+
+  function walk(start, remaining, chosen) {
+    if (remaining === 0) {
+      found.push(chosen.slice());
+      return;
+    }
+    if (chosen.length >= MAX_BUNDLE_FILES) return;
+    if (remaining < 0) return;
+
+    for (let i = start; i < candidates.length; i++) {
+      const c = candidates[i];
+      if (c.cents > remaining) continue; // totals are positive
+      chosen.push(c.job);
+      walk(i + 1, remaining - c.cents, chosen);
+      chosen.pop();
+      if (found.length > 20) return; // pathological input guard
+    }
+  }
+
+  walk(0, target, []);
+  return found;
+}
+
+// Group pending jobs by owner so a payment can only ever combine one
+// customer's documents.
+function ownerKey(j) {
+  return j.user_id ? 'u:' + j.user_id : 's:' + (j.session_id || '?');
+}
+
+module.exports.findBundles = findBundles;
+module.exports.toCents = toCents;
