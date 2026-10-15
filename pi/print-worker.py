@@ -389,6 +389,18 @@ def read_supplies():
             CONFIG["printer_uri"], line), None
 
     text = (proc.stdout or "") + "\n" + (proc.stderr or "")
+
+    # ipptool exits 0 even when it cannot parse the test file, so its exit
+    # status alone does not mean the printer answered. When the output contains
+    # no attribute lines at all, the request never completed - and reporting
+    # that as "reachable" is what made a request that was never sent look like
+    # a healthy printer with missing toner data.
+    if not re.search(r"^\s*\[\d+\]", text, re.MULTILINE):
+        detail = (proc.stderr or proc.stdout or "").strip().replace("\n", " | ")[:200]
+        return None, False, (
+            "ipptool returned no attributes - the request did not complete. "
+            + (detail or "(no output)")
+        ), None
     # ipptool writes the attribute dump to stderr, not stdout. Parsing only
     # stdout meant this saw a single echoed argument
     # ('"/tmp/pk-get-printer-attributes.test":'), found no toner attributes in
@@ -427,22 +439,44 @@ def shutil_which(name):
 
 
 def get_printer_attrs_test():
+    """Write a valid ipptool request for Get-Printer-Attributes and return its path.
+
+    Two defects made this file unusable, and both produced the same misleading
+    symptom - "reachable, but no toner attributes":
+
+    1. The values used the RESPONSE form "value-charset" / "value-uri". In a
+       request they must be the bare syntax name ("charset", "uri"). ipptool
+       refused to parse the file and said:
+
+           Unexpected token ATTRIBUTE seen on line 4
+
+       ...then still exited 0, so we concluded the printer had been reached and
+       answered, when the request had never been sent at all.
+
+    2. Without "requested-attributes all", a printer may return only its
+       mandatory attributes, which excludes the toner levels and the model.
+
+    The file is rewritten on every worker start rather than reused if present,
+    because the broken version was already cached in the temp directory and
+    simply re-validating its existence would keep using it.
+    """
     p = os.path.join(tempfile.gettempdir(), "pk-get-printer-attributes.test")
-    if not os.path.exists(p):
-        with open(p, "w") as f:
-            f.write(
-                '{\n'
-                '    OPERATION Get-Printer-Attributes\n'
-                '    GROUP operation-attributes-tag\n'
-                '    ATTRIBUTE charset\n'
-                '        value-charset "utf-8"\n'
-                '    ATTRIBUTE naturalLanguage\n'
-                '        value-naturalLanguage "en"\n'
-                '    ATTRIBUTE uri\n'
-                '        value-uri "$uri"\n'
-                '    STATUS successful-ok\n'
-                '}\n'
-            )
+    with open(p, "w") as f:
+        f.write(
+            '{\n'
+            '    OPERATION Get-Printer-Attributes\n'
+            '    GROUP operation-attributes-tag\n'
+            '    ATTRIBUTE charset\n'
+            '        charset "utf-8"\n'
+            '    ATTRIBUTE naturalLanguage\n'
+            '        naturalLanguage "en"\n'
+            '    ATTRIBUTE uri\n'
+            '        uri "$uri"\n'
+            '    ATTRIBUTE requested-attributes\n'
+            '        requested-attributes all\n'
+            '    STATUS successful-ok\n'
+            '}\n'
+        )
     return p
 
 

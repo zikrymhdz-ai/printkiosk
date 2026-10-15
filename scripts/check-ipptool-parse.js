@@ -149,5 +149,36 @@ ok(worker.includes('[:600]'),
 ok(/Got: /.test(worker),
   'the failure message includes what ipptool actually returned');
 
+// --- the generated ipptool request must be valid ---------------------------
+// This was the real cause: the test file used the RESPONSE form "value-charset"
+// instead of the request form "charset". ipptool refused to parse it
+// ("Unexpected token ATTRIBUTE seen on line 4"), never sent the request, and
+// still exited 0 - so the worker reported "reachable" while asking nothing.
+const tf = src.match(/def get_printer_attrs_test\(\):[\s\S]*?return p/);
+ok(!!tf, 'get_printer_attrs_test found');
+if (tf) {
+  const body = tf[0];
+  // Only the payload that is written matters. The docstring deliberately names
+  // the bad forms to explain the bug, and an assertion that scanned it would
+  // fail on its own explanation.
+  const write = body.match(/f\.write\([\s\S]*?\)\s*\n/);
+  ok(!!write, 'the generated file payload found');
+  const payload = write ? write[0] : '';
+  ok(!/value-charset|value-uri|value-naturalLanguage/.test(payload),
+    'no response-style "value-*" used in a request');
+  ok(payload.includes('charset "utf-8"'),
+    'charset uses the request syntax');
+  ok(payload.includes('requested-attributes all'),
+    'requests all attributes, so toner levels and model are actually returned');
+  ok(!/if not os\.path\.exists\(p\)/.test(body),
+    'the file is rewritten on every start, not reused from a stale temp copy');
+}
+
+// A completed request must contain attribute lines; without this check an
+// exit-0 parse failure was reported as a reachable printer.
+ok(/re\.search\(r"\^\\s\*\\\[\\d\+\]\/", text, re\.MULTILINE\)/.test(worker)
+   || worker.includes('ipptool returned no attributes'),
+  'a run with no attribute lines is not reported as reachable');
+
 if (failed) { console.log('  -> ' + failed + ' failed'); process.exit(1); }
 console.log('  ok      ipptool output parses in both shapes');
