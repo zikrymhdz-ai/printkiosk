@@ -1,13 +1,31 @@
 # Cache rules for the behaviour-carrying scripts and pages.
 #
-# Without these, a browser (or the CDN) can keep serving an OLD pagerange.js
-# after a deploy. That is not a cosmetic problem: an older pagerange.js has no
-# combineByType(), so the upload page threw a raw TypeError and the order was
-# lost - which looked exactly like the merge feature being broken.
+# Without these, a browser (or the CDN) can keep serving an OLD copy after a
+# deploy. That is not a cosmetic problem:
 #
-# The pages also stamp ?v=<app version> on these files, so a new deploy always
-# requests a new URL. These headers cover the case where the stamped URL is
-# requested anyway.
+#   - an older pagerange.js has no combineByType(), so an upload page threw a
+#     raw TypeError and the order was lost;
+#   - an older kiosk summed per-job total_price while the payment matcher waits
+#     for order_total, so the kiosk quoted RM1.32 against a waiting RM1.31 and
+#     the payment was never detected.
+#
+# The kiosk reloads itself when its version does not match the server, but it
+# will only do that once every ten minutes - and if the reload is served from
+# cache it gets the SAME old page, then the cooldown stops it trying again. So a
+# stale kiosk can sit on the broken build for ten minutes with nothing on
+# screen to say why.
+#
+# The pages also stamp ?v=<app version> on their scripts, so a new deploy always
+# requests a new URL. These headers cover the case where the stamped URL, or an
+# HTML page itself, is requested again anyway.
+
+# The kiosk is a long-lived unattended screen: it must never be served a stale
+# build, or it keeps whatever bug it had until the cooldown expires.
+/kiosk/walkin.html
+  Cache-Control: public, max-age=0, must-revalidate
+
+/kiosk/*
+  Cache-Control: public, max-age=0, must-revalidate
 
 /pagerange.js
   Cache-Control: public, max-age=0, must-revalidate
