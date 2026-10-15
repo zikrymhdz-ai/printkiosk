@@ -849,7 +849,7 @@ function throttledUnknownLog(distance) {
 /* ===== REMOTE KIOSK CONTROL (admin) ===== */
 // Must match APP_VERSION in netlify/functions/_shared.js. If the deployed
 // version differs, the kiosk reloads itself so it never runs a stale page.
-var KIOSK_APP_VERSION = '2026.10.14-63';
+var KIOSK_APP_VERSION = '2026.10.14-64';
 
 // Latest printer verdict from the backend: can we print, and if not why.
 // Refreshed by loadPrinterStatus() and consulted by printTapped() at the
@@ -1407,8 +1407,14 @@ function loadPrinterStatus() {
         line.textContent = 'Online - ready to print';
       } else if (status === 'offline' || status === 'unknown') {
         dot.className = 'dot dot-red';
-        line.textContent = status === 'unknown' ? 'Status unknown - printer not reporting'
-          : 'Offline - please see staff';
+        // Say WHY rather than only that it is unknown. The worker knows the
+        // concrete reason - "ipptool not installed" versus "connection
+        // refused" need different fixes, and neither could be told apart
+        // before.
+        var why = d.printer_error || p.printer_error;
+        line.textContent = status === 'unknown'
+          ? ('Cannot reach printer' + (why ? ': ' + why : ' - printer not reporting'))
+          : ('Offline - please see staff' + (why ? ' (' + why + ')' : ''));
       } else if (status === 'low') {
         dot.className = 'dot dot-yellow';
         line.textContent = 'Low on toner - please see staff';

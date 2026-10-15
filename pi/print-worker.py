@@ -343,8 +343,13 @@ def read_supplies():
 
     if proc.returncode != 0:
         detail = (proc.stderr or proc.stdout or "").strip().splitlines()
-        return None, False, "ipptool exit %d: %s" % (
-            proc.returncode, detail[0] if detail else "no output")
+        line = detail[0] if detail else "no output"
+        # Name the URI that failed. ipptool's own error ("connect: Connection
+        # refused") is identical whether the printer is off, on a different
+        # subnet, or the queue still points at the address it had before it was
+        # moved, and the URI is the only thing that distinguishes them.
+        return None, False, "cannot reach %s - %s" % (
+            CONFIG["printer_uri"], line)
 
     text = proc.stdout
     levels = {}

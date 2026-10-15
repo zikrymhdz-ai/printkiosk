@@ -84,6 +84,7 @@
             <p class="text-sm" style="margin-bottom:4px;">Status: <span id="printerStatusBadge" class="badge badge-success">Online</span></p>
             <p class="text-xs text-muted" style="margin-bottom:12px;" id="printerFreshness">Last checked: &mdash;</p>
             <div id="printerAlertNote" class="hidden" style="margin-bottom:12px;padding:10px 12px;border-radius:8px;background:#fef2f2;border:1px solid #fecaca;color:#991b1b;font-size:13px;font-weight:600;"></div>
+            <div id="printerDiagNote" class="hidden" style="margin-bottom:12px;padding:10px 12px;border-radius:8px;background:#fffbeb;border:1px solid #fcd34d;color:#92400e;font-size:12px;font-family:monospace;word-break:break-word;"></div>
             <div style="margin-bottom:12px;">
               <div class="flex-between" style="margin-bottom:4px;"><span class="text-xs text-muted">Paper Level <span class="text-muted" style="font-style:italic;">(manual)</span></span><span class="text-xs" id="paperLevelText">Unknown</span></div>
               <div class="progress-bar"><div class="progress-fill" id="paperLevelBar" style="width:100%"></div></div>
@@ -446,6 +447,11 @@ function loadAll() {
           const el = document.getElementById('printerAlertNote');
           if (el) { el.classList.remove('hidden'); el.textContent = 'CUPS reports: ' + data.printer_alert; }
         }
+        // Show the concrete failure reason and the target being polled, so
+        // "not reporting" can be told apart from "pointing at the wrong
+        // address" - which is the normal state right after a move.
+        window.__printerDiag = { error: data.printer_error, target: data.printer_target };
+        updatePrinterDiag();
         document.getElementById('alertCount').textContent = s.unread_alerts || '';
       }
     }).catch(() => {});
@@ -1082,6 +1088,20 @@ toner_black: black,
 // Paper left is derived from completed jobs, so a refill is recorded by moving
 // the marker rather than typing a percentage. This is the honest way to reset
 // it: the next reading counts only jobs printed after this moment.
+function updatePrinterDiag() {
+  const el = document.getElementById('printerDiagNote');
+  if (!el) return;
+  const d = window.__printerDiag || {};
+  if (d.error) {
+    let msg = 'Not reporting. Worker asked the printer and got: ' + d.error;
+    if (d.target) msg += '  (polling queue: ' + d.target + ')';
+    el.classList.remove('hidden');
+    el.textContent = msg;
+  } else {
+    el.classList.add('hidden');
+  }
+}
+
 async function refillPaper() {
   if (!confirm('Record that the paper tray has been refilled?\n\nThe remaining count will restart from the tray capacity.')) return;
   try {

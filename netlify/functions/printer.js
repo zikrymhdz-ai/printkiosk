@@ -273,6 +273,19 @@ async function reportSupplies(event) {
     // so the kiosk kept saying "Online" while the printer was unusable. Empty
     // string clears a previous alert once the printer is healthy again.
     printer_alert: String(body.alert || '').slice(0, 160),
+    // WHY the read failed. The worker has always sent this; it used to be
+    // discarded here, which left "Status unknown" as the only thing anyone
+    // could see. "ipptool not installed" and "connection refused" need
+    // completely different fixes, and neither could be told apart.
+    // Empty on success so a cleared printer does not keep a stale reason.
+    printer_error: body.error ? String(body.error).slice(0, 200) : null,
+    // Where the worker is pointed, so "unreachable" can be told apart from
+    // "pointing at the wrong address" after a move.
+    printer_target: String(body.printer_name || '').slice(0, 80)
+  };
+
+  // Never overwrite a known target with an empty one.
+  if (!row.printer_target) delete row.printer_target;
     // Recorded even when the read failed, so "checked recently but
     // unreachable" is distinguishable from "never checked".
     last_checked: new Date().toISOString()
@@ -538,6 +551,10 @@ async function getPrinterStatus() {
     printer: row,
     paper: paper,
     printer_alert: alert,
+    // The concrete failure reason, so "Status unknown" can be replaced by
+    // something actionable rather than being the final word.
+    printer_error: row.printer_error || null,
+    printer_target: row.printer_target || null,
     can_print: canPrint,
     blocked_reason: blockedReason,
     warn: warn,
