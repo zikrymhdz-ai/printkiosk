@@ -30,12 +30,20 @@ sync_from_live() {
   command -v curl >/dev/null 2>&1 || { log "curl not found; using local files"; return 0; }
   local tmp
   local ok=0
-  for f in kiosk/walkin.html kiosk/kiosk-serve.py kiosk/README-PI.md frontend_config.js; do
+  # kiosk/walkin.html is the page; frontend_config.js is read by every page.
+  # assets/logo.svg is the header logo walkin.html references, so it has to
+  # travel with them: a kiosk that syncs the HTML but not the image it points at
+  # renders a broken image forever, and the fault looks like a missing asset
+  # rather than a file the sync never knew to fetch.
+  for f in kiosk/walkin.html kiosk/kiosk-serve.py kiosk/README-PI.md frontend_config.js assets/logo.svg; do
     tmp="${APP_DIR}/$(basename "$f").new.$$"
     if curl -fsS --max-time 20 "${LIVE_BASE}/${f}" -o "$tmp" 2>/dev/null && [ -s "$tmp" ]; then
       if ! cmp -s "$tmp" "${APP_DIR}/${f}" 2>/dev/null; then
         # Write atomically: the kiosk serves this file over HTTP, and a partially
         # written walkin.html would be fetched by a reload and fail to parse.
+        # The parent directory has to exist first, since these paths are nested
+        # and a fresh install has no assets/ directory.
+        mkdir -p "$(dirname "${APP_DIR}/${f}")" 2>/dev/null
         if mv -f "$tmp" "${APP_DIR}/${f}" 2>/dev/null; then
           log "updated ${f} from live site"
           # Only for the kiosk page: a truncated copy that still parses is worse
