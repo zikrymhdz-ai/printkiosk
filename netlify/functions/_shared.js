@@ -583,6 +583,46 @@ function safeEqual(a, b) {
   try { return crypto.timingSafeEqual(x, y); } catch (e) { return false; }
 }
 
+// Used only when the worker has never reported its interval, so the very first
+// reading still gets judged against something. Matches the worker's old default.
+const DEFAULT_POLL_SECONDS = 300;
+
+// Is this reading still telling us anything about the printer RIGHT NOW?
+//
+// Lives here, not in one caller's file, because two callers needed it and the
+// dashboard and the kiosk disagreeing about whether a printer is reachable is
+// worse than either being wrong alone. The kiosk hardcoded its own 15-minute
+// window while the worker polled every 60s, so the kiosk would have said
+// "Online - ready to print" for a quarter of an hour after the worker died.
+//
+// Freshness used to be decided in the browser with no relationship to how often
+// the worker actually polls, and nothing recorded the expected cadence. The
+// worker now reports its own interval (poll_interval) and the window is derived
+// from that.
+//
+// Decided on the server so no page has to re-derive the rule.
+function freshnessOf(row) {
+  const every = Math.max(1, parseInt(row && row.poll_interval, 10) || DEFAULT_POLL_SECONDS) * 1000;
+  const checked = row && row.last_checked ? Date.parse(row.last_checked) : NaN;
+
+  if (!Number.isFinite(checked)) {
+    return { checked: false, age_seconds: null, stale: true, stale_after_seconds: Math.round(every * 2.5 / 1000) };
+  }
+
+  const age = Date.now() - checked;
+  // Two and a half missed polls. One missed poll is ordinary jitter - a poll
+  // landing a few seconds late must not paint a working printer red - but three
+  // consecutive silent polls means the worker is not reporting at all, and the
+  // stored reading is history rather than news.
+  const limit = every * 2.5;
+  return {
+    checked: true,
+    age_seconds: Math.round(age / 1000),
+    stale: age > limit,
+    stale_after_seconds: Math.round(limit / 1000)
+  };
+}
+
 module.exports = {
   SUPABASE_URL, SUPABASE_KEY, SUPABASE_REST_URL,
   SESSION_DURATION, PRICE_BW_PER_PAGE, PRICE_COLOR_PER_PAGE,
@@ -591,7 +631,7 @@ module.exports = {
   SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM_NAME,
   VERIFICATION_CODE_LENGTH, VERIFICATION_CODE_TTL,
   corsHeaders, json, err, supabaseRequest, generateJobId, safeEqual,
-  generateSessionToken, validateSession, calculatePrice, assignUniqueMatchAmount, createJobWithUniqueFee, assignUniqueOrderTotal, pickFreeOffset, MAX_MATCH_OFFSETS,
+  generateSessionToken, validateSession, calculatePrice, assignUniqueMatchAmount, createJobWithUniqueFee, assignUniqueOrderTotal, pickFreeOffset, MAX_MATCH_OFFSETS, freshnessOf, DEFAULT_POLL_SECONDS,
   generateVerificationCode, isValidGmail, isValidMalaysianPhone,
   normalizePhone, sendVerificationEmail, smtpSend,
   supabaseStorageUpload, supabaseStorageSignedUrl, supabaseStorageDelete, parseMultipartFormData, EXT_MIME_MAP

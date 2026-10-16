@@ -1,4 +1,4 @@
-const { json, err, supabaseRequest, validateSession, PRINT_WORKER_SECRET, safeEqual, supabaseStorageDelete } = require('./_shared');
+const { json, err, supabaseRequest, validateSession, PRINT_WORKER_SECRET, safeEqual, supabaseStorageDelete, freshnessOf } = require('./_shared');
 
 // Routes the Pi print worker calls. These authenticate with a shared secret
 // rather than an admin session, because the kiosk Pi has no logged-in user.
@@ -534,14 +534,22 @@ async function getPrinterStatus() {
   });
 
   if (result.error || !result.data || result.data.length === 0) {
+    // No row means the worker has NEVER reported. This used to send
+    // last_checked: new Date() - i.e. claim a reading had just come in. The
+    // kiosk computes its staleness from that field, so it computed an age of
+    // zero and believed the printer had just been checked, while in truth
+    // nothing had ever been heard. Fabricating a timestamp here disabled the
+    // exact guard that was supposed to catch it.
     return json({
       success: true,
       printer: {
         paper_level: null, toner_black: null, toner_cyan: null,
         toner_magenta: null, toner_yellow: null,
         status: 'unknown', jam_type: null, printer_alert: null,
-        last_checked: new Date().toISOString()
+        printer_error: 'The printer has never reported. Check that the Pi worker is running.',
+        last_checked: null
       },
+      printer_freshness: freshnessOf({ last_checked: null, poll_interval: null }),
       paper: null,
       can_print: false,
       blocked_reason: 'printer status unknown'
@@ -588,6 +596,10 @@ async function getPrinterStatus() {
     printer_target: row.printer_target || null,
     printer_model: row.printer_model || null,
     printer_uri: row.printer_uri || null,
+    // Same verdict the dashboard gets, from the same function. The kiosk used
+    // to compute its own age from last_checked against a hardcoded window,
+    // which meant it and the dashboard could disagree about the same printer.
+    printer_freshness: freshnessOf(row),
     can_print: canPrint,
     blocked_reason: blockedReason,
     warn: warn,

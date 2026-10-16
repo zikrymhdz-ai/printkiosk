@@ -188,26 +188,42 @@
     <div id="section-printer" style="display:none;">
       <div class="grid-2">
         <div class="card animate-fade-in">
-          <div class="card-header"><span class="card-title">Set Supply Levels</span></div>
-          <div class="grid-2">
+          <div class="card-header"><span class="card-title">Monitor Printer Supply Status</span></div>
+
+          <!-- Read-only, matching the kiosk's own supply panel.
+               This used to be a "Set Supply Levels" form with four editable
+               toner boxes and an "Update Toner Levels" button. That invited
+               staff to type in a percentage, which is indistinguishable on
+               screen from a real reading from the printer - the same problem
+               paper had, where a hand-entered number was being presented as a
+               sensor value. A level that was typed rather than measured must
+               not look like one that was measured. The printer's own figures
+               are shown here, or "Not reported" when it sends none. -->
+          <div id="adminSupplyMonitor">
             <div class="form-group">
               <label>Paper sheets left</label>
-              <input type="text" id="setPaper" class="input" readonly
-                     title="Derived from completed print jobs, not measured by a sensor. Use 'Paper topped up' after refilling the tray.">
+              <div id="monPaper" class="input" style="display:flex;align-items:center;background:#f8fafc;">&mdash;</div>
             </div>
-            <div class="form-group"><label>Toner Black %</label><input type="number" id="setTonerB" class="input" value="100" min="0" max="100"></div>
-            <div class="form-group"><label>Toner Cyan %</label><input type="number" id="setTonerC" class="input" value="100" min="0" max="100"></div>
-            <div class="form-group"><label>Toner Magenta %</label><input type="number" id="setTonerM" class="input" value="100" min="0" max="100"></div>
-            <div class="form-group"><label>Toner Yellow %</label><input type="number" id="setTonerY" class="input" value="100" min="0" max="100"></div>
+            <div class="form-group"><label>Toner Black</label><div id="monTonerBlack" class="input" style="display:flex;align-items:center;background:#f8fafc;">&mdash;</div></div>
+            <div class="form-group"><label>Toner Cyan</label><div id="monTonerCyan" class="input" style="display:flex;align-items:center;background:#f8fafc;">&mdash;</div></div>
+            <div class="form-group"><label>Toner Magenta</label><div id="monTonerMagenta" class="input" style="display:flex;align-items:center;background:#f8fafc;">&mdash;</div></div>
+            <div class="form-group"><label>Toner Yellow</label><div id="monTonerYellow" class="input" style="display:flex;align-items:center;background:#f8fafc;">&mdash;</div></div>
           </div>
+
+          <!-- Paper is counted, not sensed, so the refill marker is still a
+               genuine action rather than a made-up number. -->
           <div style="display:flex;gap:10px;flex-wrap:wrap;">
-            <button class="btn btn-primary" onclick="setSupplyLevels()">Update Toner Levels</button>
             <button class="btn" onclick="refillPaper()">Paper topped up</button>
           </div>
           <p style="font-size:12px;color:#64748b;margin-top:10px;line-height:1.5;">
-            Paper is counted from completed jobs since the last refill, not read from a sensor —
+            <strong>Read-only.</strong> These are the printer's own readings, not entries.
+            Paper is counted from completed jobs since the last refill, not measured by a sensor —
             this printer reports no paper level over IPP. A jammed sheet or manual-feed paper will
             not be counted, so treat it as an estimate.
+          </p>
+          <p style="font-size:12px;color:#64748b;margin-top:8px;line-height:1.5;">
+            <strong>"Not reported"</strong> means the printer sent no reading — not that the
+            level is zero. The kiosk shows the same wording for the same reason.
           </p>
         </div>
       </div>
@@ -558,34 +574,31 @@ paperFill.className = 'progress-fill ' + (paper === null ? 'progress-gray'
     bar.className = 'progress-fill ' + (val === null ? 'progress-gray' : 'progress-blue');
   }
 
-// Keep the "Set Supply Levels" form in step with what the status card shows.
-// These inputs were hardcoded to value="100" and never populated, so the form
-// claimed full supplies while the printer read 50% - and submitting it would
-// have silently overwritten the real level.
-if (paperInfo) {
-document.getElementById('setPaper').value = '~' + paperInfo.remaining + ' of ' + paperInfo.capacity + ' sheets used';
-} else {
-document.getElementById('setPaper').value = paper === null ? 'Unknown' : paper + '%';
-}
-setSupplyInput('setTonerB', p.toner_black);
-  setSupplyInput('setTonerC', p.toner_cyan);
-  setSupplyInput('setTonerM', p.toner_magenta);
-  setSupplyInput('setTonerY', p.toner_yellow);
-}
-
-// The status poll runs every 30s, so this must never overwrite a value the
-// operator is part-way through typing. Skipping the focused field costs nothing
-// and is refreshed on the next poll after they move on.
-function setSupplyInput(id, val) {
+// The supply monitor is read-only. Same wording as the kiosk, deliberately:
+// one says "Not reported" and the other says "40%" for exactly the same data,
+// and two vocabularies for one fact is how staff end up trusting the wrong one.
+const monitor = (id, value, suffix) => {
   const el = document.getElementById(id);
   if (!el) return;
-  if (document.activeElement === el) return;
-  // A level that is missing or null is "unknown", not 0. Writing 0 here would
-  // show the printer as empty when the truth is that it was never recorded.
-  if (val === null || val === undefined || val === '') return;
-  const n = parseInt(val, 10);
-  if (!Number.isFinite(n)) return;
-  el.value = Math.max(0, Math.min(100, n));
+  if (value === null) {
+    el.textContent = 'Not reported';
+    el.style.color = '#94a3b8';
+    el.style.fontStyle = 'normal';
+  } else {
+    el.textContent = suffix ? (value + ' ' + suffix) : (value + '%');
+    el.style.color = '';
+  }
+};
+
+monitor('monPaper',
+  paper === null ? null
+    : paperInfo ? paperInfo.remaining : paper,
+  paperInfo ? ('of ' + paperInfo.capacity + ' sheets') : '');
+
+for (const color of ['black', 'cyan', 'magenta', 'yellow']) {
+  const cap = color.charAt(0).toUpperCase() + color.slice(1);
+  monitor('monToner' + cap, level(p['toner_' + color]));
+}
 }
 
 // Clear the date so staff can reach old jobs the watcher never caught.
@@ -1075,51 +1088,6 @@ async function updateJobStatus(jobId, status) {
         }, 3000);
       }
     } else alert(data.error || 'Failed');
-  } catch(e) { alert('Error'); }
-}
-
-async function setSupplyLevels() {
-  // Clamp here as well as on input: a cleared or half-typed field would otherwise
-  // send NaN, and JSON.stringify turns NaN into null - which would blank a level
-  // in the database instead of leaving it alone.
-  const readLevel = function (id, label) {
-    const el = document.getElementById(id);
-    const n = parseInt(el.value, 10);
-    if (isNaN(n)) {
-      alert('Enter a number for ' + label + '.');
-      el.focus();
-      return null;
-    }
-    return Math.max(0, Math.min(100, n));
-  };
-
-// Paper is no longer set by hand, so it must not be validated or sent here.
-const black = readLevel('setTonerB', 'Toner Black %');
-  if (black === null) return;
-  const cyan = readLevel('setTonerC', 'Toner Cyan %');
-  if (cyan === null) return;
-  const magenta = readLevel('setTonerM', 'Toner Magenta %');
-  if (magenta === null) return;
-  const yellow = readLevel('setTonerY', 'Toner Yellow %');
-  if (yellow === null) return;
-
-const data = {
-// paper_level is deliberately absent: paper is derived from completed jobs
-// and can only be reset via "Paper topped up". Sending a hand-typed value
-// would reintroduce exactly the invented number this replaced.
-toner_black: black,
-    toner_cyan: cyan,
-    toner_magenta: magenta,
-    toner_yellow: yellow
-  };
-  try {
-    const res = await fetch(API('printer', 'set-levels'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Session-Token': token },
-      body: JSON.stringify(data)
-    });
-    const r = await res.json();
-    if (r.success) { alert('Levels updated'); loadAll(); } else alert(r.error || 'Failed');
   } catch(e) { alert('Error'); }
 }
 

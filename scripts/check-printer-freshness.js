@@ -24,6 +24,8 @@ const read = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
 const worker = read('pi/print-worker.py');
 const backend = read('netlify/functions/printer.js');
 const adminFn = read('netlify/functions/admin.js');
+const shared = read('netlify/functions/_shared.js');
+const kiosk = read('kiosk/walkin.html');
 const admin = read('admin/admin.html');
 
 let failed = 0;
@@ -55,19 +57,37 @@ ok(/reported no model/.test(worker) && /cannot be confirmed/.test(worker),
 // --- the backend must store and judge freshness ----------------------------
 ok(/row\.poll_interval\s*=/.test(backend),
   'the backend stores the reported interval');
-ok(/migrations\/20261016_printer_status_poll_interval/.test(adminFn + backend),
-  'the interval column is documented by a migration');
-ok(/function freshnessOf/.test(adminFn),
+// Assert the file itself rather than a comment that mentions it: the reference
+// moved when freshnessOf moved, and a doc-reference test should not care which
+// function happens to mention the migration.
+ok(fs.existsSync(path.join(ROOT, 'migrations', '20261016_printer_status_poll_interval.sql')),
+  'the interval column is backed by a migration that exists');
+ok(/function freshnessOf/.test(shared),
   'freshness is computed on the server, not guessed per page');
 ok(/printer_freshness: printerFreshness/.test(adminFn),
   'the stats response carries the freshness verdict');
-ok(/DEFAULT_POLL_SECONDS/.test(adminFn),
+ok(/DEFAULT_POLL_SECONDS/.test(shared),
   'a fallback interval exists for a worker that has never reported one');
 
 // Jitter tolerance: one late poll must not paint a working printer red, but
 // three silent polls must.
-ok(/every \* 2\.5/.test(adminFn),
+ok(/every \* 2\.5/.test(shared),
   'stale means two and a half missed polls, so a late poll is not a false alarm');
+
+// --- and it must be ONE implementation, shared by everyone -----------------
+// The kiosk hardcoded its own window while the dashboard used the server's.
+// Two answers to "is this reading current" for the same printer is how a
+// dashboard says STALE while the screen says "Online - ready to print".
+const definitions = [shared, backend, adminFn].filter((f) => /function freshnessOf/.test(f));
+ok(definitions.length === 1 && definitions[0] === shared,
+  'freshnessOf is defined once, in _shared.js, not copied per function');
+ok(/freshnessOf/.test(adminFn) && /require\('\.\/_shared'\)/.test(adminFn)
+  && /freshnessOf/.test(adminFn.split('require')[0]),
+  'the dashboard imports it rather than reimplementing it');
+ok(/freshnessOf/.test(backend) && /require\('\.\/_shared'\)/.test(backend),
+  'the kiosk-facing endpoint imports it too');
+ok(/printer_freshness/.test(kiosk) && !/minsAgo > 15/.test(kiosk),
+  'the kiosk uses the server verdict and has no hardcoded window of its own');
 
 // --- the admin must not present a stale reading as current -----------------
 ok(/window\.__printerFresh\s*=\s*data\.printer_freshness/.test(admin),
@@ -96,8 +116,8 @@ ok(/printer has never reported/i.test(adminFn),
 // prove the arithmetic is right, and the arithmetic is the whole point: a
 // threshold that is too tight paints a working printer red, and one that is
 // too loose is the original bug wearing a new hat. So run it.
-const body = adminFn.match(/function freshnessOf[\s\S]*?\n\}/);
-const constant = adminFn.match(/const DEFAULT_POLL_SECONDS = \d+;/);
+const body = shared.match(/function freshnessOf[\s\S]*?\n\}/);
+const constant = shared.match(/const DEFAULT_POLL_SECONDS = \d+;/);
 ok(!!body && !!constant, 'freshnessOf and its fallback constant were found');
 
 if (body && constant) {

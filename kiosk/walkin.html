@@ -1415,23 +1415,31 @@ function loadPrinterStatus() {
     var status = (p.status || 'online').toLowerCase();
     var alert = d.printer_alert || p.printer_alert || null;
 
-    // If the worker has not reported recently the printer may be fine but we
-    // genuinely do not know, and saying "Online - ready to print" would be a
-    // guess presented to a customer as fact.
-    var checked = p.last_checked ? new Date(p.last_checked).getTime() : 0;
-    var minsAgo = checked ? Math.round((Date.now() - checked) / 60000) : null;
+// Freshness comes from the server (freshnessOf() in _shared.js), which knows
+// the worker's real poll interval. The kiosk used to compute this itself
+// against a hardcoded 15-minute window - so while the worker polled every 60s
+// the kiosk still said "Online - ready to print" for a quarter of an hour
+// after the worker stopped reporting. Same function as the dashboard, so the
+// two cannot disagree about the same printer.
+var fresh0 = d.printer_freshness || {};
+var minsAgo = (fresh0.age_seconds === null || fresh0.age_seconds === undefined)
+  ? null : Math.round(Number(fresh0.age_seconds) / 60);
+var isStale = fresh0.stale !== false;
 
-    if (alert) {
-        // A real CUPS stop reason beats any status we inferred from toner.
-        // "Online" used to be derived purely from toner reachability, so a
-        // jammed printer still read Online.
-        dot.className = 'dot dot-red';
-        line.textContent = 'Printer problem: ' + alert + ' - please see staff';
-      } else if (minsAgo !== null && minsAgo > 15) {
-      dot.className = 'dot dot-yellow';
-      line.textContent = 'Status unknown (' + (minsAgo > 1440 ? Math.round(minsAgo / 1440) + 'd'
-        : minsAgo > 60 ? Math.round(minsAgo / 60) + 'h' : minsAgo + 'm') + ' since last check)';
-    } else if (status === 'online') {
+if (alert) {
+  // A real CUPS stop reason beats any status we inferred from toner.
+  // "Online" used to be derived purely from toner reachability, so a
+  // jammed printer still read Online.
+  dot.className = 'dot dot-red';
+  line.textContent = 'Printer problem: ' + alert + ' - please see staff';
+} else if (isStale) {
+  dot.className = 'dot dot-yellow';
+  // Never "Online - ready to print" off a stale reading. A customer told the
+  // printer is ready, and finding it is not, is the worst outcome here.
+  line.textContent = 'Status unknown (' + (minsAgo === null ? 'never checked'
+    : minsAgo > 1440 ? Math.round(minsAgo / 1440) + 'd'
+    : minsAgo > 60 ? Math.round(minsAgo / 60) + 'h' : minsAgo + 'm') + ' since last check)';
+} else if (status === 'online') {
         dot.className = 'dot dot-green';
         line.textContent = 'Online - ready to print';
       } else if (status === 'offline' || status === 'unknown') {

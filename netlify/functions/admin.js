@@ -1,4 +1,4 @@
-const { json, err, supabaseRequest, validateSession, supabaseStorageDelete, JOB_PAYABLE_WINDOW_MIN } = require('./_shared');
+const { json, err, supabaseRequest, validateSession, supabaseStorageDelete, JOB_PAYABLE_WINDOW_MIN, freshnessOf } = require('./_shared');
 
 exports.handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') return json({});
@@ -51,42 +51,11 @@ exports.handler = async (event) => {
   return err('Method not allowed', 405);
 };
 
-// Used only when the worker has never reported its interval, so the very first
-// reading still gets judged against something. Matches the worker's old default.
-const DEFAULT_POLL_SECONDS = 300;
-
-// Is this reading still telling us anything about the printer RIGHT NOW?
-//
-// Freshness used to be decided in the browser against a hardcoded 15 minutes,
-// with no relationship to how often the worker actually polls. Nothing in the
-// database recorded the expected cadence, so a worker that stopped reporting
-// entirely still rendered as a confident ONLINE badge. The worker now reports
-// its own interval (migrations/20261016_printer_status_poll_interval.sql), and
-// the window is derived from that.
-//
-// Decided on the server so the dashboard and the kiosk cannot disagree about
-// whether the printer is currently reachable.
-function freshnessOf(row) {
-  const every = Math.max(1, parseInt(row && row.poll_interval, 10) || DEFAULT_POLL_SECONDS) * 1000;
-  const checked = row && row.last_checked ? Date.parse(row.last_checked) : NaN;
-
-  if (!Number.isFinite(checked)) {
-    return { checked: false, age_seconds: null, stale: true, stale_after_seconds: Math.round(every * 2.5 / 1000) };
-  }
-
-  const age = Date.now() - checked;
-  // Two and a half missed polls. One missed poll is ordinary jitter - a poll
-  // landing a few seconds late must not paint a working printer red - but three
-  // consecutive silent polls means the worker is not reporting at all, and the
-  // stored reading is history rather than news.
-  const limit = every * 2.5;
-  return {
-    checked: true,
-    age_seconds: Math.round(age / 1000),
-    stale: age > limit,
-    stale_after_seconds: Math.round(limit / 1000)
-  };
-}
+// Freshness is decided by freshnessOf() in _shared.js, because the kiosk needs
+// the identical verdict. Two callers with the same question and two
+// implementations is how the dashboard and the kiosk drift apart - the kiosk
+// had its own hardcoded window that disagreed with the worker's poll interval.
+// Imported rather than reimplemented: one home per rule.
 
 async function getStats() {
   const today = new Date().toISOString().slice(0, 10);
