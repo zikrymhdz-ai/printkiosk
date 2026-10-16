@@ -388,6 +388,119 @@ window.addEventListener('load', function () {
 });
 </script>
 
+<!-- Top bar. A kiosk bolted to a wall with no visible identity, no greeting
+     and no clock is hard to trust and harder to demonstrate. Identity on the
+     left, greeting and site in the middle, live clock on the right.
+
+     The logo path is absolute rather than relative because this file lives in
+     kiosk/ while the asset lives in assets/ - the other root-absolute asset
+     references on this page (manifest, apple-touch-icon) set the precedent. -->
+<style>
+.kiosk-header {
+  max-width: 1420px;
+  margin: 16px auto 0;
+  padding: 12px 20px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.06);
+}
+.kh-brand { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
+.kh-logo { width: 42px; height: 42px; border-radius: 10px; display: block; }
+.kh-name {
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: #0f172a;
+  white-space: nowrap;
+}
+.kh-centre { flex: 1 1 auto; text-align: center; min-width: 0; }
+.kh-greeting {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 700;
+  color: #0f172a;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.kh-site {
+  display: inline-block;
+  margin-top: 2px;
+  font-size: 13px;
+  color: #64748b;
+  text-decoration: none;
+  border-bottom: 1px dotted #cbd5e1;
+}
+.kh-site:hover { color: #2563eb; border-bottom-color: #2563eb; }
+.kh-clock { flex: 0 0 auto; text-align: right; }
+.kh-time {
+  display: block;
+  font-size: 22px;
+  font-weight: 700;
+  color: #0f172a;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+.kh-date { display: block; font-size: 12px; color: #64748b; margin-top: 2px; }
+
+/* The kiosk already collapses to a single column on narrow screens; the header
+   has to follow, or the clock is pushed off the edge. */
+@media (max-width: 640px) {
+  .kiosk-header { flex-wrap: wrap; justify-content: space-between; }
+  .kh-centre { order: 3; flex-basis: 100%; text-align: left; }
+}
+</style>
+
+<header class="kiosk-header">
+  <div class="kh-brand">
+    <img src="/assets/logo.svg" alt="PrintKiosk logo" class="kh-logo">
+    <span class="kh-name">PrintKiosk</span>
+  </div>
+
+  <div class="kh-centre">
+    <p class="kh-greeting">Hi, Welcome to PrintKiosk</p>
+    <a class="kh-site" href="https://printkioskfyp.netlify.app" target="_blank"
+       rel="noopener noreferrer">printkioskfyp.netlify.app</a>
+  </div>
+
+  <div class="kh-clock">
+    <span class="kh-time" id="khTime">--:--</span>
+    <span class="kh-date" id="khDate">&mdash;</span>
+  </div>
+</header>
+
+<script>
+// Clock. Its own block, immediately after the markup it updates, so it cannot
+// be taken down by anything failing in the main script below.
+(function () {
+  var timeEl = document.getElementById('khTime');
+  var dateEl = document.getElementById('khDate');
+  if (!timeEl || !dateEl) return;
+
+  function tick() {
+    var now = new Date();
+    try {
+      timeEl.textContent = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      dateEl.textContent = now.toLocaleDateString([], {
+        weekday: 'short', day: 'numeric', month: 'short', year: 'numeric'
+      });
+    } catch (e) {
+      // A device with no locale data must still show a time rather than sit on
+      // the placeholder forever.
+      timeEl.textContent = ('0' + now.getHours()).slice(-2) + ':' + ('0' + now.getMinutes()).slice(-2);
+      dateEl.textContent = now.toDateString();
+    }
+  }
+
+  tick();
+  setInterval(tick, 1000);
+})();
+</script>
+
 <div class="kiosk-layout">
  <div id="kioskApp" class="kiosk kiosk-cols">
 
