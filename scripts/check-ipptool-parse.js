@@ -252,15 +252,19 @@ ok(usageAt > 0 && noTonerAt > 0 && usageAt < noTonerAt,
 // journal accused a printer that answers unauthenticated commands by hand.
 ok(/def _looks_unauthorized/.test(worker), 'authorization refusals are recognised');
 
-// Position matters: the refusal check must sit inside the candidate loop and
-// before the break, or the search still ends on the first refusal.
-const loopStart = worker.indexOf('for test_path in candidates');
-const authInLoop = worker.indexOf('_looks_unauthorized(text)', loopStart);
-const loopBreak = worker.indexOf('break', worker.indexOf('re.search(r"^\\s+\\S', loopStart));
-ok(loopStart > 0 && authInLoop > loopStart && loopBreak > authInLoop,
+// Position matters: the refusal check must sit before the attribute-lines
+// break, or the search still ends on the first refusal. Anchored on `text or ""`
+// because the per-probe logger above re.searches the same pattern over `t`,
+// and a bare pattern search finds that one instead.
+const attrCheck = worker.indexOf('re.search(r"^\\s+\\S[^\\n]*?=\\s*\\S", text or ""');
+const attrBreak = worker.indexOf('break', attrCheck);
+const guard = worker.indexOf('if _looks_unauthorized(text):');
+ok(guard > 0 && attrCheck > 0 && guard < attrCheck && attrBreak > attrCheck,
   'a refusal moves on to the next candidate instead of ending the search');
-ok(worker.indexOf('auth_denied = True', loopStart) > loopStart,
+ok(worker.indexOf('auth_denied = True') > worker.indexOf('for test_path in candidates'),
   'the refusal is remembered for the final verdict');
+ok(/supply probe/.test(worker),
+  'each candidate request reports its own outcome, so the loop is diagnosable');
 
 // Only claim the printer demands a password once every request was refused.
 ok(/every request was refused for authentication/.test(worker),

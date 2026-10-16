@@ -565,17 +565,22 @@ def _probe(test_path):
 
 
 def _looks_unauthorized(text):
-    """Did the printer REFUSE this request for authentication reasons?
+    """Did the printer REFUSE this request for authorization reasons?
 
     About the request, not the device. A printer can allow an anonymous
     Get-Printer-Attributes for its mandatory attributes while refusing the
     same operation with `requested-attributes all`, so being denied once does
     not mean supplies are unreachable - it means try a smaller request.
+
+    Matched on IPP status codes, not on the bare word "authentication". That
+    word turns up in ordinary attribute dumps - a privacy policy, a help text,
+    any attribute whose name or value mentions it - and treating a single
+    occurrence as a refusal made a printer that answers anonymously look like
+    one demanding a password. An IPP status is unambiguous; prose is not.
     """
     low = (text or "").lower()
     return ("not-authorized" in low or "not authorized" in low
-            or "forbidden" in low or "authentication" in low
-            or "client-error-not-authorized" in low)
+            or "forbidden" in low)
 
 
 def read_supplies():
@@ -613,10 +618,35 @@ def read_supplies():
     auth_denied = False
     for test_path in candidates:
         text, code, err = _probe(test_path)
+        which = test_path
+
+        # Say what each request actually produced. Four attempts can each fail
+        # differently, and without this the journal only ever showed the final
+        # conclusion - which is how a refusal on the enhanced request came to
+        # be reported as "the printer requires a password" when the plain
+        # request in the same loop had been refused for a different reason, or
+        # not at all.
+        def _outcome(t, c):
+            if _looks_unauthorized(t):
+                return "refused (authorization)"
+            if re.search(r'Unknown option|Usage:\s*ipptool', t or ""):
+                return "rejected our arguments"
+            low = (t or "").lower()
+            if "cannot connect" in low or "connection refused" in low \
+                    or "no route to host" in low or "could not resolve" in low:
+                return "unreachable"
+            # re.search rather than a count, matching the "did anything answer"
+            # test below: presence is what matters here, and one code path for
+            # one question is one fewer thing to get subtly different.
+            has_attrs = bool(re.search(r"^\s+\S[^\n]*?=\s*\S", t or "", re.MULTILINE))
+            return "has attribute lines" if has_attrs else "NO attribute lines"
+
         if err:
+            log("  supply probe %s: could not run (%s)" % (which, err))
             first_error = first_error or err
             text = None
             continue
+        log("  supply probe %s: exit=%s %s" % (which, code, _outcome(text, code)))
 
         if code != 0:
             detail = (text or "").strip().splitlines()
