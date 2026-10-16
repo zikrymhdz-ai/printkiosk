@@ -53,7 +53,12 @@ CONFIG = {
     # filing another machine's toner levels against this one.
     "expected_model": os.environ.get("EXPECTED_MODEL", "HL-L3240CDW"),
     "poll_seconds": int(os.environ.get("PRINT_POLL_SECONDS", "5")),
-    "supply_seconds": int(os.environ.get("PRINT_SUPPLY_SECONDS", "300")),
+    # How often the printer is asked how it is. This is the ceiling on how stale
+    # the dashboard can be: the admin page reloads every 30s but only sees what
+    # the worker last reported, so at 300s a printer that had just gone offline
+    # kept showing ONLINE for five minutes. One IPP round trip a minute is
+    # nothing on a LAN, and it is the same read_supplies() call either way.
+    "supply_seconds": int(os.environ.get("PRINT_SUPPLY_SECONDS", "60")),
     "watchdog_seconds": int(os.environ.get("PRINT_WATCHDOG_SECONDS", "120")),
     "max_attempts": int(os.environ.get("PRINT_MAX_ATTEMPTS", "3")),
     "queue_timeout": int(os.environ.get("PRINT_QUEUE_TIMEOUT", "180")),
@@ -624,6 +629,27 @@ def read_supplies():
     return levels, True, "", reported_model(text)
 
 
+def _names_a_model(strings):
+    """True when an identity string actually names a model rather than a serial.
+
+    Brother model numbers are hyphenated and contain digits - HL-L3240CDW,
+    DCP-T430W - while the serial it reports as printer-name is not:
+    BRW145A41F176AD. That one difference separates "the device said which
+    model it is, and it is not the one we expect" from "the device gave us a
+    serial and nothing else, which proves nothing about the model".
+
+    Needed because the two cases used to be collapsed into one, and the
+    uninformative one was reported as a confident wrong-printer verdict.
+    """
+    for s in strings or []:
+        t = str(s).strip()
+        if not t:
+            continue
+        if "series" in t.lower() or re.search(r"[A-Za-z]+-[A-Za-z]*\d", t):
+            return True
+    return False
+
+
 def shutil_which(name):
     for d in os.environ.get("PATH", "").split(os.pathsep):
         p = os.path.join(d, name)
@@ -834,8 +860,24 @@ def main():
                 expected = CONFIG.get("expected_model") or ""
                 identity = model or []
                 if identity and expected and not any(expected.lower() in s.lower() for s in identity):
-                    why = ('polled %s but EXPECTED_MODEL is %s - wrong printer'
-                           % (identity, expected))
+                    # Only accuse the shop of pointing at the wrong machine when
+                    # the device actually NAMED a model and that model is a
+                    # different one.
+                    #
+                    # Brother reports printer-name as the unit serial
+                    # ("BRW145A41F176AD"), so a reply carrying nothing but the
+                    # serial says nothing at all about which model answered.
+                    # Treating that as a mismatch produced a confident, false
+                    # "wrong printer" verdict that sent staff hunting for a
+                    # second Brother that was never involved.
+                    if _names_a_model(identity):
+                        why = ('polled %s but EXPECTED_MODEL is %s - wrong printer'
+                               % (identity, expected))
+                    else:
+                        why = ('printer answered as %s but reported no model, so it '
+                               'cannot be confirmed as the %s. This is the reply you '
+                               'get when the request did not ask for all attributes.'
+                               % (identity[0], expected))
                     levels, online = None, False
                 elif identity and expected:
                     # Prefer whichever identity string names the model, so the
@@ -846,6 +888,11 @@ def main():
                     "printer_name": CONFIG["printer"],
                     "printer_uri": CONFIG["printer_uri"],
                     "printer_model": model,
+                    # So the backend can tell a genuinely stale reading from a
+                    # fresh one. Without this the dashboard has to hardcode how
+                    # often to expect a report, and that guess was wrong the
+                    # moment the interval was changed in the env file.
+                    "poll_interval": CONFIG["supply_seconds"],
                 }
 
                 # Also report CUPS' own view of the printer. printer_alert()

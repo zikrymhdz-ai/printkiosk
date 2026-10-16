@@ -292,6 +292,16 @@ async function reportSupplies(event) {
     last_checked: new Date().toISOString()
   };
 
+  // How often the worker says it polls. Stored rather than assumed, so the
+  // dashboard can decide what "stale" means instead of hardcoding a guess that
+  // silently goes wrong when the interval is changed in the Pi's env file.
+  // Only overwritten when the worker actually sends one, so an older worker
+  // still updates last_checked and supplies exactly as before.
+  const pollInterval = parseInt(body.poll_interval, 10);
+  if (Number.isFinite(pollInterval) && pollInterval > 0) {
+    row.poll_interval = Math.min(3600, pollInterval);
+  }
+
   // Never overwrite a known identity with an empty one. A poll that failed early
   // (ipptool missing, say) sends no model, and blanking the column would erase
   // the last thing we actually knew about which machine is installed.
@@ -327,6 +337,19 @@ async function reportSupplies(event) {
       const fallback = { status: row.status, last_checked: row.last_checked };
       if (row.paper_level !== undefined) fallback.paper_level = row.paper_level;
       write = await supabaseRequest('PATCH', '/printer_status?id=eq.' + cur.data[0].id, fallback);
+    }
+
+    // Fallback 3: poll_interval arrived with the migration
+    // 20261016_printer_status_poll_interval.sql. Until that SQL has been run
+    // in the Supabase editor the column does not exist and the PATCH is
+    // rejected outright with 23503 - which would take the WHOLE reading down
+    // with it and leave the dashboard with nothing at all. Drop just the new
+    // column and store the reading as before, so deploying before the migration
+    // costs the freshness signal but never the status.
+    if (write.error && errText.includes('23503')) {
+      const withoutInterval = { ...row };
+      delete withoutInterval.poll_interval;
+      write = await supabaseRequest('PATCH', '/printer_status?id=eq.' + cur.data[0].id, withoutInterval);
     }
 
     // Fallback 2: the status CHECK constraint originally allowed only

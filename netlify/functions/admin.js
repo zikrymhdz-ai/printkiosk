@@ -51,6 +51,43 @@ exports.handler = async (event) => {
   return err('Method not allowed', 405);
 };
 
+// Used only when the worker has never reported its interval, so the very first
+// reading still gets judged against something. Matches the worker's old default.
+const DEFAULT_POLL_SECONDS = 300;
+
+// Is this reading still telling us anything about the printer RIGHT NOW?
+//
+// Freshness used to be decided in the browser against a hardcoded 15 minutes,
+// with no relationship to how often the worker actually polls. Nothing in the
+// database recorded the expected cadence, so a worker that stopped reporting
+// entirely still rendered as a confident ONLINE badge. The worker now reports
+// its own interval (migrations/20261016_printer_status_poll_interval.sql), and
+// the window is derived from that.
+//
+// Decided on the server so the dashboard and the kiosk cannot disagree about
+// whether the printer is currently reachable.
+function freshnessOf(row) {
+  const every = Math.max(1, parseInt(row && row.poll_interval, 10) || DEFAULT_POLL_SECONDS) * 1000;
+  const checked = row && row.last_checked ? Date.parse(row.last_checked) : NaN;
+
+  if (!Number.isFinite(checked)) {
+    return { checked: false, age_seconds: null, stale: true, stale_after_seconds: Math.round(every * 2.5 / 1000) };
+  }
+
+  const age = Date.now() - checked;
+  // Two and a half missed polls. One missed poll is ordinary jitter - a poll
+  // landing a few seconds late must not paint a working printer red - but three
+  // consecutive silent polls means the worker is not reporting at all, and the
+  // stored reading is history rather than news.
+  const limit = every * 2.5;
+  return {
+    checked: true,
+    age_seconds: Math.round(age / 1000),
+    stale: age > limit,
+    stale_after_seconds: Math.round(limit / 1000)
+  };
+}
+
 async function getStats() {
   const today = new Date().toISOString().slice(0, 10);
   const startToday = today + 'T00:00:00Z';
@@ -89,9 +126,26 @@ async function getStats() {
     'limit': '1'
   });
 
+  // With no row at all, the printer has never been heard from. The old fallback
+  // invented status 'online' and four full toners, which put a green "all fine"
+  // badge on screen for a machine nobody had managed to read - the exact thing
+  // the staff dashboard exists to rule out. Absent data reads as unknown.
   const printer = !printerResult.error && printerResult.data && printerResult.data.length > 0
     ? printerResult.data[0]
-    : { paper_level: 100, toner_black: 100, toner_cyan: 100, toner_magenta: 100, toner_yellow: 100, status: 'online' };
+    : {
+      status: 'unknown',
+      paper_level: null,
+      toner_black: null,
+      toner_cyan: null,
+      toner_magenta: null,
+      toner_yellow: null,
+      last_checked: null,
+      printer_alert: '',
+      printer_error: 'The printer has never reported. Check that the Pi worker is running.',
+      poll_interval: null
+    };
+
+  const printerFreshness = freshnessOf(printer);
 
   const usersResult = await supabaseRequest('GET', '/users', null, {
     'select': 'id',
@@ -117,7 +171,11 @@ async function getStats() {
       total_customers: totalCustomers,
       unread_alerts: unreadAlerts
     },
-    printer
+    printer,
+    // Whether that reading still describes the printer's current state. The
+    // dashboard must not present a stale reading as a live one, and it should
+    // not have to re-derive the rule on its own either.
+    printer_freshness: printerFreshness
   });
 }
 

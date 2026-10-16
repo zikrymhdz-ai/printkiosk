@@ -439,6 +439,11 @@ function loadAll() {
         document.getElementById('statTodayRevenue').textContent = 'RM ' + Number(s.today_revenue || 0).toFixed(2);
         document.getElementById('statPendingJobs').textContent = s.pending_jobs ?? 0;
         document.getElementById('statCustomers').textContent = s.total_customers ?? 0;
+        // Freshness is decided on the server (see freshnessOf() in admin.js) so
+        // this page cannot disagree with the kiosk about whether the printer is
+        // currently reachable. Passing the row alone used to mean the badge had
+        // to re-guess, which is how a 25-hour-old reading stayed green.
+        window.__printerFresh = data.printer_freshness || null;
         if (data.printer) updatePrinterDisplay(data.printer);
         // The derived paper block lives on the status response, not the row,
         // so it is stashed for updatePrinterDisplay() to pick up.
@@ -467,39 +472,70 @@ function loadAll() {
     }).catch(() => {});
 }
 
+function ageFormat(sec) {
+  const s = Math.max(0, Math.round(Number(sec) || 0));
+  if (s < 60) return s + 's';
+  const m = Math.round(s / 60);
+  if (m < 60) return m + ' min';
+  const h = Math.round(m / 60);
+  if (h < 48) return h + ' hour' + (h === 1 ? '' : 's');
+  return Math.round(h / 24) + ' days';
+}
+
 function updatePrinterDisplay(p) {
   const badge = document.getElementById('printerStatusBadge');
-  badge.textContent = (p.status || 'unknown').replace('_', ' ').toUpperCase();
-  badge.className = 'badge ' + (p.status === 'online' ? 'badge-success'
-    : (p.status === 'offline' || p.status === 'unknown') ? 'badge-danger' : 'badge-warning');
 
-  // Freshness matters more than the numbers. The worker polls every 5 minutes,
-  // so anything older than 15 means it has not reported in and the levels
-  // below are leftovers, not readings. Saying so is the difference between
-  // "the printer is low on toner" and "we last heard from the printer 2 days
-  // ago and nothing has changed since".
+  // Freshness comes from the server, which knows the worker's real poll
+  // interval. Fall back to a deliberately pessimistic reading if it is absent,
+  // because guessing "fresh" is what produced a confident ONLINE badge over a
+  // reading that was a day old.
+  const fresh0 = window.__printerFresh || {};
+  const ageSec = (fresh0.age_seconds === null || fresh0.age_seconds === undefined)
+    ? null : Number(fresh0.age_seconds);
+  const isStale = fresh0.stale !== false;
+
+  // A stale reading is history, not news. Showing its stored status as if it
+  // were current is the single most misleading thing this card can do: staff
+  // read the badge, not the small grey line underneath it. So the badge itself
+  // has to say so, and the last known state moves into the detail line.
+  const storedStatus = (p.status || 'unknown').replace('_', ' ').toUpperCase();
+  if (isStale) {
+    badge.textContent = 'STALE';
+    badge.className = 'badge badge-warning';
+    badge.title = 'Last known: ' + storedStatus
+      + (ageSec === null ? ' (never checked)' : ' (' + ageFormat(ageSec) + ' ago)')
+      + '. The printer has not been heard from recently, so this is not its current state.';
+  } else {
+    badge.textContent = storedStatus;
+    badge.className = 'badge ' + (p.status === 'online' ? 'badge-success'
+      : (p.status === 'offline' || p.status === 'unknown') ? 'badge-danger' : 'badge-warning');
+    badge.title = '';
+  }
+
   const fresh = document.getElementById('printerFreshness');
   if (fresh) {
-    const checked = p.last_checked ? new Date(p.last_checked).getTime() : 0;
-    const mins = checked ? Math.round((Date.now() - checked) / 60000) : null;
-    if (mins === null) {
+    if (ageSec === null) {
       fresh.textContent = 'Last checked: never (no readings from the printer)';
       fresh.style.color = 'var(--danger)';
-    } else if (mins > 15) {
-      fresh.textContent = 'Last checked ' + (mins > 1440
-        ? Math.round(mins / 1440) + ' days ago'
-        : mins > 60 ? Math.round(mins / 60) + ' hours ago' : mins + ' min ago')
-        + ' — printer has not reported recently';
+    } else if (isStale) {
+      const limitMin = Math.round((fresh0.stale_after_seconds || 0) / 60);
+      fresh.textContent = 'Last checked ' + ageFormat(ageSec) + ' ago'
+        + (limitMin ? ' - no reading for ' + (limitMin >= 1 ? limitMin + ' min' : '') + ', so this is the last known state, not the current one' : '')
+        + '. Check the Pi worker is running.';
       fresh.style.color = 'var(--danger)';
     } else {
-      fresh.textContent = 'Last checked ' + mins + ' min ago';
+      fresh.textContent = 'Last checked ' + ageFormat(ageSec) + ' ago';
       fresh.style.color = '';
     }
   }
 
   // A missing level is "unknown", not 0%. Rendering null as "null%" (or a
   // zero-width bar) made an unread printer look exactly like an empty one.
-  const level = (v) => (v === null || v === undefined || v === '' ? null : parseInt(v, 10));
+  // Levels from a stale reading are leftovers, not readings. Rendering them as
+  // live numbers is how "50% toner" ends up being acted on two days after it
+  // was true, so a stale card shows the age instead of pretending to know.
+  const level = (v) => ((v === null || v === undefined || v === '') || isStale)
+    ? null : parseInt(v, 10);
   const show = (v) => (v === null ? 'Unknown' : v + '%');
 
 const paperInfo = (window.__printerPaper && window.__printerPaper.derived && window.__printerPaper.known !== false) ? window.__printerPaper : null;
