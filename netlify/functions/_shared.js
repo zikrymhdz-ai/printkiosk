@@ -623,6 +623,54 @@ function freshnessOf(row) {
   };
 }
 
+// How much paper is left, derived rather than measured.
+//
+// There is no standard IPP attribute for "how much paper is left in the tray" -
+// most drivers only report which trays are loaded - so paper_level used to be a
+// hand-entered number that nothing could verify. It is now counted from real
+// sheets: every job the worker confirmed as completed since the last refill,
+// times its copies. "Paper topped up" moves the marker.
+//
+// Lives here rather than in one function because two callers need it and only
+// one had it: getStats never returned it, so the dashboard fell back to the
+// stale paper_level column and showed a fixed 100% that never moved, while the
+// kiosk - which does call this - showed the real figure. One number, two
+// answers.
+async function computePaper(statusRow) {
+  const parsed = parseInt(statusRow.paper_capacity, 10);
+  const capacity = (Number.isFinite(parsed) && parsed > 0) ? parsed : 250;
+  const since = statusRow.paper_refilled_at || null;
+
+  let used = 0;
+  let known = false;
+  if (since) {
+    const r = await supabaseRequest('GET', '/print_jobs', null, {
+      'select': 'pages,copies',
+      'status': 'eq.completed',
+      'print_completed_at': 'gt.' + since
+    });
+    if (!r.error && Array.isArray(r.data)) {
+      used = r.data.reduce(function (sum, j) {
+        const pages = Math.max(0, parseInt(j.pages, 10) || 0);
+        const copies = Math.max(1, parseInt(j.copies, 10) || 1);
+        return sum + (pages * copies);
+      }, 0);
+      known = true;
+    }
+  }
+
+  const remaining = Math.max(0, capacity - used);
+  return {
+    capacity: capacity,
+    used: known ? used : null,
+    remaining: known ? remaining : null,
+    level: known ? Math.max(0, Math.min(100, Math.round((remaining / capacity) * 100))) : null,
+    derived: true,
+    known: known,
+    refilled_at: since
+  };
+}
+
 module.exports = {
   SUPABASE_URL, SUPABASE_KEY, SUPABASE_REST_URL,
   SESSION_DURATION, PRICE_BW_PER_PAGE, PRICE_COLOR_PER_PAGE,
@@ -631,7 +679,7 @@ module.exports = {
   SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM_NAME,
   VERIFICATION_CODE_LENGTH, VERIFICATION_CODE_TTL,
   corsHeaders, json, err, supabaseRequest, generateJobId, safeEqual,
-  generateSessionToken, validateSession, calculatePrice, assignUniqueMatchAmount, createJobWithUniqueFee, assignUniqueOrderTotal, pickFreeOffset, MAX_MATCH_OFFSETS, freshnessOf, DEFAULT_POLL_SECONDS,
+  generateSessionToken, validateSession, calculatePrice, assignUniqueMatchAmount, createJobWithUniqueFee, assignUniqueOrderTotal, pickFreeOffset, MAX_MATCH_OFFSETS, freshnessOf, DEFAULT_POLL_SECONDS, computePaper,
   generateVerificationCode, isValidGmail, isValidMalaysianPhone,
   normalizePhone, sendVerificationEmail, smtpSend,
   supabaseStorageUpload, supabaseStorageSignedUrl, supabaseStorageDelete, parseMultipartFormData, EXT_MIME_MAP

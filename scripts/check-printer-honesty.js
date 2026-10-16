@@ -13,6 +13,8 @@ const ROOT = path.join(__dirname, '..');
 const read = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
 
 const printer = read('netlify/functions/printer.js');
+const adminFn = read('netlify/functions/admin.js');
+const shared = read('netlify/functions/_shared.js');
 const worker = read('pi/print-worker.py');
 const walkin = read('kiosk/walkin.html');
 const admin = read('admin/admin.html');
@@ -24,9 +26,19 @@ const ok = (cond, msg) => {
 };
 
 // --- paper must be derived, never measured or typed -------------------------
-ok(/function computePaper/.test(printer),
+// computePaper lives in _shared.js now. It used to live only in printer.js,
+// which is exactly why this regressed: the kiosk endpoint called it and the
+// dashboard's stats did not, so the dashboard quietly fell back to the stale
+// hand-entered paper_level and showed a fixed 100% however much was printed.
+ok(/function computePaper/.test(shared),
   'paper is computed by computePaper()');
-ok(/pages\s*\*\s*copies/.test(printer),
+ok([shared, printer, adminFn].filter((f) => /function computePaper/.test(f)).length === 1,
+  'computePaper is defined once, in _shared.js');
+ok(/computePaper/.test(printer) && /computePaper/.test(adminFn),
+  'both the kiosk endpoint and the dashboard call it');
+ok(/paper:\s*paper/.test(adminFn),
+  'the dashboard stats response actually includes the derived paper');
+ok(/pages\s*\*\s*copies/.test(shared),
   'paper counts real sheets via pages * copies on completed jobs');
 ok(!/levels\.paper/.test(printer),
   'reportSupplies ignores any paper value the worker sends (not a sensor)');
@@ -78,8 +90,8 @@ ok(!/status:\s*unreadable\s*\?\s*'unknown'\s*:\s*\(lowest\s*<=\s*15/.test(walkin
 // Failing the count query must leave used/remaining/level null and surface
 // known:false, because the default of 0 sheets used means "tray is full" --
 // telling a customer paper is fine when it is actually empty.
-ok(/let known = false/.test(printer), 'computePaper tracks whether the count query succeeded');
-const cp = printer.match(/async function computePaper[\s\S]*?\n\}/);
+ok(/let known = false/.test(shared), 'computePaper tracks whether the count query succeeded');
+const cp = shared.match(/async function computePaper[\s\S]*?\n\}/);
 ok(!!cp, 'computePaper body found');
 if (cp) {
   // cp[0], not cp[1]: the pattern has no capture group, so cp[1] is undefined
@@ -98,6 +110,30 @@ ok(/pap\.known\s*!==\s*false/.test(walkin) && /paperVal\.textContent = '--'/.tes
   'kiosk shows "--" rather than a number when the count is unknown');
 ok(/known !== false/.test(admin),
   'admin does not render a paper figure it could not compute');
+
+// --- the paper figure must actually move when paper is used ---------------
+// The dashboard showed a fixed 100% because getStats never returned the
+// derived paper at all, so admin.html fell back to the stale paper_level
+// column. Nothing asserted the response contained it, because the test above
+// only checked the derivation was correct - not that anyone was sent it.
+ok(/paper:\s*paper/.test(adminFn),
+  'the dashboard is actually sent the derived paper, not left to guess');
+ok(/computePaper\(printer\)/.test(adminFn) || /computePaper\(printer\)/.test(adminFn),
+  'getStats computes it rather than trusting the stored column');
+ok(/paper_refilled_at/.test(shared),
+  'paper is counted from the refill marker, so topping up resets it');
+
+// A job completed by hand consumed paper just as a printed one did, and
+// computePaper counts completed jobs by print_completed_at. Marking a job
+// completed without stamping that left the estimate permanently high.
+const uj = printer.match(/async function updateJobStatus[\s\S]*?\n\}/);
+ok(!!uj, 'updateJobStatus body found');
+if (uj) {
+  ok(/newStatus === 'completed'/.test(uj[0]) && /print_completed_at/.test(uj[0]),
+    'hand-completing a job stamps print_completed_at, so its sheets are counted');
+  ok(/if \(!already\)/.test(uj[0]),
+    'an existing completion time is left alone, so a reprint is not double-counted');
+}
 
 if (failed) process.exit(1);
 console.log('  ok      printer status is real where it can be, honest where it cannot');

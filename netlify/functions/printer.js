@@ -1,4 +1,4 @@
-const { json, err, supabaseRequest, validateSession, PRINT_WORKER_SECRET, safeEqual, supabaseStorageDelete, freshnessOf } = require('./_shared');
+const { json, err, supabaseRequest, validateSession, PRINT_WORKER_SECRET, safeEqual, supabaseStorageDelete, freshnessOf, computePaper } = require('./_shared');
 
 // Routes the Pi print worker calls. These authenticate with a shared secret
 // rather than an admin session, because the kiosk Pi has no logged-in user.
@@ -490,42 +490,6 @@ async function getPrintStatus(event) {
 // completed job, and manual-feed paper is never counted. That is why the
 // response carries paper_derived so the UI can label it honestly.
 // ---------------------------------------------------------------------------
-async function computePaper(statusRow) {
-  const capacity = (Number.isFinite(parseInt(statusRow.paper_capacity, 10)) && parseInt(statusRow.paper_capacity, 10) > 0)
-    ? parseInt(statusRow.paper_capacity, 10)
-    : 250;
-  const since = statusRow.paper_refilled_at || null;
-
-  let used = 0;
-  let known = false;
-  if (since) {
-    const r = await supabaseRequest('GET', '/print_jobs', null, {
-      'select': 'pages,copies',
-      'status': 'eq.completed',
-      'print_completed_at': 'gt.' + since
-    });
-    if (!r.error && Array.isArray(r.data)) {
-      used = r.data.reduce(function (sum, j) {
-        const pages = Math.max(0, parseInt(j.pages, 10) || 0);
-        const copies = Math.max(1, parseInt(j.copies, 10) || 1);
-        return sum + (pages * copies);
-      }, 0);
-      known = true;
-    }
-  }
-
-  const remaining = Math.max(0, capacity - used);
-  return {
-    capacity: capacity,
-    used: known ? used : null,
-    remaining: known ? remaining : null,
-    level: known ? Math.max(0, Math.min(100, Math.round((remaining / capacity) * 100))) : null,
-    derived: true,
-    known: known,
-    refilled_at: since
-  };
-}
-
 async function getPrinterStatus() {
   const result = await supabaseRequest('GET', '/printer_status', null, {
     'select': '*',
@@ -693,10 +657,25 @@ async function updateJobStatus(event) {
   const allowed = ['pending', 'ready_to_print', 'print_requested', 'printing', 'completed', 'failed', 'cancelled', 'refund_issued'];
   if (!allowed.includes(newStatus)) return err('Invalid status');
 
-  const result = await supabaseRequest('PATCH', '/print_jobs?job_id=eq.' + jobId, {
-    status: newStatus,
-    updated_at: new Date().toISOString()
-  });
+const now = new Date().toISOString();
+  const patch = { status: newStatus, updated_at: now };
+
+  // A job completed by hand still consumed paper. Without a completion time the
+  // derived paper count skips it entirely - computePaper counts completed jobs
+  // by print_completed_at - so staff marking a finished print "done" left the
+  // estimate permanently high, and the tray appeared fuller than it was. Only
+  // set it when it is not already recorded, so a reprint's original completion
+  // is not moved and double-counted.
+  if (newStatus === 'completed') {
+    const existing = await supabaseRequest('GET', '/print_jobs', null, {
+      'select': 'print_completed_at', 'job_id': 'eq.' + jobId, 'limit': '1'
+    });
+    const already = existing.data && existing.data[0]
+      ? existing.data[0].print_completed_at : null;
+    if (!already) patch.print_completed_at = now;
+  }
+
+  const result = await supabaseRequest('PATCH', '/print_jobs?job_id=eq.' + jobId, patch);
 
   if (result.error) return err('Failed to update job status', 500);
 

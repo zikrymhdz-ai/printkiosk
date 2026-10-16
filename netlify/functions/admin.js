@@ -116,6 +116,13 @@ async function getStats() {
 
   const printerFreshness = freshnessOf(printer);
 
+  // The dashboard has to be sent the same derived paper figure the kiosk gets.
+  // This call was missing, so admin.html's `data.paper` was always undefined and
+  // the supply card silently fell back to the stale paper_level column - a fixed
+  // 100% that never moved however much was printed, on a screen whose whole
+  // purpose is to show staff what the printer is doing.
+  const paper = await computePaper(printer);
+
   const usersResult = await supabaseRequest('GET', '/users', null, {
     'select': 'id',
     'role': 'eq.customer'
@@ -144,7 +151,8 @@ async function getStats() {
     // Whether that reading still describes the printer's current state. The
     // dashboard must not present a stale reading as a live one, and it should
     // not have to re-derive the rule on its own either.
-    printer_freshness: printerFreshness
+    printer_freshness: printerFreshness,
+    paper: paper
   });
 }
 
