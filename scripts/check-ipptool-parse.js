@@ -244,5 +244,29 @@ const noTonerAt = worker.indexOf('no toner attributes in the response');
 ok(usageAt > 0 && noTonerAt > 0 && usageAt < noTonerAt,
   'the usage check runs before the empty-supplies conclusion');
 
+// --- an authorization refusal must not end the search for a working request
+// The enhanced request is refused by this printer while the plain one is
+// allowed anonymously. A refusal still prints attribute lines, so it used to
+// satisfy the "did anything answer" test and break the loop on the first
+// candidate - meaning the request that works was never attempted, and the
+// journal accused a printer that answers unauthenticated commands by hand.
+ok(/def _looks_unauthorized/.test(worker), 'authorization refusals are recognised');
+
+// Position matters: the refusal check must sit inside the candidate loop and
+// before the break, or the search still ends on the first refusal.
+const loopStart = worker.indexOf('for test_path in candidates');
+const authInLoop = worker.indexOf('_looks_unauthorized(text)', loopStart);
+const loopBreak = worker.indexOf('break', worker.indexOf('re.search(r"^\\s+\\S', loopStart));
+ok(loopStart > 0 && authInLoop > loopStart && loopBreak > authInLoop,
+  'a refusal moves on to the next candidate instead of ending the search');
+ok(worker.indexOf('auth_denied = True', loopStart) > loopStart,
+  'the refusal is remembered for the final verdict');
+
+// Only claim the printer demands a password once every request was refused.
+ok(/every request was refused for authentication/.test(worker),
+  'the password is only blamed once all requests were refused');
+ok(!/return None, False, \(\s*"printer requires authentication/.test(worker),
+  'a single refusal no longer produces a blanket authentication demand');
+
 if (failed) { console.log('  -> ' + failed + ' failed'); process.exit(1); }
 console.log('  ok      ipptool output parses in both shapes');

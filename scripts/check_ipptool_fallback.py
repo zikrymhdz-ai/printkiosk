@@ -49,6 +49,14 @@ REJECTED = ('ipptool: Unexpected token ATTRIBUTE seen on line 4 of '
 
 FAILED = []
 
+# The option list the Pi's ipptool printed when given -k. Note what is absent:
+# there is no -k, which is the whole reason the worker probes for it.
+HELP_TEXT = ("Usage: ipptool [options] URI filename [ ... filenameN ]\n"
+             "Options:\n"
+             "--ippserver filename\n"
+             "--version\n"
+             "-4\n-6\n-C\n-E\n-I\n-L\n-t\n-v\n")
+
 
 def ok(cond, msg):
     print(("  ok      " if cond else "  FAILED  ") + msg)
@@ -86,6 +94,11 @@ def load_worker(system_exists, ipptool):
             self.stderr = stderr
 
     def _run(args, **kw):
+        # `ipptool --help` carries no test file. The worker runs it once to find
+        # out whether this build has -k, so the stub has to answer it instead of
+        # reaching for args[3] and raising IndexError.
+        if "--help" in args or "-h" in args:
+            return _Result(0, HELP_TEXT, "")
         calls.append(args[3])
         code, out, err = ipptool(args[3])
         return _Result(code, out, err)
@@ -99,6 +112,9 @@ def load_worker(system_exists, ipptool):
     )
     mod.tempfile = types.SimpleNamespace(gettempdir=lambda: tempfile.gettempdir())
     mod.shutil_which = lambda name: "/usr/bin/ipptool"
+    # The worker now warns at startup when credentials cannot be sent. Keep the
+    # harness quiet so it does not drown the test output.
+    mod.log = lambda *a, **k: None
 
     # The worker guards everything behind these at import time. Take one
     # CONTIGUOUS slice: piecemeal per-line matching broke as soon as an
@@ -109,7 +125,10 @@ def load_worker(system_exists, ipptool):
     code += src[src.index("def _probe(test_path)"):src.index("def report(job_id")]
     keep, skip = [], False
     needed = ("get_printer_attrs_test", "_probe", "read_supplies",
-              "reported_model", "_first", "_auth_args")
+              "reported_model", "_first", "_auth_args",
+              # Both are called by the functions above, so they have to survive
+              # the filter or the extracted read_supplies raises NameError.
+              "_looks_unauthorized", "_ipptool_supports_k")
     for line in code.splitlines():
         if line.startswith("def ") and not any(n in line for n in needed):
             skip = True
@@ -218,7 +237,12 @@ def main():
     levels, online, why, model = rs()
     ok(levels is None, "an unauthorized read produces no levels")
     ok(online is False, "and is reported offline")
-    ok("requires authentication" in (why or ""),
+    # The wording changed from "printer requires authentication" to "every
+    # request was refused for authentication", because one refusal is not
+    # proof: this printer allows the plain request anonymously and refuses only
+    # the enhanced one. The intent of the assertion is unchanged - a
+    # password-demanding printer must not be blamed on the wrong machine.
+    ok("refused for authentication" in (why or ""),
        "and says a password is required, not 'wrong printer': %s" % why)
     ok("wrong printer" not in (why or ""),
        "it is not misdiagnosed as the wrong printer")

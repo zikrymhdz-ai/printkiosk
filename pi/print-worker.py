@@ -564,6 +564,20 @@ def _probe(test_path):
     return text, proc.returncode, None
 
 
+def _looks_unauthorized(text):
+    """Did the printer REFUSE this request for authentication reasons?
+
+    About the request, not the device. A printer can allow an anonymous
+    Get-Printer-Attributes for its mandatory attributes while refusing the
+    same operation with `requested-attributes all`, so being denied once does
+    not mean supplies are unreachable - it means try a smaller request.
+    """
+    low = (text or "").lower()
+    return ("not-authorized" in low or "not authorized" in low
+            or "forbidden" in low or "authentication" in low
+            or "client-error-not-authorized" in low)
+
+
 def read_supplies():
     """Ask the printer what it actually has. Returns (levels, online, why, model).
 
@@ -596,6 +610,7 @@ def read_supplies():
     text = None
     first_error = ""
     transport_error = ""
+    auth_denied = False
     for test_path in candidates:
         text, code, err = _probe(test_path)
         if err:
@@ -614,6 +629,23 @@ def read_supplies():
                     or "no route to host" in low or "could not resolve" in low:
                 transport_error = "cannot reach %s - %s" % (CONFIG["printer_uri"], line)
                 break
+            continue
+
+        # An authorization refusal is about THIS request, not about the
+        # printer, so it must not end the search. A refusal still prints
+        # attribute lines (IPP echoes the request's own attributes back), which
+        # used to satisfy the "did anything answer" test below and break the
+        # loop on the very first candidate.
+        #
+        # That mattered because the enhanced request, tried first, is refused
+        # by this printer while the plain one is allowed anonymously. Ending on
+        # the refusal meant the working request was never attempted, and the
+        # journal claimed the printer "requires authentication" for a printer
+        # that had just answered an identical unauthenticated command by hand.
+        if _looks_unauthorized(text):
+            auth_denied = True
+            first_error = first_error or "authorization refused for this request"
+            text = None
             continue
 
         # ipptool exits 0 even when it cannot parse the test file, so its exit
@@ -659,13 +691,15 @@ def read_supplies():
     # this check it is indistinguishable from a successful read that happened to
     # omit everything else - which is precisely how a missing password came to
     # be diagnosed as a serial number and a wrong printer.
-    low_all = (text or "").lower()
-    if ("not-authorized" in low_all or "not authorized" in low_all
-            or "forbidden" in low_all or "authentication" in low_all
-            or "client-error-not-authorized" in low_all):
+    # Only claim the printer demands a password once EVERY request has been
+    # refused. Saying it after a single refusal is what produced "printer
+    # requires authentication" for a printer that answers an unauthenticated
+    # request perfectly well by hand.
+    if _looks_unauthorized(text) or (auth_denied and text is None):
         return None, False, (
-            "printer requires authentication. Set PRINTER_USER and "
-            "PRINTER_PASSWORD in the worker env file."
+            "every request was refused for authentication. Set PRINTER_USER "
+            "and PRINTER_PASSWORD in the worker env file, and check this "
+            "ipptool supports -k."
         ), None
 
     if text is None:
