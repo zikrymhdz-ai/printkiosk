@@ -986,6 +986,16 @@ function saveCurrentSettings() {
     item.croppedFile = undefined;
     item._cropApplied = false;
   }
+
+  // colour_pages and color_runs describe a MERGED document: which of its pages
+  // are colour, so the printer can print them in the right mode and the price can
+  // be split per page. This function rebuilds settings from the form, which would
+  // silently drop both and leave a merged job looking like one solid mode -
+  // taking the per-page colour with it. Carried across deliberately.
+  if (item._mergedColorRuns && !item.settings.color_runs) {
+    item.settings.color_runs = item._mergedColorRuns.runs;
+    item.settings.color_pages = item._mergedColorRuns.pages;
+  }
 }
 
 function loadSettingsToUI() {
@@ -1769,6 +1779,9 @@ job_id: signD.job_id,
         return;
       }
       btn.disabled = true;
+      // Kept so the split can be explained afterwards: once combineByType has
+      // run, the original per-file settings are gone.
+      var preCombine = bulkFiles.slice();
       showUploadOverlay(true, {
         sub: 'Preparing ' + bulkFiles.length + ' files...',
         progress: 5,
@@ -1776,6 +1789,16 @@ job_id: signD.job_id,
       });
       try {
         bulkFiles = await PKPageRange.combineByType(bulkFiles);
+        // Explain any split. combineByType() parts the batch on sides and copies
+        // and used to do it silently, so a customer who set copies on one file
+        // got two jobs and concluded the copies had been ignored.
+        if (typeof PKPageRange.describeGroupSplit === 'function') {
+          var splitNotes = PKPageRange.describeGroupSplit(preCombine);
+          if (splitNotes.length) {
+            toastMsg('Kept as ' + splitNotes.length + ' job'
+              + (splitNotes.length === 1 ? '' : 's') + ': ' + splitNotes.join(' '));
+          }
+        }
       } catch (e) {
         showUploadOverlay(false);
         alert('Could not prepare your files: ' + (e && e.message ? e.message : e));

@@ -388,6 +388,48 @@ ok(mergedJob && mergedJob.settings.color === 'color',
       'the split is combined with copies, not applied to the flat total');
   }
 
-  if (failed) { console.log('  -> ' + failed + ' failed'); process.exit(1); }
+  // --- a split must be explained, not silent ---------------------------------
+  // combineByType() parts a batch on sides and copies. It used to do so without
+  // a word, so a customer who set copies on one file got two jobs and concluded
+  // their copies had been ignored - when in fact the files no longer belonged in
+  // one document.
+  ok(typeof PK.describeGroupSplit === 'function', 'describeGroupSplit is exposed');
+
+  if (typeof PK.describeGroupSplit === 'function') {
+    // A batch item: a name and settings, which is all combineGroups reads.
+    const gitem = (name, s) => ({
+      file: { name },
+      settings: Object.assign({ color: 'bw', copies: 1, sides: 'single', pages: 1 }, s),
+    });
+    const g = (items) => PK.describeGroupSplit(items);
+
+    ok(g([gitem('a.pdf', { copies: 2 }), gitem('b.pdf', { copies: 1 })]).length === 1,
+      'differing copies are explained');
+    const copiesNote = g([gitem('a.pdf', { copies: 2 }), gitem('b.pdf', { copies: 1 })])[0] || '';
+    ok(/copies/.test(copiesNote) && /2/.test(copiesNote) && /1/.test(copiesNote),
+      'and the message names the setting and both values: ' + copiesNote);
+
+    const sidesNote = g([gitem('a.pdf', { sides: 'double' }), gitem('b.pdf', { sides: 'single' })])[0] || '';
+    ok(/sides/.test(sidesNote), 'differing sides are explained: ' + sidesNote);
+
+    // Colour alone must NOT split, so it must not be reported as a reason.
+    ok(g([gitem('a.pdf', { color: 'color' }), gitem('b.pdf', { color: 'bw' })]).length === 0,
+      'a colour difference alone is not a reason to split');
+
+    ok(g([gitem('a.pdf', {}), gitem('b.pdf', {})]).length === 0,
+      'identical settings are not reported as a split');
+
+    // Never answer "nothing" for a split that happened - that is the bug.
+    ok(g([gitem('a.pdf', { copies: 4 }), gitem('b.pdf', { copies: 1 }), gitem('c.pdf', { copies: 1 })]).length >= 1,
+      'an outlier in a three-file batch is still explained');
+  }
+
+  // The merged layout must survive a later save of that item's settings.
+  ok(/_mergedColorRuns/.test(fs.readFileSync(path.join(ROOT, 'website', 'pagerange.js'), 'utf8')),
+    'a merged item keeps its colour layout outside settings');
+  ok(/_mergedColorRuns && !item\.settings\.color_runs/.test(cust),
+    'saveCurrentSettings carries the layout across, so a re-save cannot lose it');
+
+if (failed) { console.log('  -> ' + failed + ' failed'); process.exit(1); }
   console.log('  ok      combining never changes what the customer is charged');
 })().catch(e => { console.log('  ERROR ' + e.message); console.log(e.stack); process.exit(1); });

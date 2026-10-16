@@ -570,7 +570,55 @@ var key = photo
     }, Promise.resolve([]));
   }
 
-/* Settings for a combined group.
+/* Say WHY a batch became more than one job.
+   *
+   * combineByType() splits on sides and copies and said nothing about it, so a
+   * customer who set copies on one file got two jobs out of it with no
+   * explanation - and the natural conclusion was that their copies had been
+   * ignored, rather than that the files no longer belonged in one document.
+   *
+   * One line per differing setting, naming the file and both values, because
+   * the fix is always on their side: set the same value, or use Apply to all.
+   */
+  function describeGroupSplit(items) {
+    var groups = combineGroups(items);
+    if (groups.length < 2) return [];
+
+    var FIELDS = [
+      { key: 'copies', label: 'copies' },
+      { key: 'sides', label: 'sides' }
+    ];
+
+    var name = function (it) {
+      return (it && it.file && it.file.name) || 'a file';
+    };
+    var base = groups[0][0].settings || {};
+    var notes = [];
+
+    for (var g = 1; g < groups.length; g++) {
+      var s = groups[g][0].settings || {};
+      for (var f = 0; f < FIELDS.length; f++) {
+        var k = FIELDS[f].key;
+        var mine = s[k];
+        var theirs = base[k];
+        if (mine !== undefined && theirs !== undefined && mine !== theirs) {
+          notes.push(name(groups[g][0]) + ' is set to ' + FIELDS[f].label + ' "' + mine
+            + '", but "' + theirs + '" is used for the other file'
+            + (groups.length > 2 ? 's' : '') + '. Files can only be printed in one job when they agree.');
+        }
+      }
+    }
+
+    // Two jobs with no differing field should be impossible, but never say
+    // nothing: an unexplained split is what caused this in the first place.
+    if (!notes.length) {
+      notes.push('These files were kept as ' + groups.length
+        + ' separate jobs. Different file types are printed differently, so a document and a photo cannot share one job.');
+    }
+    return notes;
+  }
+
+  /* Settings for a combined group.
    *
    * Every member shares sides and copies - the grouping guarantees it. Colour may
    * differ, so the combined job is printed in colour mode whenever any page
@@ -636,12 +684,16 @@ var key = photo
     var mixedModes = colorRuns.some(function (r) { return r.color === 'color'; })
       && colorRuns.some(function (r) { return r.color === 'bw'; });
 
-    return {
+return {
       file: merged.file,
       thumb: null,
       croppedFile: null,
       pdfPages: merged.pages,
       _mergedFrom: members.map(function (it) { return it.file.name; }),
+      // Kept outside settings because saveCurrentSettings() rebuilds settings
+      // from the form, which would drop the page layout and leave a merged
+      // document looking like one solid colour mode.
+      _mergedColorRuns: (mixedModes ? { runs: colorRuns, pages: colorPages } : null),
       settings: {
         color: colorPages > 0 ? 'color' : 'bw',
         copies: first.copies || 1,
@@ -691,6 +743,7 @@ crop_mode: 'none',
     sniffFormat: sniffFormat,
     combineByType: combineByType,
     combineGroups: combineGroups,
+    describeGroupSplit: describeGroupSplit,
     mergedItem: mergedItem,
     combineImages: combineImages,
     adjustImageFile: adjustImageFile,
