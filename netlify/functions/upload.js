@@ -406,7 +406,7 @@ async function handleUpload(event) {
 
     return json({
       success: true,
-      job: finalSafeJob(createdJob, pricing),
+      job: finalSafeJob(createdJob, pricing, colorPages),
       print_pin: printPin,
       message: 'File uploaded successfully'
     });
@@ -505,7 +505,7 @@ if (!fileUrl || !fileName) return err('file_url and file_name required');
 
     return json({
       success: true,
-      job: finalSafeJob(createdJob, pricing),
+      job: finalSafeJob(createdJob, pricing, colorPages),
       print_pin: printPin,
       message: 'File uploaded successfully'
     });
@@ -513,10 +513,21 @@ if (!fileUrl || !fileName) return err('file_url and file_name required');
 }
 
 // Attach the pricing breakdown so the client can show "RM0.20 + RM0.01 match fee".
-function finalSafeJob(job, pricing) {
+function finalSafeJob(job, pricing, colorPages) {
   return Object.assign({}, job, {
     base_price: job.base_price != null ? job.base_price : pricing.base,
-    match_fee: job.match_fee != null ? job.match_fee : pricing.fee
+    match_fee: job.match_fee != null ? job.match_fee : pricing.fee,
+    // How many pages are colour, echoed back rather than stored.
+    //
+    // There is no color_pages column, so the split lives only in the request that
+    // priced this job. The page then had no way to tell a wholly-colour job from
+    // one that is half colour and half black and white, and showed "Color" for
+    // both - so a customer who merged a B&W document with a colour one was told
+    // the whole job was colour.
+    //
+    // Not persisted deliberately: it is a property of this request, and a column
+    // nothing reads back is a second place for the two to disagree.
+    color_pages: (colorPages === undefined) ? null : colorPages
   });
 }
 

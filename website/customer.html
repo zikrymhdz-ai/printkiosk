@@ -923,9 +923,26 @@ function renderFileSelector() {
       var iconColor = ['jpg','jpeg','png'].includes(ext) ? 'var(--gray-500)' : 'var(--danger)';
       thumb = '<div style="width:36px;height:36px;background:var(--gray-100);border-radius:6px;display:flex;align-items:center;justify-content:center;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="' + iconColor + '" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></div>';
     }
-    return '<div onclick="selectFile(' + i + ')" style="display:flex;align-items:center;gap:8px;padding:8px 12px;border-radius:var(--radius);cursor:pointer;white-space:nowrap;flex-shrink:0;min-width:140px;transition:all 0.2s;' + border + '">' +
+    // Each chip carries its own remove button. Deleting was only possible from the
+    // step-one list, so once a customer had moved on to per-file settings - which
+    // is exactly where they decide a file should not be there - there was no way
+    // to take it out without going back. The most likely moment to change your
+    // mind about a file is the moment you are looking at it.
+    //
+    // removeFile() saves the in-progress settings first: the chips are built from
+    // bulkFiles, and the settings panel writes into the SELECTED item, so
+    // splicing the array without saving would discard whatever the customer had
+    // just dialled in for the file they were editing.
+    return '<div onclick="selectFile(' + i + ')" style="position:relative;display:flex;align-items:center;gap:8px;padding:8px 30px 8px 12px;border-radius:var(--radius);cursor:pointer;white-space:nowrap;flex-shrink:0;min-width:140px;transition:all 0.2s;' + border + '">' +
       thumb +
       '<span style="font-size:12px;font-weight:600;color:var(--gray-900);overflow:hidden;text-overflow:ellipsis;max-width:100px;">' + f.name + '</span>' +
+      '<button type="button" title="Remove this file" aria-label="Remove ' + f.name + '" ' +
+        'onclick="event.stopPropagation();removeFile(' + i + ')" ' +
+        'style="position:absolute;top:4px;right:4px;width:20px;height:20px;padding:0;display:flex;align-items:center;justify-content:center;background:none;border:none;border-radius:50%;cursor:pointer;color:var(--gray-400);transition:color 0.2s,background 0.2s;" ' +
+        'onmouseover="this.style.color=\'var(--danger)\';this.style.background=\'var(--gray-100)\'" ' +
+        'onmouseout="this.style.color=\'var(--gray-400)\';this.style.background=\'none\'">' +
+        '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>' +
+      '</button>' +
     '</div>';
   }).join('');
 }
@@ -1044,8 +1061,32 @@ function applyToAllFiles() {
 }
 
 function removeFile(idx) {
+  // Save first. The settings panel writes into the SELECTED item, so splicing
+  // the array before persisting would throw away whatever the customer had
+  // dialled in for the file they were looking at. It also means removing a
+  // different file than the selected one does not silently drop this one's work.
+  if (selectedFileIndex >= 0 && selectedFileIndex < bulkFiles.length) saveCurrentSettings();
+
   bulkFiles.splice(idx, 1);
+
+  // The selection was an INDEX into the array that just changed. Left alone it
+  // would silently point at the next file, so the settings panel would show one
+  // file's settings above another file's name - or, removing the last file,
+  // leave it pointing past the end.
+  if (!bulkFiles.length) {
+    selectedFileIndex = -1;
+  } else if (selectedFileIndex > idx) {
+    selectedFileIndex--;
+  } else if (selectedFileIndex === idx) {
+    selectedFileIndex = Math.min(idx, bulkFiles.length - 1);
+  }
+
+  // Both views list the same files, so both have to be redrawn.
+  renderFileSelector();
   renderFileList();
+  if (selectedFileIndex >= 0) loadSettingsToUI();
+  updateLivePreview();
+  markSettingsDirty();
 }
 
 function clearAllFiles() {
@@ -1147,6 +1188,47 @@ function previewFile(idx) {
 function handleFile(file) { addFiles([file]); }
 
 /* ===== SUMMARY ===== */
+/* What to CALL a job's colour, as distinct from how it is PRINTED.
+ *
+ * A merged job prints in colour mode whenever any page wanted colour, so its
+ * color_mode is 'color' even when only some pages are colour. Labelling that
+ * "Color" misrepresents what the customer chose - and the summary had the
+ * opposite fault, calling a wholly colour job "Mixed" because any colour at all
+ * set the flag.
+ *
+ * Accepts either a bulkFiles item (settings nested) or a plain job object from
+ * the server, so the summary and the receipt cannot drift apart. color_pages is
+ * the split; without it, the job's own colour mode decides.
+ */
+function colorLabelOf(item) {
+  var s = (item && item.settings) ? item.settings : (item || {});
+  var total = parseInt(s.pages, 10) || 0;
+  var cp = (s.color_pages === undefined || s.color_pages === null) ? null : parseInt(s.color_pages, 10);
+  var mode = s.color || s.color_mode || 'bw';
+  var colorPages = (cp !== null && isFinite(cp)) ? cp : ((mode === 'color') ? total : 0);
+
+  if (total > 0) {
+    if (colorPages <= 0) return 'B&W';
+    if (colorPages >= total) return 'Color';
+    return 'Mixed';
+  }
+  return mode === 'color' ? 'Color' : 'B&W';
+}
+
+/* One label for a whole batch, from its parts. */
+function colorLabelForBatch(items) {
+  var labels = (items || []).map(colorLabelOf);
+  // A part that is itself mixed makes the whole batch mixed. Without this the
+  // label fell through to "B&W", because a single "Mixed" is neither "Color"
+  // nor "B&W" and matched neither branch - so the most mixed batch of all, a
+  // single half-colour job, was reported as entirely black and white.
+  if (labels.indexOf('Mixed') !== -1) return 'Mixed';
+  var hasColor = labels.indexOf('Color') !== -1;
+  var hasBw = labels.indexOf('B&W') !== -1;
+  if (hasColor && hasBw) return 'Mixed';
+  return hasColor ? 'Color' : 'B&W';
+}
+
 function updateSummary() {
   var totalPrice = 0;
   var totalPages = 0;
@@ -1179,7 +1261,7 @@ function updateSummary() {
   currentPrice = Math.round(totalPrice * 100) / 100;
 
   document.getElementById('summaryPages').textContent = totalPages;
-  document.getElementById('summaryColor').textContent = hasColor ? 'Mixed' : 'B&W';
+  document.getElementById('summaryColor').textContent = colorLabelForBatch(bulkFiles);
   document.getElementById('summarySides').textContent = hasDouble ? 'Double-sided' : 'Single-sided';
   document.getElementById('summaryCopies').textContent = totalCopies;
   document.getElementById('summaryFile').textContent = bulkFiles.length + ' file' + (bulkFiles.length > 1 ? 's' : '');
@@ -1812,8 +1894,21 @@ var d;
   var fileNames = pendingUploadJobs.map(function(j) { return j.file_name; });
   var pinDisplay = pendingUploadJobs.length ? (pendingUploadJobs[0].print_pin || orderPin) : orderPin;
   var allJobIds = pendingUploadJobs.map(function(j) { return j.job_id; });
-  var colorModes = pendingUploadJobs.map(function(j) { return j.color_mode || 'bw'; });
-  var bulkColor = colorModes.every(function(c) { return c === colorModes[0]; }) ? colorModes[0] : 'mixed';
+var colorModes = pendingUploadJobs.map(function(j) {
+  // A merged job prints in colour mode whenever ANY page wanted colour, so its
+  // color_mode says 'color' even when only half its pages are colour. Reporting
+  // that as "Color" told a customer who merged one B&W document with one colour
+  // document that the whole job was colour - which is the opposite of what they
+  // asked for, and what they paid for.
+  //
+  // color_pages comes back with the created job. When it is a real subset of the
+  // pages, the honest label is Mixed.
+  var cp = (j.color_pages === undefined || j.color_pages === null) ? null : parseInt(j.color_pages, 10);
+  var total = parseInt(j.pages, 10) || 0;
+  if (cp !== null && isFinite(cp) && total > 0 && cp > 0 && cp < total) return 'mixed';
+  return j.color_mode || 'bw';
+});
+var bulkColor = colorModes.every(function(c) { return c === colorModes[0]; }) ? colorModes[0] : 'mixed';
 
   const entry = {
     job_id: allJobIds.join(','),
@@ -1998,9 +2093,10 @@ function showReceipt(serverJobs, job) {
   document.getElementById('receiptJobId').textContent = serverJobs.length ? serverJobs.map(function(sj) { return sj.job_id; }).join(', ') : (job ? job.job_id : '-');
   document.getElementById('receiptFile').textContent = fileName;
   document.getElementById('receiptPages').textContent = totalPages + ' pages';
-  var allColors = serverJobs.map(function(sj) { return sj.color_mode || 'bw'; });
-  var displayColor = allColors.every(function(c) { return c === allColors[0]; }) ? allColors[0] : 'mixed';
-  document.getElementById('receiptColor').textContent = displayColor === 'color' ? 'Color' : displayColor === 'mixed' ? 'Mixed' : 'B&W';
+// Label the colour from the page split, not from color_mode. A merged job that
+  // is half colour prints in colour mode and carries color_mode 'color', so
+  // reading color_mode here called a half-colour job "Color".
+  document.getElementById('receiptColor').textContent = colorLabelForBatch(serverJobs);
   document.getElementById('receiptCopies').textContent = 'x' + totalCopies;
   document.getElementById('receiptTotal').textContent = 'RM ' + totalPrice.toFixed(2);
   document.getElementById('receiptCoins').textContent = serverJobs.length;

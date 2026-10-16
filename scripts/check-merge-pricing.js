@@ -94,7 +94,56 @@ ok(mergedJob && mergedJob.settings.color_pages === 1,
 ok(mergedJob && mergedJob.settings.color === 'color',
   'the job prints in colour mode because one member wanted colour');
 
-  // --- the invariant, across every combination -----------------------------
+  // --- what the page CALLS the colour, as distinct from how it prints -------
+  // A merged job prints in colour mode whenever any page wanted colour, so its
+  // color_mode is 'color' even when only some pages are. Labelling that "Color"
+  // misrepresents what the customer chose; labelling a wholly-colour job "Mixed"
+  // is the opposite error and was what the summary did.
+  const cust = fs.readFileSync(require('path').join(__dirname, '..', 'website', 'customer.html'), 'utf8');
+  const labelOf = new Function(
+    cust.match(/function colorLabelOf[\s\S]*?\n\}/)[0] + '\n' +
+    cust.match(/function colorLabelForBatch[\s\S]*?\n\}/)[0] +
+    '\nreturn colorLabelForBatch;')();
+
+  const labelCases = [
+    ['one colour document', [{ settings: { color: 'color', pages: 2 } }], 'Color'],
+    ['one B&W document', [{ settings: { color: 'bw', pages: 2 } }], 'B&W'],
+    ['a merged half-colour job', [{ color_mode: 'color', pages: 2, color_pages: 1 }], 'Mixed'],
+    ['a merged all-colour job', [{ color_mode: 'color', pages: 2, color_pages: 2 }], 'Color'],
+    ['a merged all-B&W job', [{ color_mode: 'bw', pages: 3, color_pages: 0 }], 'B&W'],
+    ['two jobs, one colour one B&W',
+      [{ settings: { color: 'color', pages: 1 } }, { settings: { color: 'bw', pages: 1 } }], 'Mixed'],
+    ['a colour job with no split sent', [{ color_mode: 'color', pages: 4 }], 'Color'],
+    ['a merged job 2 colour pages of 5', [{ color_mode: 'color', pages: 5, color_pages: 2 }], 'Mixed'],
+  ];
+  for (const [name, items, want] of labelCases) {
+    let got;
+    try { got = labelOf(items); } catch (e) { got = 'threw: ' + e.message; }
+    ok(got === want, 'labelled ' + name + ' as ' + want + ', got ' + got);
+  }
+
+  // The kiosk and the summary must not be the only places that know about a
+  // partial split: the whole point is that one fact has one answer.
+  ok(/colorLabelForBatch\(serverJobs\)/.test(cust),
+    'the receipt labels colour from the page split, not from color_mode');
+  ok(/colorLabelForBatch\(bulkFiles\)/.test(cust),
+    'the summary uses the same helper, so the two cannot disagree');
+
+  // Removing a file must be possible from the settings step too, and must not
+  // silently discard the settings the customer had just dialled in.
+  ok(/function removeFile/.test(cust), 'removeFile exists');
+  const rf = cust.match(/function removeFile\(idx\) \{[\s\S]*?\n\}/);
+  ok(!!rf, 'removeFile body found');
+  if (rf) {
+    ok(/saveCurrentSettings\(\)/.test(rf[0]),
+      'removing a file saves the in-progress settings first');
+    ok(/renderFileSelector\(\)/.test(rf[0]),
+      'and redraws the per-file chips, which is where the customer was');
+    ok(/selectedFileIndex/.test(rf[0]),
+      'and repairs the selection index, which the splice invalidated');
+    ok(/removeFile\(' \+ i \+ '\)/.test(cust),
+      'the settings chips carry their own remove button');
+  }
   const modes = ['bw', 'color'];
   const sideList = ['single', 'double'];
   const copyList = [1, 2, 3];
