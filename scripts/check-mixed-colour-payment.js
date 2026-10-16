@@ -19,6 +19,7 @@ const vm = require('vm');
 const https = require('https');
 
 const ROOT = path.join(__dirname, '..');
+require('./test-env');
 const shared = require(path.join(ROOT, 'netlify/functions/_shared.js'));
 const paymentSrc = fs.readFileSync(path.join(ROOT, 'netlify/functions/payment.js'), 'utf8');
 const kioskSrc = fs.readFileSync(path.join(ROOT, 'kiosk/walkin.html'), 'utf8');

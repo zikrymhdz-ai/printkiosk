@@ -27,6 +27,7 @@ const ok = (cond, msg) => {
 };
 
 // The real exports. _shared.js is plain CommonJS with no side effects at import.
+require('./test-env');
 const shared = require(path.join(FUNCTIONS, '_shared.js'));
 const exportNames = Object.keys(shared);
 ok(exportNames.length > 0, '_shared.js exports ' + exportNames.length + ' helper(s)');

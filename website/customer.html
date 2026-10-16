@@ -291,15 +291,15 @@
             </div>
             <div class="form-group">
               <label>Duplex</label>
-              <select id="sidesMode" class="input" onchange="markSettingsDirty(); updateLivePreview()">
+              <select id="sidesMode" class="input" onchange="onOrderSettingChange()">
                 <option value="single">Single-sided</option>
                 <option value="double">Double-sided (30% cheaper)</option>
               </select>
               <p class="text-xs text-muted" style="margin-top:4px;">Double-sided uses the printer's auto duplex feeder. Plain paper only &mdash; glossy or heavy paper can jam.</p>
             </div>
             <div class="form-group">
-              <label>Copies</label>
-              <input type="number" id="copies" class="input" value="1" min="1" max="99" onchange="markSettingsDirty(); updateLivePreview()">
+<label>Copies <span class="text-xs text-muted" style="font-weight:400;">(all files)</span></label>
+  <input type="number" id="copies" class="input" value="1" min="1" max="99" onchange="onOrderSettingChange()">
             </div>
             <div class="form-group">
               <label>Pages</label>
@@ -1027,6 +1027,54 @@ function loadSettingsToUI() {
  * so the customer can judge the result, but the values are only committed when
  * Confirm Settings is pressed - otherwise a stray change silently alters what
  * gets printed and charged for, and each file stops having its own settings. */
+/* Duplex and copies apply to the WHOLE order.
+ *
+ * They used to be edited per file, like colour. That quietly split a batch into
+ * several jobs - combineByType() parts on sides and copies - so setting copies
+ * to 2 on one file and leaving another at 1 produced two jobs, and the only
+ * visible result was two documents where one was expected.
+ *
+ * They are order-wide properties: a print job has a single copies value and a
+ * single duplex mode, so two files that disagree cannot be one job at all.
+ * Editing them per file described a state the printer cannot honour. Applying
+ * them to every file is not a convenience - it is the only thing that can be
+ * true.
+ *
+ * Colour stays per file, deliberately. It is the one setting a merged document
+ * can genuinely vary, which is what makes "one colour page, one black and white"
+ * possible inside a single job.
+ *
+ * Applied immediately rather than behind Confirm Settings: there is no stray-drag
+ * risk in a select or a number box, and holding them pending is what produced
+ * the surprise in the first place. Brightness, contrast and crop are sliders and
+ * keep the confirm step.
+ */
+function onOrderSettingChange() {
+  if (selectedFileIndex < 0 || selectedFileIndex >= bulkFiles.length) return;
+
+  var copies = Math.max(1, Math.min(99, parseInt(document.getElementById('copies').value, 10) || 1));
+  var sides = document.getElementById('sidesMode').value;
+  document.getElementById('copies').value = copies;
+
+  // Committed to the selected file first, so a page range or an image
+  // adjustment is captured from the controls before the loop overwrites copies
+  // and sides on everything.
+  saveCurrentSettings();
+
+  bulkFiles.forEach(function (item) {
+    item.settings = item.settings || {};
+    item.settings.copies = copies;
+    item.settings.sides = sides;
+  });
+
+  // Nothing is pending now: these two have no stray-drag risk, which is the only
+  // thing the confirm step exists to guard against.
+  clearAdjustPending();
+  updateSummary();
+  updateLivePreview();
+  renderFileList();
+}
+
 function markSettingsDirty() {
   var btn = document.getElementById('adjustConfirmBtn');
   var note = document.getElementById('adjustPendingNote');

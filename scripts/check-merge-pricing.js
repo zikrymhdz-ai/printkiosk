@@ -11,6 +11,7 @@ const path = require('path');
 const vm = require('vm');
 
 const ROOT = path.join(__dirname, '..');
+require('./test-env');
 const { calculatePrice } = require(path.join(ROOT, 'netlify/functions/_shared.js'));
 
 function getLib() {

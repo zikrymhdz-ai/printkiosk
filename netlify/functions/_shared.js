@@ -1,7 +1,37 @@
 const crypto = require('crypto');
 
-const SUPABASE_URL = process.env.SUPABASE_URL || 'https://ninsrrallzwmkqyosqeu.supabase.co';
-const SUPABASE_KEY = process.env.SUPABASE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5pbnNycmFsbHp3bWtxeW9zcWV1Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4Mzg2MDk1MiwiZXhwIjoyMDk5NDM2OTUyfQ.JabQJz9kRWtZqY7FVJD14yOaKT0phfXTQekGUzYe5ZA';
+/* A setting the code cannot work without.
+ *
+ * Read through this rather than with `||` so that a missing variable stops the
+ * deployment with the variable's NAME in the error, instead of the site quietly
+ * running on a value baked into the repository. That second behaviour is the one
+ * worth avoiding: it makes an unconfigured environment look like a working one,
+ * which is exactly how four live credentials sat in git for months without
+ * anyone noticing they were being used as a fallback.
+ */
+function requireEnv(name) {
+  const value = process.env[name];
+  if (!value || !String(value).trim()) {
+    throw new Error(
+      name + ' is not set. Set it in the deployment environment '
+      + '(Netlify: Site settings > Environment variables). It is deliberately not '
+      + 'committed to this repository.'
+    );
+  }
+  return String(value).trim();
+}
+
+// Secrets are read from the environment and ONLY from the environment.
+//
+// These lines each carried a live fallback committed to the repository: a
+// 219-character Supabase service key, a notification secret, the sender address
+// and the Gmail app password. Anyone who read the repo - or any clone of it -
+// had the database and the mailbox.
+//
+// Removing them does not un-expose them. They are in git history and must be
+// rotated. What this stops is the next commit.
+const SUPABASE_URL = requireEnv('SUPABASE_URL');
+const SUPABASE_KEY = requireEnv('SUPABASE_KEY');
 const SUPABASE_REST_URL = SUPABASE_URL + '/rest/v1';
 
 const SESSION_DURATION = 86400 * 7;
@@ -23,7 +53,7 @@ const JOB_PAYABLE_WINDOW_MIN = 60;
 
 // Shared secret between the PrintKiosk Payment Watcher APK and this backend,
 // used to sign server-side "payment detected" events (HMAC-SHA256).
-const NOTIFICATION_SECRET = process.env.NOTIFICATION_SECRET || 'pk_notif_v3_fd3877b903677547e567f1d1f0cc68770df89598a5c7d09fe229d81d8dc4d37c';
+const NOTIFICATION_SECRET = process.env.NOTIFICATION_SECRET || '';
 
 // Shared secret between the Pi print worker and this backend. Deliberately has
 // NO hardcoded fallback: a secret committed to git is how the watcher secret
@@ -44,8 +74,8 @@ const ALLOWED_EXTENSIONS = ['pdf', 'doc', 'docx', 'jpg', 'jpeg', 'png'];
 
 const SMTP_HOST = process.env.SMTP_HOST || 'smtp.gmail.com';
 const SMTP_PORT = parseInt(process.env.SMTP_PORT || '587', 10);
-const SMTP_USER = process.env.SMTP_USER || 'printkiosk.sender@gmail.com';
-const SMTP_PASS = process.env.SMTP_PASS || 'vewuljgrgldslwwv';
+const SMTP_USER = process.env.SMTP_USER || '';
+const SMTP_PASS = process.env.SMTP_PASS || '';
 const SMTP_FROM_NAME = process.env.SMTP_FROM_NAME || 'PrintKiosk';
 const VERIFICATION_CODE_LENGTH = 6;
 const VERIFICATION_CODE_TTL = 600;
