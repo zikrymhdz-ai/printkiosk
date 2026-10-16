@@ -18,6 +18,10 @@ const FILES = [
   'website/pagerange.js',
   'website/pstore.js',
   'kiosk/walkin.html',
+  // Kept pure ASCII for the same reason: it is the file a developer or agent is
+  // most likely to open and edit, and a double-encoded em dash there is as
+  // confusing as one on the kiosk screen.
+  'AGENT.md',
 ];
 
 // U+00E2 is the first byte of most 3-byte UTF-8 sequences, so a mis-encoded
@@ -44,6 +48,14 @@ for (const rel of FILES) {
     console.log('  FAILED  ' + rel + ':' + line + ' contains double-encoded UTF-8: '
       + Array.from(m[0]).map((c) => 'U+' + c.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')).join(' '));
     console.log('          run: node scripts/fix-html-encoding.js');
+    failed++;
+    continue;
+  }
+
+  // Pure ASCII, so no encoding can be got wrong in the first place.
+  if (rel === 'AGENT.md' && /[^\x00-\x7F]/.test(text)) {
+    console.log('  FAILED  ' + rel + ' contains non-ASCII characters');
+    console.log('          run: node scripts/fix-agent-md-ascii.js');
     failed++;
     continue;
   }
