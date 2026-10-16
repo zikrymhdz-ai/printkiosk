@@ -334,7 +334,17 @@
               <p id="adjustPendingNote" class="hidden text-xs text-muted" style="margin-top:6px;">Not applied yet. Press <strong>Confirm Settings</strong> before uploading.</p>
             </div>
             <div style="margin-top:12px; padding-top:12px; border-top:1px solid var(--gray-100);">
-              <button class="btn btn-secondary btn-block" style="font-size:12px; padding:6px 12px;" onclick="applyToAllFiles()">Apply Settings to All Files</button>
+              <!-- Copies and duplex now apply to every file the moment they
+                   change, so this button is about the settings that stay
+                   per-file: colour, pages, and the image adjustments. The label
+                   says so, because a button that appeared to control copies
+                   when it had no effect was part of why "my copies are ignored"
+                   went unfixed for so long. -->
+              <button class="btn btn-secondary btn-block" style="font-size:12px; padding:6px 12px;"
+                onclick="applyToAllFiles()">Apply Colour &amp; Pages to All Files</button>
+              <p class="text-xs text-muted" style="margin:6px 0 0; text-align:center;">
+                Copies and duplex already apply to every file.
+              </p>
             </div>
           </div>
 

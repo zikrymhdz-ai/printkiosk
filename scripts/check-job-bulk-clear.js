@@ -148,5 +148,66 @@ if (bodies.every(Boolean)) {
   ok(selected.size === 0, 'nothing is selected when the list is re-rendered');
 }
 
+// --- a cleared job must actually disappear ---------------------------------
+// Clearing marks a row completed and nulls its PIN, which is indistinguishable
+// from a job that really printed. The customer list is served by get-all-jobs,
+// which deliberately includes finished work, so the cleared job came straight
+// back and Delete looked like it had done nothing.
+ok(fs.existsSync(path.join(ROOT, 'migrations', '20261016_print_cleared_at.sql')),
+  'a cleared_at column is provided by a migration');
+ok((data.match(/'cleared_at':\s*new Date\(\)\.toISOString\(\)/g) || []).length >= 2,
+  'both clear paths stamp cleared_at, not just one of them');
+// Both customer-facing queries must hide cleared jobs. get-jobs already hid
+// them by excluding completed; get-all-jobs did not, and it is the one the
+// customer page reads.
+const customerQueries = (data.match(/'cleared_at':\s*'is\.null'/g) || []).length;
+ok(customerQueries >= 2, 'both customer-facing job queries exclude cleared jobs, got ' + customerQueries);
+// Staff and the watcher must still see them: a cleared job is evidence, and a
+// payment may still be in flight against it.
+ok(!/case 'get-all-jobs'[\s\S]*?print_jobs[\s\S]{0,400}?'select': '\*'[\s\S]{0,400}?cleared_at': 'is\.null'[\s\S]{0,200}?watcher/.test(data),
+  'admin and the watcher are not blinded by the filter');
+
+// --- an unpaid job must be clearable even though it has a PIN -------------
+// A PIN is assigned at creation, so every pending job has one - but an unpaid
+// document cannot be collected, because collecting means paying. Testing the PIN
+// first refused to clear every unpaid job: the jobs with the least at stake were
+// the only ones a customer could not delete.
+const cr = data.match(/function clearableReason[\s\S]*?\n\}/);
+ok(!!cr, 'clearableReason found');
+if (cr) {
+  const reason = new Function(cr[0] + '\nreturn clearableReason;')();
+
+  const clearCases = [
+    ['a pending UNPAID job that has a PIN', { status: 'pending', paid: false, print_pin: '827191' }],
+    ['a pending unpaid job with no PIN', { status: 'pending', paid: false, print_pin: null }],
+  ];
+  for (const [name, job] of clearCases) {
+    ok(reason(job) === null, name + ' is clearable');
+  }
+
+  const keptCases = [
+    ['a pending PAID job with a PIN', { status: 'pending', paid: true, print_pin: '827191' }],
+    ['a job that is printing', { status: 'printing', paid: true, print_pin: '1' }],
+    ['a failed PAID job needing a refund', { status: 'failed', paid: true, print_pin: null }],
+    // Deliberate: ready_to_print normally follows payment, so an unpaid one is
+    // an anomalous state rather than an ordinary unpaid order. Left blocked
+    // rather than assumed safe.
+    ['an unpaid ready_to_print job (anomalous, left blocked)',
+      { status: 'ready_to_print', paid: false, print_pin: '555' }],
+  ];
+  for (const [name, job] of keptCases) {
+    ok(reason(job) !== null, name + ' is kept');
+  }
+
+  ok(reason({ status: 'completed', paid: true, print_pin: null }) === null,
+    'a finished job is still clearable');
+}
+
+// The unpaid rule has to come BEFORE the PIN rule, or it never runs.
+const pinAt = cr ? cr[0].indexOf('if (job.print_pin)') : -1;
+const unpaidAt = cr ? cr[0].indexOf('!paid') : -1;
+ok(unpaidAt > 0 && pinAt > unpaidAt,
+  'the unpaid rule is checked before the PIN rule, or it never applies');
+
 if (failed) { console.log('  -> ' + failed + ' failed'); process.exit(1); }
 console.log('  ok      bulk clearing is scoped to the owner and pruned to what is on screen');

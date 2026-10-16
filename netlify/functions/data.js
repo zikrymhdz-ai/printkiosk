@@ -41,6 +41,7 @@ if (event.httpMethod === 'POST' && action === 'delete-job') {
         'user_id': 'eq.' + userId,
         'select': '*',
         'status': 'not.in.(completed,refund_issued,cancelled,failed)',
+        'cleared_at': 'is.null',
         'order': 'created_at.desc'
       });
       return json({ success: true, data: result.error ? [] : result.data });
@@ -52,6 +53,14 @@ if (event.httpMethod === 'POST' && action === 'delete-job') {
       const result = await supabaseRequest('GET', '/print_jobs', null, {
         'user_id': 'eq.' + userId,
         'select': '*',
+        // Cleared jobs are excluded here specifically. This query deliberately
+        // returns finished work - a customer needs to see what already printed -
+        // so without the filter a job they had just deleted came back on the
+        // next load and Delete looked like it had done nothing.
+        //
+        // is.null is what "was never cleared" means in PostgREST; a plain eq
+        // filter cannot express it.
+        'cleared_at': 'is.null',
         'order': 'created_at.desc'
       });
       return json({ success: true, data: result.error ? [] : result.data });
@@ -313,7 +322,10 @@ async function handleCompleteJob(event) {
 
   await supabaseRequest('PATCH', '/print_jobs?job_id=eq.' + jobId, {
     'status': 'completed',
-    'print_pin': null
+    'print_pin': null,
+    // Marks this CLEARED rather than printed, so the customer's own list stops
+    // handing it back. See the comment in handleDeleteJob.
+    'cleared_at': new Date().toISOString()
   });
 
   const filePath = job.file_path || '';
@@ -352,6 +364,16 @@ async function handleCompleteJob(event) {
 function clearableReason(job) {
   const status = job.status || '';
   const paid = job.paid === true || job.paid === 'true';
+
+  // Unpaid work is always clearable, PIN or not.
+  //
+  // A PIN is assigned when the job is CREATED, so every pending job has one -
+  // but an unpaid document cannot be collected, because collecting it means
+  // paying for it. Testing the PIN first therefore refused to clear every
+  // unpaid job, which is backwards: the jobs with the least at stake were the
+  // only ones a customer could not delete, and "has a print PIN and can still be
+  // collected" is advice about a document they never paid for.
+  if (!paid && status === 'pending') return null;
 
   // Checked before status: a PIN is the strongest signal regardless of state.
   if (job.print_pin) return 'has a print PIN and can still be collected';
@@ -392,7 +414,14 @@ async function handleDeleteJob(event) {
 
   await supabaseRequest('PATCH', '/print_jobs?job_id=eq.' + jobId, {
     'status': 'completed',
-    'print_pin': null
+    'print_pin': null,
+    // Marks this CLEARED rather than printed. Without it the row is
+    // indistinguishable from a job that really did come out of the printer, so
+    // the customer's own list - get-all-jobs, which deliberately includes
+    // finished work - handed the job straight back and Delete did nothing.
+    // get-jobs already hid it, by excluding completed; this is the query the
+    // customer page actually reads.
+    'cleared_at': new Date().toISOString()
   });
 
   const filePath = job.file_path || '';
