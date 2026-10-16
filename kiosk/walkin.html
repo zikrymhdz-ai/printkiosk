@@ -104,14 +104,14 @@ window.KIOSK_SETTINGS_POLL_MS = 30000;
   .pp-title { font-size: 17px; font-weight: 700; display: flex; align-items: center; gap: 8px; color: #1e3a8a; }
   .pp-status-line { font-size: 13px; color: #64748b; margin-bottom: 16px; }
   .pp-section { margin-top: 14px; }
-  .pp-section-title { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: #93a5bd; margin-bottom: 9px; }
+  .pp-section-title { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: #334155; margin-bottom: 9px; }
   .pp-row { margin-bottom: 11px; }
   .pp-row-top { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 5px; }
   .pp-row-label { color: #475569; font-weight: 500; }
   .pp-row-value { color: #1e40af; font-weight: 600; }
   .pp-bar { height: 10px; background: #e8effb; border-radius: 6px; overflow: hidden; }
   .pp-bar-fill { height: 100%; border-radius: 6px; transition: width 0.6s ease, background-color 0.4s; min-width: 2px; }
-  .pp-foot { margin-top: 18px; font-size: 12px; color: #93a5bd; border-top: 1px solid #e6eefb; padding-top: 12px; display: flex; justify-content: space-between; }
+  .pp-foot { margin-top: 18px; font-size: 12px; color: #334155; border-top: 1px solid #e6eefb; padding-top: 12px; display: flex; justify-content: space-between; }
   /* Below ~1180px the three columns get too cramped to trust with a PIN entry,
      so fall back to camera on top and PIN beneath, panel last. */
   @media (max-width: 1180px) {
@@ -164,7 +164,7 @@ window.KIOSK_SETTINGS_POLL_MS = 30000;
   .dot-yellow { background: #eab308; }
   .dot-red { background: #ef4444; }
   /* Overlays use a soft light-blue backdrop so the screen feels bright, not dark. */
-  .confirm-overlay { position: fixed; inset: 0; background: rgba(238,244,255,0.94); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; z-index: 200; padding: 16px; }
+  .confirm-overlay { position: fixed; inset: 0; background: rgba(238,244,255,0.97); display: flex; align-items: center; justify-content: center; z-index: 200; padding: 16px; }
   /* Admin disabled face login at the kiosk. */
   .cam-box.face-login-off, #camBox.face-login-off { opacity: 0.4; filter: grayscale(1); }
   body.maintenance-active #camBox, body.maintenance-active .kiosk-actions { pointer-events: none; }
@@ -178,27 +178,36 @@ window.KIOSK_SETTINGS_POLL_MS = 30000;
    * badly on the Pi. Hover is now pure CSS, so the browser handles it on the
    * compositor and no script runs at all while scrolling.
    *
-   * content-visibility lets off-screen cards skip layout and paint entirely,
-   * which is what keeps a long list smooth on modest hardware.
+   * content-visibility also used to be set here, with contain-intrinsic-size
+   * standing in for the real card height. It was a second source of judder: the
+   * placeholder height was never exactly the rendered height, so the scrollbar
+   * length shifted as cards resolved, and on a touchscreen the card under the
+   * finger kept :hover for the entire scroll - which re-triggered the
+   * transitioned transform under every movement. A shop kiosk lists a handful of
+   * jobs, not thousands, so skipping off-screen paint buys nothing here and the
+   * two effects cost real frame drops. Both are gone.
    */
-  .job-card {
-    background: #f8fbff; border-radius: 16px; padding: 20px; margin-top: 12px;
-    border: 1px solid #e2e8f0; text-align: left; cursor: pointer;
-    transition: border-color 0.15s ease, transform 0.15s ease;
-    content-visibility: auto; contain-intrinsic-size: auto 104px;
-    -webkit-tap-highlight-color: transparent;
-  }
-  .job-card:hover, .job-card:focus-visible { border-color: #3b82f6; transform: translateY(-1px); }
+.job-card {
+      background: #f8fbff; border-radius: 16px; padding: 20px; margin-top: 12px;
+      border: 1px solid #e2e8f0; text-align: left; cursor: pointer;
+      transition: border-color 0.15s ease;
+      -webkit-tap-highlight-color: transparent;
+      }
+      /* Border colour only. The transform is gone on purpose: on a touchscreen the
+      card under the finger stays :hover for the whole scroll, so a transitioned
+      transform re-triggered under every movement and the list juddered as it
+      scrolled. Nothing about a pressed card needed it to move. */
+      .job-card:hover, .job-card:focus-visible { border-color: #3b82f6; }
   .job-card:focus-visible { outline: 2px solid #3b82f6; outline-offset: 2px; }
   @media (prefers-reduced-motion: reduce) {
     .job-card { transition: none; }
     .job-card:hover, .job-card:focus-visible { transform: none; }
   }
-  .job-card .label { color: #93a5bd; font-size: 12px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em; }
+  .job-card .label { color: #334155; font-size: 12px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em; }
   .job-card .value { color: #0f2a4a; font-size: 16px; font-weight: 600; word-break:break-all; }
   .pin-display { font-size: 48px; font-weight: 900; letter-spacing: 16px; color: #2563eb; font-family: monospace; }
   .hidden { display: none !important; }
-  .bottom-links { margin-top: auto; padding: 16px 0; text-align: center; font-size: 13px; color: #93a5bd; }
+  .bottom-links { margin-top: auto; padding: 16px 0; text-align: center; font-size: 13px; color: #334155; }
   .bottom-links a { color: #2563eb; text-decoration: none; transition: color 0.2s; }
   .bottom-links a:hover { color: #1d4ed8; }
   .kiosk-divider { border: none; border-top: 1px solid #dbeafe; margin: 12px 0; }
@@ -459,6 +468,30 @@ window.addEventListener('load', function () {
 
 /* The kiosk already collapses to a single column on narrow screens; the header
    has to follow, or the clock is pushed off the edge. */
+/* Cancel button for the job-picker card. Sticky so it is reachable at any
+   scroll position; top-right so it cannot be confused with the job list. */
+.jobs-cancel {
+  position: sticky;
+  top: 0;
+  float: right;
+  margin: -8px -8px 0 0;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 50%;
+  color: #334155;
+  cursor: pointer;
+  z-index: 2;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+.jobs-cancel:hover, .jobs-cancel:focus-visible { color: #b91c1c; border-color: #fca5a5; }
+body.pi-kiosk .jobs-cancel { width: 48px; height: 48px; }
+
 @media (max-width: 640px) {
   .kiosk-header { flex-wrap: wrap; justify-content: space-between; }
   .kh-centre { order: 3; flex-basis: 100%; text-align: left; }
@@ -641,8 +674,17 @@ window.addEventListener('load', function () {
 </div>
 
 <div id="jobsOverlay" class="confirm-overlay hidden">
-  <div class="confirm-card" style="text-align:left; max-height:80vh; overflow-y:auto; overscroll-behavior:contain; -webkit-overflow-scrolling:touch;">
-    <p style="color:#334155; margin-bottom:4px; font-size:14px;">Welcome back,</p>
+  <div class="confirm-card" style="text-align:left; max-height:80vh; overflow-y:auto; overscroll-behavior:contain; position:relative;">
+    <!-- Cancel sits top-right and stays there while the list scrolls.
+         It used not to exist: the only way out was the "Back" button at the
+         bottom of the card, which meant scrolling past every job to reach it -
+         and with a long list, or a list already scrolled, the way out was not
+         visible at all. Sticky rather than fixed so it scrolls with the card
+         instead of floating over the page behind it. -->
+    <button type="button" class="jobs-cancel" onclick="location.reload()" aria-label="Cancel and start over" title="Cancel">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+    </button>
+    <p style="color:#334155; margin-bottom:4px; font-size:14px; padding-right:44px;">Welcome back,</p>
     <p id="jobsUserName" style="font-size:20px; font-weight:700; margin-bottom:4px;"></p>
     <p style="color:#334155; font-size:13px; margin-bottom:16px;">Select a print job to proceed</p>
     <div id="jobsList" style="display:flex; flex-direction:column; gap:10px;"></div>
@@ -2114,7 +2156,7 @@ function showUserJobs(userData) {
         var statusBadge = '<span style="background:#166534; color:white; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:600;">Paid</span>';
         return '<div class="job-card" role="button" tabindex="0" data-job-id="' + j.job_id + '" onclick="selectJob(this.getAttribute(\'data-job-id\'))" onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();selectJob(this.getAttribute(\'data-job-id\'));}">' +
           '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">' +
-            '<span style="font-weight:700; font-size:14px; color:#f1f5f9; max-width:60%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">' + (j.file_name || 'File') + '</span>' +
+            '<span style="font-weight:700; font-size:14px; color:#0f172a; max-width:60%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">' + (j.file_name || 'File') + '</span>' +
             statusBadge +
           '</div>' +
           '<div style="display:flex; gap:12px; font-size:12px; color:#334155;">' +
@@ -2122,7 +2164,7 @@ function showUserJobs(userData) {
             '<span>' + colorLabel + '</span>' +
             '<span>x' + (j.copies || 1) + '</span>' +
           '</div>' +
-          '<div style="margin-top:8px; font-size:16px; font-weight:700; color:#3b82f6;">RM ' + orderAmountOf([j]).toFixed(2) + '</div>' +
+          '<div style="margin-top:8px; font-size:16px; font-weight:700; color:#1d4ed8;">RM ' + orderAmountOf([j]).toFixed(2) + '</div>' +
         '</div>';
       }).join('');
     })

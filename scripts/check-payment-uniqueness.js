@@ -87,10 +87,45 @@ ok(/'created_at': 'gte\.' \+ sealCutoff/.test(sealBlock),
 ok(!/onmouseover=/.test(kiosk) && !/onmouseout=/.test(kiosk),
   'no inline mouse handlers remain on any card');
 ok(/\.job-card:hover/.test(kiosk), 'hover is handled in CSS instead');
-ok(/content-visibility: auto/.test(kiosk),
-  'off-screen cards skip layout and paint, which is what smooths the scroll');
-ok(/contain-intrinsic-size/.test(kiosk),
-  'and their height is estimated so scrolling does not jump');
+// content-visibility used to be required here. It was itself a source of the
+// judder: the intrinsic height was never exactly the rendered height, so the
+    // scrollbar shifted as cards resolved, and the sticky :hover on a touchscreen
+    // re-triggered the card's transitioned transform for the whole scroll. A shop
+    // kiosk lists a handful of jobs, so skipping off-screen paint bought nothing.
+    // The scroll is now kept smooth by not making the browser do avoidable work:
+    // no full-screen backdrop blur behind the scrolling card, and no transform on
+    // hover at all.
+    // Anchored to a declaration, so the comment explaining WHY these are gone does
+    // not read as the property being present.
+    ok(!/^\s*content-visibility\s*:/m.test(kiosk),
+    'off-screen cards do not use content-visibility, which made the scroll jump');
+    ok(!/^\s*contain-intrinsic-size\s*:/m.test(kiosk),
+    'and no intrinsic-size placeholder whose height drifted from the real one');
+    ok(!/backdrop-filter/.test(kiosk),
+    'no backdrop blur behind the scrolling list - it re-blurred every scroll frame');
+    // `transform: none` under prefers-reduced-motion is correct and stays; what
+    // must not come back is a hover transform that animates during a scroll.
+    // Asserted on transform FUNCTIONS rather than the keyword: a lookahead after
+    // `transform:\s*` backtracks to zero-width and so happily matched the space
+    // in " none", reporting a rule that disables motion as one that animates it.
+    ok(!/\.job-card:hover[^{]*\{[^}]*transform:[^;}]*\b(translate|scale|rotate|matrix|skew|perspective)/.test(kiosk),
+    'hover does not animate a transform, which juddered under a moving finger');
+    ok(/\.job-card:hover[^{]*\{[^}]*transform:\s*none/.test(kiosk),
+    'and reduced-motion still forces no transform on hover');
+
+    // --- text on the job cards must be readable at all ----------------------
+    // The filename was #f1f5f9 on a #f8fbff card: 1.06:1, which is white on
+    // near-white. The meta row below it was dark, so the card looked half-styled
+    // and the one thing the customer is looking for - which file - was invisible.
+    ok(!/color:\s*#f1f5f9/.test(kiosk),
+    'no near-white text on the light job cards');
+    ok(!/color:\s*#93a5bd/.test(kiosk),
+    'and no 2.4:1 grey on the card labels or the printer panel');
+    // A way out of the list has to exist at the top, not only at the bottom.
+    ok(/class="jobs-cancel"/.test(kiosk),
+    'the job list has a cancel button of its own');
+    ok(/position: sticky/.test(kiosk) && /\.jobs-cancel/.test(kiosk),
+    'and it stays reachable at the top of the card while the list scrolls');
 ok(/overscroll-behavior:contain/.test(kiosk),
   'the scrolling card contains its own overscroll');
 ok(/prefers-reduced-motion/.test(kiosk),
