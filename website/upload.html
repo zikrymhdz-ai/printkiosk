@@ -687,10 +687,11 @@ function applyToAllFiles() {
   saveCurrentSettings();
   var src = getSelectedItem();
   if (!src) return;
-  // Colour, sides, copies and pages are shared. Brightness, contrast and crop
-  // are NOT: the worker only applies them to JPG/PNG, so copying them onto a
-  // PDF showed a control that could never do anything, and then merged the
-  // wrong file's adjustment into the combined document.
+  // Colour and pages are shared. Copies and duplex are per file and are NOT
+  // shared - see shareableSettings() in pagerange.js. Brightness, contrast and
+  // crop are not shared either: the worker only applies them to JPG/PNG, so
+  // copying them onto a PDF showed a control that could never do anything, and
+  // then merged the wrong file's adjustment into the combined document.
   bulkFiles.forEach(function(item) {
     var isImg = PKPageRange.isImage(item.file.name);
     var shared = PKPageRange.shareableSettings(src.settings);

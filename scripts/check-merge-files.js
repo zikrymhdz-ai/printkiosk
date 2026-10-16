@@ -287,16 +287,29 @@ function get(url) {
     ok(safe.length === 2, 'a DOCX in the batch is left on its own, got ' + safe.length);
   }
 
-  // 13. shareableSettings must not hand image-only settings to a document.
+  // 13. shareableSettings must not hand image-only settings to a document, and
+  // must not hand out copies or sides either - those are per file.
+  //
+  // Copies and sides used to be in the shared set. Every print_jobs row has
+  // always carried its own copies and sides and the price is summed per row, so
+  // pushing one file's copy count onto every other file served nothing except to
+  // make the control look order-wide while discarding what each file asked for.
   {
     const all = { color: 'color', copies: 3, sides: 'double', pages: 4,
       page_spec: 'all', brightness: 50, contrast: 25, crop_mode: 'manual' };
     const shared = PK.shareableSettings(all);
-    ok(shared.color === 'color' && shared.copies === 3 && shared.sides === 'double',
-      'print settings are shared');
+    ok(shared.color === 'color' && shared.pages === 4 && shared.page_spec === 'all',
+      'colour and pages are shared');
     ok(!('brightness' in shared), 'brightness is not shared');
     ok(!('contrast' in shared), 'contrast is not shared');
     ok(!('crop_mode' in shared), 'crop mode is not shared');
+    ok(!('copies' in shared), 'copies is per file, so it is not shared');
+    ok(!('sides' in shared), 'duplex is per file, so it is not shared');
+    // And it must leave each file's own values untouched rather than blanking
+    // them, which is what would happen if sharing replaced settings wholesale.
+    const kept = PK.shareableSettings({ copies: 1, sides: 'single', color: 'bw' });
+    ok(!('copies' in kept) && !('sides' in kept) && kept.color === 'bw',
+      'sharing from one file cannot erase the copies another file asked for');
   }
 
   // 14. A mixed batch must be DETECTED so the page can refuse it by name.

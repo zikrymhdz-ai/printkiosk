@@ -338,6 +338,41 @@ for (const [label, page] of [['guest', guestPage], ['member', memberPage]]) {
     label + ' checks whether a file is an image before copying adjustments');
 }
 
+// Copies and duplex must not spread across the batch when one control changes.
+//
+// This is the regression this rule exists to prevent. onOrderSettingChange() used
+// to loop over every file in the batch and write the selected file's copies and
+// sides onto all of them, so the control read as order-wide while quietly
+// discarding what each file had asked for - "my copies are ignored". Asserted on
+// the function body rather than on the controls, because the controls can look
+// right while the loop underneath still does it.
+{
+  const body = (memberPage.match(/function onOrderSettingChange[\s\S]*?\n\}/) || [])[0] || '';
+  ok(body.length > 0, 'the page has an onOrderSettingChange handler');
+  ok(!/bulkFiles\.(forEach|map)\s*\(/.test(body) ||
+     !/settings\.(copies|sides)\s*=/.test(body),
+    'changing copies or duplex does not write them onto every file');
+  ok(!/sides\s*=\s*document\.getElementById\('sidesMode'\)/.test(body),
+    'the handler does not hoist sides out to share it');
+  // It must still save: a control that changes nothing is as broken as one that
+  // changes too much.
+  ok(/saveCurrentSettings\(\)/.test(body),
+    'the handler still commits the setting to the selected file');
+  // The summary reported one duplex word for the whole batch, which is only true
+  // while every file agrees. A mixed batch now has to say so.
+  ok(/hasDouble && hasSingle \? 'Mixed'/.test(memberPage),
+    'the summary reports Mixed when files disagree on duplex');
+  ok(/\(this file\)/.test(memberPage),
+    'the copies control is labelled as belonging to one file');
+  // Per-file copies only work if the price is summed per file. It is - each row
+  // contributes its own total_price - but a single shared copies value anywhere in
+  // the total would silently mischarge a mixed batch.
+  ok(/totalPrice \+= parseFloat\(j\.total_price\)/.test(memberPage),
+    'the order total sums each file own price, so per-file copies is billed correctly');
+  ok(/totalPrice \+= fileTotal \* s\.copies \* sidesMult/.test(memberPage),
+    'the live total multiplies by each file own copies and duplex');
+}
+
 // Brightness/contrast/crop are image-only: the worker applies them in
 // image_to_pdf(), so handing them to a PDF produces a control that cannot do
 // anything, and merging them into a combined document loses them entirely.

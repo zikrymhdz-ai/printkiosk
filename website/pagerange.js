@@ -171,12 +171,26 @@ window.PKPageRange = (function () {
    * pages. The image-only adjustments are deliberately left out, so spreading
    * settings across files cannot hand a PDF a brightness it can never apply.
    */
+  /* Settings that "apply to all files" is allowed to push onto every file.
+   *
+   * Copies and sides are deliberately NOT here. They are per file: one document
+   * can need three copies while the next needs one, and a two-sided bill on a
+   * single sheet is a different job from a two-sided report. Every row in
+   * print_jobs already carries its own copies and sides, and the price is summed
+   * per row, so the model has always supported this - the page was forcing the
+   * values to be identical, which is what made "my copies are ignored" true.
+   *
+   * Brightness, contrast and crop are excluded for a different reason: the
+   * worker applies them to JPG/PNG only, so pushing them onto a PDF advertised a
+   * control that could never do anything.
+   */
   function shareableSettings(settings) {
     var s = settings || {};
     var out = {};
     for (var k in s) {
       if (!Object.prototype.hasOwnProperty.call(s, k)) continue;
       if (k === 'brightness' || k === 'contrast' || k === 'crop_mode') continue;
+      if (k === 'copies' || k === 'sides') continue;
       out[k] = s[k];
     }
     return out;

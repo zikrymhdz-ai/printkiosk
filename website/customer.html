@@ -298,7 +298,10 @@
               <p class="text-xs text-muted" style="margin-top:4px;">Double-sided uses the printer's auto duplex feeder. Plain paper only &mdash; glossy or heavy paper can jam.</p>
             </div>
             <div class="form-group">
-<label>Copies <span class="text-xs text-muted" style="font-weight:400;">(all files)</span></label>
+<!-- Copies and duplex belong to the selected file, not to the order.
+           Selecting each file sets its own. The Apply button below deliberately
+           does not touch them: it copies colour and page settings only. -->
+      <label>Copies <span class="text-xs text-muted" style="font-weight:400;">(this file)</span></label>
   <input type="number" id="copies" class="input" value="1" min="1" max="99" onchange="onOrderSettingChange()">
             </div>
             <div class="form-group">
@@ -334,16 +337,15 @@
               <p id="adjustPendingNote" class="hidden text-xs text-muted" style="margin-top:6px;">Not applied yet. Press <strong>Confirm Settings</strong> before uploading.</p>
             </div>
             <div style="margin-top:12px; padding-top:12px; border-top:1px solid var(--gray-100);">
-              <!-- Copies and duplex now apply to every file the moment they
-                   change, so this button is about the settings that stay
-                   per-file: colour, pages, and the image adjustments. The label
-                   says so, because a button that appeared to control copies
-                   when it had no effect was part of why "my copies are ignored"
-                   went unfixed for so long. -->
+              <!-- Copies and duplex are per file: select a file, then set them for that file.
+                   This button is about the settings that are genuinely shared -
+                   colour and pages - and it says so, because a button that
+                   appeared to control copies while having no effect is part of why
+                   "my copies are ignored" went unfixed for so long. -->
               <button class="btn btn-secondary btn-block" style="font-size:12px; padding:6px 12px;"
                 onclick="applyToAllFiles()">Apply Colour &amp; Pages to All Files</button>
               <p class="text-xs text-muted" style="margin:6px 0 0; text-align:center;">
-                Copies and duplex already apply to every file.
+                Copies and duplex stay with each file.
               </p>
             </div>
           </div>
@@ -1062,23 +1064,20 @@ function loadSettingsToUI() {
 function onOrderSettingChange() {
   if (selectedFileIndex < 0 || selectedFileIndex >= bulkFiles.length) return;
 
+  // Copies and duplex are PER FILE. They used to be written onto every file in
+  // the batch the moment they changed, which made the controls read as though
+  // they applied to the order while quietly overwriting each file's own value -
+  // the cause of "my copies are ignored". Nothing is lost by stopping: the rows,
+  // the worker and the price were all per file already.
+  //
+  // Applied immediately rather than behind Confirm Settings: there is no
+  // stray-drag risk in a select or a number box, and holding them pending is what
+  // produced the surprise in the first place. Brightness, contrast and crop are
+  // sliders and keep the confirm step.
   var copies = Math.max(1, Math.min(99, parseInt(document.getElementById('copies').value, 10) || 1));
-  var sides = document.getElementById('sidesMode').value;
   document.getElementById('copies').value = copies;
 
-  // Committed to the selected file first, so a page range or an image
-  // adjustment is captured from the controls before the loop overwrites copies
-  // and sides on everything.
   saveCurrentSettings();
-
-  bulkFiles.forEach(function (item) {
-    item.settings = item.settings || {};
-    item.settings.copies = copies;
-    item.settings.sides = sides;
-  });
-
-  // Nothing is pending now: these two have no stray-drag risk, which is the only
-  // thing the confirm step exists to guard against.
   clearAdjustPending();
   updateSummary();
   updateLivePreview();
@@ -1127,10 +1126,12 @@ function onSettingChange() {
 function applyToAllFiles() {
   saveCurrentSettings();
   var s = bulkFiles[selectedFileIndex].settings;
-  // Colour, sides, copies and pages are shared. Brightness, contrast and crop
-  // are NOT: the worker only applies them to JPG/PNG, so copying them onto a
-  // PDF showed a control that could never do anything, and then merged the
-  // wrong file's adjustment into the combined document.
+  // Colour and pages are shared. Copies and duplex are NOT: they are per file,
+  // and pushing one file's copy count onto another is exactly the bug being fixed
+  // here. Brightness, contrast and crop are not shared either - the worker only
+  // applies them to JPG/PNG, so copying them onto a PDF showed a control that
+  // could never do anything, and then merged the wrong file's adjustment into the
+  // combined document.
   bulkFiles.forEach(function(item) {
     var isImg = PKPageRange.isImage(item.file.name);
     var shared = PKPageRange.shareableSettings(s);
@@ -1316,12 +1317,15 @@ function updateSummary() {
   var totalCopies = 0;
   var hasColor = false;
   var hasDouble = false;
+  var hasSingle = false;
   bulkFiles.forEach(function(item) {
     var s = item.settings;
     totalPages += s.pages;
     totalCopies += s.copies;
     if (s.color === 'color') hasColor = true;
-    if (s.sides === 'double') hasDouble = true;
+    // Both flags now, because duplex is per file. One flag was enough only while
+    // every file was forced to share a single value.
+    if (s.sides === 'double') hasDouble = true; else hasSingle = true;
     var filePrice = s.color === 'color' ? 1.10 : 0.20;
     // Mirrors calculatePrice() in netlify/functions/_shared.js exactly.
     var sidesMult = s.sides === 'double' ? 0.7 : 1.0;
@@ -1343,7 +1347,14 @@ function updateSummary() {
 
   document.getElementById('summaryPages').textContent = totalPages;
   document.getElementById('summaryColor').textContent = colorLabelForBatch(bulkFiles);
-  document.getElementById('summarySides').textContent = hasDouble ? 'Double-sided' : 'Single-sided';
+  // "Double-sided" when every file agrees, "Single-sided" when none do, and
+  // "Mixed" when the batch genuinely is mixed - which it can be now. Printing one
+  // word for a mixed batch would be a straight lie about what comes out of the
+  // printer.
+  document.getElementById('summarySides').textContent =
+    hasDouble && hasSingle ? 'Mixed' : (hasDouble ? 'Double-sided' : 'Single-sided');
+  // totalCopies is a sum across files, which is the number that matters: three
+  // copies of one file and one of another is four sheets, not "3".
   document.getElementById('summaryCopies').textContent = totalCopies;
   document.getElementById('summaryFile').textContent = bulkFiles.length + ' file' + (bulkFiles.length > 1 ? 's' : '');
   document.getElementById('summaryTotal').textContent = 'RM ' + currentPrice.toFixed(2);
