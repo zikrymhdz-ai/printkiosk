@@ -1,4 +1,4 @@
-const { json, err, supabaseRequest, validateSession, supabaseStorageDelete, JOB_PAYABLE_WINDOW_MIN, freshnessOf } = require('./_shared');
+const { json, err, supabaseRequest, validateSession, supabaseStorageDelete, JOB_PAYABLE_WINDOW_MIN, freshnessOf, computePaper } = require('./_shared');
 
 exports.handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') return json({});
