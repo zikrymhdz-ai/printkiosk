@@ -429,6 +429,92 @@ TONER_RE = {
     "toner_yellow": re.compile(r"printer-toner-yellow-remaining" + _TAG + r"\s*=\s*(\d+)"),
 }
 
+# IPP describes consumables two different ways, and which one a printer uses is
+# a property of the model, not a choice.
+#
+# The IPP 1.x form is printer-toner-<colour>-remaining, matched above. The IPP
+# 2.x/PWG form is the marker-* group: one ordered marker-levels set, paired
+# positionally with marker-colors (or marker-names) in the same response.
+#
+# This HL-L3240CDW only ever sends the second. Looking only for the first is why
+# the dashboard reported no toner levels at all, on a printer that was reporting
+# them perfectly:
+#
+#     marker-levels (1setOf integer) = 90,100,100,100
+#     marker-colors (1setOf nameWithoutLanguage) = #000000,#00FFFF,#FF00FF,#FFFF00
+#     marker-names (1setOf nameWithoutLanguage) = BK,C,M,Y
+#
+# Positional pairing is the point: the values carry no colour of their own, so
+# they are only meaningful next to the identity list in the same reply.
+_MARKER_LEVELS_RE = re.compile(r"marker-levels" + _TAG + r"\s*=\s*([-\d,\s]+)")
+_MARKER_COLORS_RE = re.compile(r"marker-colors" + _TAG + r"\s*=\s*([^(\n]+)")
+_MARKER_NAMES_RE = re.compile(r"marker-names" + _TAG + r"\s*=\s*([^(\n]+)")
+
+_MARKER_COLOR_KEYS = {
+    "#000000": "toner_black",
+    "#00ffff": "toner_cyan",
+    "#ff00ff": "toner_magenta",
+    "#ffff00": "toner_yellow",
+}
+
+_MARKER_NAME_KEYS = {
+    "bk": "toner_black", "k": "toner_black", "black": "toner_black",
+    "c": "toner_cyan", "cy": "toner_cyan", "cyan": "toner_cyan",
+    "m": "toner_magenta", "ma": "toner_magenta", "mag": "toner_magenta",
+    "magenta": "toner_magenta",
+    "y": "toner_yellow", "ye": "toner_yellow", "yellow": "toner_yellow",
+}
+
+# Only used when the reply names no colours at all. Four toner markers in this
+# order is the PWG default for a colour laser, and it is a last resort on
+# purpose: guessing which number is which colour is exactly the kind of
+# assumption that puts cyan's level on the black bar.
+_MARKER_FALLBACK_ORDER = ["toner_black", "toner_cyan", "toner_magenta", "toner_yellow"]
+
+
+def _split_set(value):
+    return [v.strip() for v in (value or "").split(",") if v.strip() != ""]
+
+
+def _marker_levels(text):
+    """Read consumable levels from the IPP marker-* group. {} when absent."""
+    m = _MARKER_LEVELS_RE.search(text or "")
+    if not m:
+        return {}
+
+    values = []
+    for raw in _split_set(m.group(1)):
+        try:
+            values.append(int(raw))
+        except ValueError:
+            return {}          # not a level set we understand; do not guess
+    if not values:
+        return {}
+
+    keys = None
+    colors = _MARKER_COLORS_RE.search(text or "")
+    if colors:
+        keys = [_MARKER_COLOR_KEYS.get(c.lower()) for c in _split_set(colors.group(1))]
+
+    if not keys or len(keys) != len(values) or any(k is None for k in keys):
+        names = _MARKER_NAMES_RE.search(text or "")
+        if names:
+            keys = [_MARKER_NAME_KEYS.get(n.lower()) for n in _split_set(names.group(1))]
+
+    if not keys or len(keys) != len(values) or any(k is None for k in keys):
+        if len(values) == len(_MARKER_FALLBACK_ORDER):
+            keys = list(_MARKER_FALLBACK_ORDER)
+        else:
+            return {}
+
+    out = {}
+    for key, value in zip(keys, values):
+        # IPP uses negatives for "unknown" and "not available". A negative is
+        # not a level, and clamping it to zero would report a full printer as
+        # empty.
+        out[key] = value if value >= 0 else None
+    return out
+
 # The printer's own model string, read from the same Get-Printer-Attributes
 # response the toner levels come from.
 #
@@ -738,11 +824,16 @@ def read_supplies():
             + (first_error or "(no output)")
         ), None
 
-    levels = {}
-    for key, rx in TONER_RE.items():
-        m = rx.search(text)
-        if m:
-            levels[key] = int(m.group(1))
+# The marker-* group is preferred when present: its values are paired with an
+    # explicit colour identity, whereas the IPP 1.x attributes are matched by
+    # name and so silently miss any model that does not use them. The older
+    # patterns stay as the fallback so other printers keep working.
+    levels = _marker_levels(text)
+    if not levels:
+        for key, rx in TONER_RE.items():
+            m = rx.search(text)
+            if m:
+                levels[key] = int(m.group(1))
 
     if not levels:
         # Reachable, but nothing usable came back. Include a sample of the real

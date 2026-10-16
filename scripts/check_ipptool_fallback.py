@@ -128,7 +128,9 @@ def load_worker(system_exists, ipptool):
               "reported_model", "_first", "_auth_args",
               # Both are called by the functions above, so they have to survive
               # the filter or the extracted read_supplies raises NameError.
-              "_looks_unauthorized", "_ipptool_supports_k")
+              "_looks_unauthorized", "_ipptool_supports_k",
+              # The IPP marker-* supply parser and its list helper.
+              "_marker_levels", "_split_set")
     for line in code.splitlines():
         if line.startswith("def ") and not any(n in line for n in needed):
             skip = True
@@ -173,6 +175,69 @@ def main():
     ok(levels and levels.get("toner_black") == 87,
        "the grouped (un-indexed) output shape parses too: %s" % levels)
     ok(online is True, "grouped output is reported as a reachable printer")
+
+    # 1c. THE MODEL ON THE SHOP'S PRINTER: the IPP 2.x marker-* group.
+    #
+    # The HL-L3240CDW never sends printer-toner-black-remaining at all. It sends
+    # marker-levels, an ordered set of bare numbers carrying no colour of their
+    # own, paired with marker-colors in the same reply. Looking only for the
+    # IPP 1.x attributes meant a printer reporting 90% black was reported as
+    # having no toner information at all - which is what both the dashboard and
+    # the kiosk were showing.
+    MARKER_REPLY = """
+    Get-Printer-Attributes:
+        attributes-charset (charset) = utf-8
+        printer-info (textWithoutLanguage) = Brother HL-L3240CDW series
+        marker-colors (1setOf nameWithoutLanguage) = #000000,#00FFFF,#FF00FF,#FFFF00
+        marker-high-levels (1setOf integer) = 100,100,100,100
+        marker-levels (1setOf integer) = 90,100,100,100
+        marker-low-levels (1setOf integer) = 10,10,10,10
+        marker-names (1setOf nameWithoutLanguage) = BK,C,M,Y
+        marker-types (1setOf keyword) = toner,toner,toner,toner
+"""
+    rs, calls, mod_reported_model = load_worker(
+        "/usr/share/cups/ipptool/get-printer-attributes.test",
+        lambda p: (0, "", MARKER_REPLY))
+    levels, online, why, model = rs()
+    ok(levels and levels.get("toner_black") == 90,
+       "marker-* levels are read: %s" % levels)
+    ok(levels and levels.get("toner_cyan") == 100
+       and levels.get("toner_magenta") == 100 and levels.get("toner_yellow") == 100,
+       "all four toners are attributed to the right colours")
+    ok(online is True, "a marker-* reply is a reachable printer with real readings")
+
+    # Identity comes from the colour list, not the position: reorder it and the
+    # numbers must follow. Pairing by position is how cyan ends up on the black bar.
+    MARKER_REORDERED = MARKER_REPLY.replace(
+        "#000000,#00FFFF,#FF00FF,#FFFF00", "#00FFFF,#000000,#FF00FF,#FFFF00").replace(
+        "90,100,100,100", "5,90,7,8")
+    rs, calls, _ = load_worker(
+        "/usr/share/cups/ipptool/get-printer-attributes.test",
+        lambda p: (0, "", MARKER_REORDERED))
+    levels, online, why, model = rs()
+    ok(levels and levels.get("toner_black") == 90 and levels.get("toner_cyan") == 5,
+       "values follow their colour identity, not their position: %s" % levels)
+
+    # Negatives mean unknown, not empty. Clamping them to zero would report a
+    # working printer as out of toner - the dangerous direction.
+    MARKER_NEGATIVE = """
+        marker-colors (1setOf nameWithoutLanguage) = #000000,#00FFFF,#FF00FF,#FFFF00
+        marker-levels (1setOf integer) = -1,50,-2,60
+"""
+    rs, calls, _ = load_worker(
+        "/usr/share/cups/ipptool/get-printer-attributes.test",
+        lambda p: (0, "", MARKER_NEGATIVE))
+    levels, online, why, model = rs()
+    ok(levels and levels.get("toner_black") is None,
+       "a negative marker level stays unknown rather than becoming 0%%: %s" % levels)
+    ok(levels and levels.get("toner_cyan") == 50,
+       "the readable markers alongside it are still reported")
+
+    # The older IPP 1.x form must keep working for other printers.
+    rs, calls, _ = load_worker(None, lambda p: (0, "", GOOD_GROUPED))
+    levels, online, why, model = rs()
+    ok(levels and levels.get("toner_black") == 87,
+       "the older printer-toner-* form still works (regression guard)")
 
     # 2. CUPS file missing -> generated fallback used.
     rs, calls, mod_reported_model = load_worker(None, lambda p: (0, "", GOOD_INDEXED))

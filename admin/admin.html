@@ -556,11 +556,13 @@ function updatePrinterDisplay(p) {
 
 const paperInfo = (window.__printerPaper && window.__printerPaper.derived && window.__printerPaper.known !== false) ? window.__printerPaper : null;
 const paper = paperInfo ? paperInfo.level : level(p.paper_level);
-// Show sheets, not a bare percentage: this is a count of what left the tray,
-// and "42%" of 250 is not something anyone can act on when topping up.
-document.getElementById('paperLevelText').textContent = paperInfo
-? ('~' + paperInfo.remaining + ' / ' + paperInfo.capacity + ' sheets')
-: (paper === null ? 'Unknown' : paper + '%');
+// Same wording as the kiosk, and as the monitor below: "~N sheets" or "--".
+// This used to read "~90 / 250 sheets" here and "~90 sheets" on the kiosk, so
+// the two screens disagreed about the same number on the same machine.
+document.getElementById('paperLevelText').textContent =
+  (paperInfo && paperInfo.remaining !== null && paperInfo.remaining !== undefined)
+    ? ('~' + paperInfo.remaining + ' sheets')
+    : '--';
 const paperFill = document.getElementById('paperLevelBar');
 paperFill.style.width = (paper === null ? 0 : paper) + '%';
 paperFill.className = 'progress-fill ' + (paper === null ? 'progress-gray'
@@ -590,10 +592,26 @@ const monitor = (id, value, suffix) => {
   }
 };
 
-monitor('monPaper',
-  paper === null ? null
-    : paperInfo ? paperInfo.remaining : paper,
-  paperInfo ? ('of ' + paperInfo.capacity + ' sheets') : '');
+// Paper is rendered exactly as the kiosk renders it: the same "~N sheets"
+// estimate, and the same "--" when the count could not be computed. Two
+// formats for one number is how staff end up trusting the friendlier one - and
+// this screen had been showing a confident "of 250 sheets" where the kiosk
+// deliberately refuses to show a capacity-derived figure at all.
+const paperEl = document.getElementById('monPaper');
+if (paperEl) {
+  if (paperInfo && paperInfo.remaining !== null && paperInfo.remaining !== undefined) {
+    paperEl.textContent = '~' + paperInfo.remaining + ' sheets';
+    paperEl.title = 'Estimated from ' + paperInfo.used + ' sheets printed since the last refill. '
+      + 'Not measured by a sensor.';
+    paperEl.style.color = '';
+  } else {
+    // Never fall back to a number here: a confident figure because a query
+    // failed is how a full tray gets reported when the tray is empty.
+    paperEl.textContent = '--';
+    paperEl.title = 'Paper count unavailable right now.';
+    paperEl.style.color = '#94a3b8';
+  }
+}
 
 for (const color of ['black', 'cyan', 'magenta', 'yellow']) {
   const cap = color.charAt(0).toUpperCase() + color.slice(1);
