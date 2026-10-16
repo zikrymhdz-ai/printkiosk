@@ -2504,11 +2504,23 @@ function renderJobsList(jobs, list) {
                   '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>' +
                 '</span>' +
               '</label>'
-            : '<span title="' + (j.print_pin
-                ? 'Kept: has a Print PIN and can still be collected at the kiosk'
-                : 'Kept: this job cannot be cleared yet') + '" style="padding:4px; color:var(--gray-300);">' +
-                '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>' +
-              '</span>') +
+// No padlock.
+//
+// It was a grey padlock with the reason in its tooltip, which meant the reason
+// - the only useful part - was invisible unless you hovered, and on a phone there
+// is no hover. A customer saw a locked row and no idea why.
+//
+// A job that cannot be cleared says so in words instead, and only when the
+// reason is one they can act on. "Has a Print PIN and can still be collected" is
+// worth saying: it explains why a paid document is still sitting there. For the
+// rest the status badge already says what is happening - Queued for printing,
+// Printing now - so an extra line would be noise.
+//
+// Still no delete control on these rows: the server refuses, and a button that
+// always fails is worse than none.
+: (j.print_pin
+        ? '<span class="text-xs text-muted" style="white-space:nowrap;">You can still collect this</span>'
+        : '')) +
         '</div>' +
       '</div>' +
       '<div style="display:flex; gap:16px; margin-top:10px; flex-wrap:wrap;">' +

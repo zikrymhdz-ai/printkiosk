@@ -93,7 +93,14 @@ ok(confirmAt !== -1 && deleteAfter > confirmAt,
 // --- the UI must not offer what the server refuses -------------------------
 ok(/function jobCanBeCleared/.test(page), 'UI mirrors the clearable rule');
 ok(/jobCanBeCleared\(j\)/.test(page), 'delete button is gated on the rule');
-ok(/has a Print PIN and can still be collected/.test(page), 'UI explains why a PIN job is kept');
+// The reason has to be VISIBLE text. It used to live in the tooltip of a grey
+    // padlock, so on a phone - where there is no hover - a customer saw a locked
+    // row and no reason at all. The wording changed with it, so assert on the
+    // behaviour rather than the old sentence.
+    ok(/You can still collect this/.test(page),
+    'UI explains why a PIN job is kept');
+    ok(!/M7 11V7a5 5 0 0 1 10 0v4/.test(page),
+    'and the padlock that hid the reason behind a hover is gone');
 // A refused delete must not silently vanish from the local list.
 ok(/if \(!res\.ok\)[\s\S]{0,200}alert\(/.test(page),
   'a refused delete surfaces an error instead of hiding the job locally');
