@@ -473,6 +473,35 @@ def reported_model(text):
 CUPS_SYSTEM_TEST = "/usr/share/cups/ipptool/get-printer-attributes.test"
 
 
+_IPPTOOL_K_SUPPORT = None
+
+
+def _ipptool_supports_k():
+    """Does THIS ipptool accept -k? Answered once and cached.
+
+    -k is not universal. The build on this Pi rejects it outright with
+    "Unknown option \"-k\"" and then prints its usage instead of contacting the
+    printer at all. Because the worker looked at the reply and concluded "no
+    toner attributes", that usage message was misread as an empty printer: the
+    dashboard showed no ink levels and no explanation, for a day, while the
+    printer was answering perfectly the whole time.
+
+    Guessing here costs one cheap --help call and saves an entire silent outage.
+    """
+    global _IPPTOOL_K_SUPPORT
+    if _IPPTOOL_K_SUPPORT is not None:
+        return _IPPTOOL_K_SUPPORT
+
+    _IPPTOOL_K_SUPPORT = False
+    try:
+        proc = subprocess.run(["ipptool", "--help"], capture_output=True,
+                              text=True, timeout=15)
+        _IPPTOOL_K_SUPPORT = "-k" in ((proc.stdout or "") + (proc.stderr or ""))
+    except Exception:
+        _IPPTOOL_K_SUPPORT = False
+    return _IPPTOOL_K_SUPPORT
+
+
 def _auth_args():
     """Build the ipptool arguments for IPP authentication, if configured.
 
@@ -480,10 +509,24 @@ def _auth_args():
     the username on line 1 and the password on line 2. The password is not a
     command-line argument, so it stays out of the process list and out of the
     journal.
+
+    Whether -k exists at all is checked first. Passing an option this build
+    does not recognise makes ipptool print its usage and exit without ever
+    contacting the printer, which is indistinguishable from an unreadable
+    printer unless you read the error text closely. Most printers on a trusted
+    LAN answer without credentials, so an unauthenticated probe is still worth
+    trying rather than giving up on supplies entirely.
     """
     user = CONFIG.get("printer_user") or ""
     password = CONFIG.get("printer_password") or ""
     if not user and not password:
+        return []
+
+    if not _ipptool_supports_k():
+        log("WARNING: PRINTER_USER/PRINTER_PASSWORD are set but this ipptool "
+            "does not support -k, so credentials cannot be sent. Probing "
+            "unauthenticated - fine on a trusted LAN, but supplies will fail if "
+            "the printer actually demands a password.")
         return []
 
     key_path = os.path.join(tempfile.gettempdir(), "pk-ipp-auth.key")
@@ -494,6 +537,7 @@ def _auth_args():
         with os.fdopen(fd, "w") as f:
             f.write((user or "") + "\n" + (password or "") + "\n")
     except Exception as e:
+        log("could not write the IPP key file (%s); probing unauthenticated" % e)
         return []
 
     args = ["-k", key_path]
@@ -596,6 +640,19 @@ def read_supplies():
 
     if transport_error:
         return None, False, transport_error, None
+
+    # ipptool refused our own arguments, so it never contacted the printer.
+    # This must never be reported as "no toner attributes": the printer was
+    # never asked. An unsupported option such as -k prints the usage text and
+    # exits, and reading that as an empty supply list is what made a working
+    # printer look inkless for a day.
+    usage = re.search(r'Unknown option|Usage:\s*ipptool', text or "")
+    if usage:
+        first = (text or "").strip().splitlines()[0] if (text or "").strip() else "(no output)"
+        return None, False, (
+            "ipptool rejected our arguments and never reached the printer: %s"
+            % first
+        ), None
 
     # An authorization failure is reported by ipptool as a status line while
     # still exiting 0 and still printing a mandatory printer-name, so without

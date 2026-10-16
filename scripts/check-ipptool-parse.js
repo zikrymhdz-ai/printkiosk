@@ -221,5 +221,28 @@ ok(/re\.search\(r"\^\\s\*\\\[\\d\+\]\/", text, re\.MULTILINE\)/.test(worker)
    || worker.includes('ipptool returned no attributes'),
   'a run with no attribute lines is not reported as reachable');
 
+// --- an option this ipptool does not have must not read as an empty printer
+// The build on the Pi rejects -k with "Unknown option" and prints its usage.
+// The worker read that reply as "reachable, but no toner attributes", so a
+// printer that was answering perfectly looked inkless for a day, with the
+// usage text sitting in the error field where nobody would read it.
+ok(/_ipptool_supports_k/.test(worker), 'the worker checks whether ipptool accepts -k');
+// Position rather than a character window: the guard lives inside _auth_args,
+// and a distance-based match is brittle against the docstring length.
+const authAt = worker.indexOf('def _auth_args');
+const guardAt = worker.indexOf('if not _ipptool_supports_k():');
+ok(authAt > 0 && guardAt > authAt,
+  'credentials are not sent when this ipptool cannot accept them');
+ok(/Unknown option\|Usage:\\s\*ipptool/.test(worker),
+  'a usage/usage-error reply is detected as ipptool refusing our arguments');
+ok(/rejected our arguments and never reached the printer/.test(worker),
+  'and is reported as never having reached the printer');
+// The distinction that matters: a usage error must be decided BEFORE the
+// "no toner attributes" conclusion, or the misdiagnosis returns.
+const usageAt = worker.indexOf('rejected our arguments');
+const noTonerAt = worker.indexOf('no toner attributes in the response');
+ok(usageAt > 0 && noTonerAt > 0 && usageAt < noTonerAt,
+  'the usage check runs before the empty-supplies conclusion');
+
 if (failed) { console.log('  -> ' + failed + ' failed'); process.exit(1); }
 console.log('  ok      ipptool output parses in both shapes');
