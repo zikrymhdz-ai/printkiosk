@@ -22,8 +22,8 @@ One npm dep: `bcryptjs`. PHP (`*.php`) is **dead code** - no live page reference
 | `netlify/functions/payment.js` | **Payment matching** - groups jobs by order, settles one amount |
 | `netlify/functions/printer.js` | Worker API: claim-job, report-print, supplies, watchdog |
 | `pi/print-worker.py` | Pi worker: claims jobs, converts images, applies adjustments, `lp` |
-| `migrations/` | `models/` | `vendor/` | SQL migrations; face-api weights; vendored JS/wasm |
-| `scripts/check-*` | `version.js` | `_headers` | Test suite; version source of truth; cache rules |
+| `migrations/`, `models/`, `vendor/` | SQL migrations; face-api weights; vendored JS/wasm |
+| `scripts/check-*`, `version.js`, `_headers`, `PRINTING.md` | Test suite; version source of truth; cache rules; **printing runbook - read before touching `pi/`** |
 
 ## 4. Commands
 ```bash
@@ -42,13 +42,15 @@ Works: multi-file merge (PDFs together, photos separate, per-file settings); mix
 
 **Open:** the Pi worker has **not** been redeployed since the brightness/contrast fix - needs the SSH password an agent doesn't have. No automated coverage for browser canvas steps (image adjust, greyscale bake).
 
-Lessons not to undo: pdf-lib 1.17 made `create()`/`copyPages()` **async**; image `width`/`height` are **pixels** but `addPage` takes **points** (55-inch pages stall the printer); identify files by **bytes, not extension**; reserved amounts must cover the matcher's window; `_shared.js` and `walkin.html` must use the same `orderAmountOf` rule as `payment.js`.
+Lessons not to undo: pdf-lib 1.17 made `create()`/`copyPages()` **async**; image `width`/`height` are **pixels** but `addPage` takes **points** (55-inch pages stall the printer); identify files by **bytes, not extension**; reserved amounts must cover the matcher's window (`_shared.js` owns `assignUniqueOrderTotal`/`pickFreeOffset`, mirrored by an `orderAmountOf` rule in `payment.js` **and** `walkin.html` - all three must agree).
+
+Mixed colour in one photo job works by **baking, not by print options**: `combineGroups` (`pagerange.js:509`) keys photos WITHOUT colour so they group, `combineImages` (`:457`) bakes greyscale into the B&W photo's pixels via `adjustImageFile`, and the worker then sends **one `ColorModel` for the whole document** (`print-worker.py:354`). Verified 2026-10-16 on the Pi: `ColorModel=RGB` does print colour on the HL-L3240CDW, and two images (1 B&W + 1 colour) come out 1 grey + 1 colour. Do not "simplify" this by trusting the driver's colour handling per page - there is no per-page colour, only baked pixels.
 
 ## 6. Rules
 1. Run `npm test` before every commit. 2. Never trust a browser-computed price - the server prices. 3. Never let two matchable orders share an amount. 4. Write a test that **fails first** for every bug. 5. One home per rule - shared logic lives in `_shared.js`. 6. Bump `version.js` + `npm run version:sync` before deploying. 7. Keep HTML **pure ASCII** (`&mdash;`) - PowerShell edits have corrupted UTF-8 twice. 8. `request-print` is called in **exactly one place**: `closeReceipt()`. 9. Comment the *why* and the failure behind it, not the *what*.
 
 ## 7. Do not touch
-**Secrets** (Netlify env only, never commit/log/echo): `SUPABASE_URL`, `SUPABASE_KEY`, `NOTIFICATION_SECRET`, `PRINT_WORKER_SECRET`, `SMTP_*`, printer IPP credentials (`0600` on the Pi). `_shared.js:26` has a hardcoded `NOTIFICATION_SECRET` fallback - pre-existing debt; don't copy the pattern, don't remove it without a rotation plan.
+**Secrets** (Netlify env only, never commit/log/echo): `SUPABASE_URL`, `SUPABASE_KEY`, `NOTIFICATION_SECRET`, `PRINT_WORKER_SECRET`, `SMTP_*`, printer IPP credentials (`0600` on the Pi). `_shared.js` carries **live hardcoded fallbacks** for several of these - `SUPABASE_KEY` (`:4`), `NOTIFICATION_SECRET` (`:26`), `SMTP_PASS` (`:48`) - and they are in git history. Treat as pre-existing debt: never copy the pattern, never remove one without a rotation plan.
 
 **Files:** `config.php` (legacy DB creds) | `Notification` (watcher token) | `models/*.bin` + manifests | `vendor/**` | `package-lock.json` | `uploads/` runtime dir.
-`frontend_config.js` is public config - read freely, never add secrets. Never commit customer documents, face photos, payment refs, or log PINs/tokens.
+`frontend_config.js` is public config - read freely, never add secrets. Never commit customer documents, face photos, payment refs, or log PINs/tokens. Note the `print-jobs` storage bucket is **public**: a stored file is readable by URL, and the worker deletes it on completion, so a failed print leaves nothing to inspect afterwards.

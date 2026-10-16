@@ -60,6 +60,28 @@ for (const rel of FILES) {
     continue;
   }
 
+  // Markdown tables are positional: a stray separator inside a cell does not
+  // show up as an error, it just renders as extra empty columns. Checking the
+  // shape catches a row that has drifted out of line with its header.
+  if (rel === 'AGENT.md') {
+    const lines = text.split('\n');
+    let headerCols = 0;
+    let bad = 0;
+    lines.forEach((line, i) => {
+      const t = line.trim();
+      if (!t.startsWith('|')) { headerCols = 0; return; }
+      const cols = t.split('|').length;
+      if (/^\|[\s-]+\|[\s-]*$/.test(t)) return; // the |---|---| separator row
+      if (!headerCols) { headerCols = cols; return; }
+      if (cols !== headerCols) {
+        console.log('  FAILED  ' + rel + ':' + (i + 1) + ' table row has ' + (cols - 2)
+          + ' cells, header has ' + (headerCols - 2));
+        bad++;
+      }
+    });
+    if (bad) { failed++; continue; }
+  }
+
   console.log('  ok      ' + rel + '  encoding clean');
 }
 

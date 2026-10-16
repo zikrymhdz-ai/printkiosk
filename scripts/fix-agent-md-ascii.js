@@ -13,7 +13,10 @@ let text = fs.readFileSync(file, 'utf8');
 const SWAPS = {
   '\u2014': '-',   // em dash
   '\u2013': '-',   // en dash
-  '\u00b7': '|',   // middle dot
+  // A middle dot inside a Markdown TABLE CELL must never become a pipe: that
+  // silently turns one row into extra columns and the table stops rendering as
+  // a table. A comma is the safe separator.
+  '\u00b7': ',',
   '\u2192': '->',  // right arrow
   '\u2018': "'",
   '\u2019': "'",
