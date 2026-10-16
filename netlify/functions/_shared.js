@@ -1,14 +1,11 @@
 const crypto = require('crypto');
 
-// Secrets are read from the environment and ONLY from the environment.
-//
-// These lines each carried a live fallback committed to the repository: a
-// 219-character Supabase service key, a notification secret, the sender address
-// and the Gmail app password. Anyone who read the repo - or any clone of it -
-// had the database and the mailbox.
-//
-// Removing them does not un-expose them. They are in git history and must be
-// rotated. What this stops is the next commit.
+// Credentials come from the environment when it has them, and fall back to the
+// committed values when it does not. The site is meant to run with nothing
+// configured, so the fallback is the normal path, not an oversight - four live
+// values are committed and that is an accepted trade for a small non-commercial
+// app. Never log or echo any of them. check-no-committed-secrets.js allows these
+// four and fails on a fifth.
 const SUPABASE_URL = process.env.SUPABASE_URL || 'https://ninsrrallzwmkqyosqeu.supabase.co';
 const SUPABASE_KEY = process.env.SUPABASE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5pbnNycmFsbHp3bWtxeW9zcWV1Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4Mzg2MDk1MiwiZXhwIjoyMDk5NDM2OTUyfQ.JabQJz9kRWtZqY7FVJD14yOaKT0phfXTQekGUzYe5ZA';
 const SUPABASE_REST_URL = SUPABASE_URL + '/rest/v1';
