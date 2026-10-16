@@ -34,6 +34,18 @@ CONFIG = {
     "api": os.environ.get("PRINTKIOSK_API", "https://printkioskfyp.netlify.app").rstrip("/"),
     "token": os.environ.get("PRINT_WORKER_SECRET", ""),
     "printer": os.environ.get("PRINTER_NAME", "Brother"),
+    # The IPP address supplies are read from. install.sh discovers this and
+    # writes it into the env file, but the key was READ in four places and
+    # DEFINED in none of them, so every single supply poll raised
+    # KeyError: 'printer_uri' and the printer stopped reporting altogether - no
+    # toner levels anywhere, last_checked frozen, and the dashboard left showing
+    # whatever it happened to have seen last. install.sh was setting an
+    # environment variable that nothing read.
+    #
+    # Resolved from the env file first, then from whatever CUPS has configured
+    # for the queue (see _queue_device_uri). Printing itself goes through `lp`
+    # and the queue name, so a missing URI must never stop the worker running.
+    "printer_uri": os.environ.get("PRINTER_URI", "").strip(),
     # Hostname form is used for supplies so it survives the printer getting a
     # new DHCP address. claim/report go through the API, not the printer.
     #
@@ -629,6 +641,39 @@ def read_supplies():
     return levels, True, "", reported_model(text)
 
 
+def _queue_device_uri(queue):
+    """Ask CUPS what device a queue points at, as a fallback for PRINTER_URI.
+
+    The env file is written by install.sh and can be incomplete or replaced by
+    hand. Rather than depend on it being exactly right, take the address CUPS
+    itself is already using to reach this queue. Returns "" when there is
+    nothing to fall back to, which callers must treat as "supplies unreadable"
+    rather than fatal - printing goes through `lp` and the queue name and does
+    not need this at all.
+    """
+    lpstat = shutil_which("lpstat")
+    if not lpstat or not queue:
+        return ""
+    try:
+        proc = subprocess.run([lpstat, "-v"], capture_output=True, text=True, timeout=15)
+    except Exception:
+        return ""
+
+    for line in (proc.stdout or "").splitlines():
+        # "device for Brother: ipp://10.100.131.48:631/ipp/print"
+        if ":" not in line:
+            continue
+        label, _, uri = line.partition(":")
+        if "device for" not in label.lower():
+            continue
+        if queue.lower() not in label.lower():
+            continue
+        uri = uri.strip()
+        if uri:
+            return uri
+    return ""
+
+
 def _names_a_model(strings):
     """True when an identity string actually names a model rather than a serial.
 
@@ -693,6 +738,16 @@ def get_printer_attrs_test():
                 if "requested-attributes" not in src:
                     # Unexpected shape - leave it exactly as CUPS shipped it
                     # rather than producing something unparseable.
+                    #
+                    # Logged, because this is the quiet failure that matters:
+                    # the plain request still works, so nothing errors, but the
+                    # printer answers with only its mandatory printer-name. No
+                    # toner levels, no model - just a serial number, which then
+                    # looks like a wrong-printer problem instead of "we never
+                    # asked for the attributes".
+                    log("enhanced supply request not injected (CUPS file shape "
+                        "changed); falling back to the plain request, so this "
+                        "printer will report NO toner levels")
                     return CUPS_SYSTEM_TEST
 
             with open(target, "w") as f:
@@ -835,8 +890,32 @@ def main():
         sys.exit(1)
 
     once = "--once" in sys.argv
-    log("print worker starting -> printer=%s api=%s poll=%ds" % (
-        CONFIG["printer"], CONFIG["api"], CONFIG["poll_seconds"]))
+
+    # Resolve the supply URI before the first poll. Previously this was read
+    # straight out of CONFIG on every poll, and the key was not there, so the
+    # first poll raised KeyError and the supplies block aborted every time -
+    # silently, and with the worker still running and still printing. The
+    # journal said only "supply report failed: 'printer_uri'" once every five
+    # minutes, which is easy to scroll past and impossible to diagnose from the
+    # dashboard, where the printer simply looked like it had stopped existing.
+    if not CONFIG["printer_uri"]:
+        CONFIG["printer_uri"] = _queue_device_uri(CONFIG["printer"])
+        if CONFIG["printer_uri"]:
+            log("PRINTER_URI not set in the env file; using the CUPS device for %s: %s"
+                % (CONFIG["printer"], CONFIG["printer_uri"]))
+
+    log("print worker starting -> printer=%s api=%s poll=%ds supplies=%s" % (
+        CONFIG["printer"], CONFIG["api"], CONFIG["poll_seconds"],
+        CONFIG["printer_uri"] or "UNRESOLVED - toner levels cannot be read"))
+
+    # Not fatal, and deliberately so. Printing goes through `lp` and the queue
+    # name; losing supply levels must never stop customers collecting documents.
+    # It is announced at startup and then reported as unreadable on every poll.
+    if not CONFIG["printer_uri"]:
+        log("WARNING: no IPP address for %s, so toner/ink levels and the online"
+            " state cannot be read. Printing still works. Set PRINTER_URI in the"
+            " worker env file, or make sure the CUPS queue exists."
+            % CONFIG["printer"])
 
     last_supply = 0.0
     last_watchdog = 0.0
