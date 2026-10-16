@@ -439,10 +439,32 @@ if (!fileUrl || !fileName) return err('file_url and file_name required');
     pages = Math.max(1, parseInt(body.pages) || 1);
     brightness = parseInt(body.brightness) || 0;
     contrast = parseInt(body.contrast) || 0;
-    // How many pages of a combined job the customer wanted in colour.
-    let colorPages = parseInt(body.color_pages);
-    if (!Number.isFinite(colorPages)) colorPages = null;
-    if (colorPages !== null && (colorPages < 0 || colorPages > pages)) colorPages = null;
+// How many pages of a combined job the customer wanted in colour.
+let colorPages = parseInt(body.color_pages);
+if (!Number.isFinite(colorPages)) colorPages = null;
+if (colorPages !== null && (colorPages < 0 || colorPages > pages)) colorPages = null;
+
+    // Which pages are in which colour mode, for a merged job that holds more than
+    // one. This is what makes the PRINT match the price: without it the whole
+    // document goes to CUPS as one submission with one ColorModel, and the
+    // black-and-white pages print in colour too.
+    //
+    // Validated hard and then dropped rather than trusted. It arrives from a
+    // browser, and a malformed run would otherwise become -o page-ranges on a
+    // real lp command line. Anything not a clean, ordered, in-bounds cover of
+    // 1..pages is discarded, and the job simply prints in one mode - the
+    // previous behaviour, and safe.
+    let colorRuns = null;
+    {
+      const raw = body.color_runs;
+      let parsed = null;
+      if (typeof raw === 'string' && raw.trim()) {
+        try { parsed = JSON.parse(raw); } catch (e) { parsed = null; }
+      } else if (Array.isArray(raw)) {
+        parsed = raw;
+      }
+      colorRuns = sanitiseColorRuns(parsed, pages);
+    }
     cropMode = body.crop_mode || 'none';
     finish = body.finish || 'none';
     printPin = requestedPin(body.print_pin);
@@ -513,6 +535,41 @@ if (!fileUrl || !fileName) return err('file_url and file_name required');
 }
 
 // Attach the pricing breakdown so the client can show "RM0.20 + RM0.01 match fee".
+/**
+ * Accept a colour-run layout only if it is a clean, ordered, gapless cover of
+ * 1..pages with both modes present. Returns null for anything else, so a
+ * malformed payload degrades to printing the whole document in one mode rather
+ * than to a bad page-ranges argument.
+ */
+function sanitiseColorRuns(parsed, pages) {
+  const total = parseInt(pages, 10) || 0;
+  if (!Array.isArray(parsed) || parsed.length < 2) return null;
+  if (total < 2) return null;
+
+  const runs = [];
+  let cursor = 1;
+  for (const r of parsed) {
+    if (!r || typeof r !== 'object') return null;
+    const from = parseInt(r.from, 10);
+    const to = parseInt(r.to, 10);
+    const color = r.color === 'color' ? 'color' : (r.color === 'bw' ? 'bw' : null);
+    if (!color) return null;
+    if (!Number.isFinite(from) || !Number.isFinite(to)) return null;
+    if (from !== cursor) return null;          // must be contiguous and in order
+    if (to < from || to > total) return null;
+    runs.push({ from, to, color });
+    cursor = to + 1;
+  }
+  if (cursor !== total + 1) return null;       // must cover every page exactly once
+
+  // Only worth sending when it actually changes something. A single mode keeps
+  // the single-submission path.
+  if (!runs.some((r) => r.color === 'color') || !runs.some((r) => r.color === 'bw')) {
+    return null;
+  }
+  return JSON.stringify(runs);
+}
+
 function finalSafeJob(job, pricing, colorPages) {
   return Object.assign({}, job, {
     base_price: job.base_price != null ? job.base_price : pricing.base,

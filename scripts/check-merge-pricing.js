@@ -94,7 +94,64 @@ ok(mergedJob && mergedJob.settings.color_pages === 1,
 ok(mergedJob && mergedJob.settings.color === 'color',
   'the job prints in colour mode because one member wanted colour');
 
-  // --- what the page CALLS the colour, as distinct from how it prints -------
+  // --- the page layout the printer needs, and the validation of it ----------
+  // The price split was already correct, but the PRINT was not: a merged job was
+  // one CUPS submission with one ColorModel, so B&W pages printed in colour too.
+  // color_pages is a count and cannot fix that; the page ranges can.
+  const PKmerged = PK.mergeIntoPdf; // keep the reference used above obvious
+  const mergedItemSrc = fs.readFileSync(path.join(ROOT, 'website', 'pagerange.js'), 'utf8');
+  ok(/color_runs: mixedModes \? colorRuns : null/.test(mergedItemSrc),
+    'a mixed merge records its colour runs');
+  ok(/mixedModes/.test(mergedItemSrc),
+    'and only when the runs genuinely differ, so one-mode jobs stay unsplit');
+
+  const upFn = fs.readFileSync(path.join(ROOT, 'netlify', 'functions', 'upload.js'), 'utf8');
+  ok(/function sanitiseColorRuns/.test(upFn), 'the backend validates colour runs');
+  ok(/color_runs/.test(upFn) && /row|jobData/.test(upFn),
+    'and the validated layout is stored on the job');
+
+  const sanitise = new Function(
+    upFn.match(/function sanitiseColorRuns[\s\S]*?\n\}/)[0] + '\nreturn sanitiseColorRuns;')();
+
+  // Anything from a browser ends up in an lp command line, so the bar is high:
+  // a clean, ordered, gapless cover of 1..pages with both modes present.
+  const accepted = [
+    ['B&W then colour', [{ from: 1, to: 3, color: 'bw' }, { from: 4, to: 5, color: 'color' }], 5],
+    ['colour then B&W', [{ from: 1, to: 2, color: 'color' }, { from: 3, to: 5, color: 'bw' }], 5],
+  ];
+  for (const [name, runs, pages] of accepted) {
+    const got = sanitise(runs, pages);
+    let back = null;
+    try { back = got ? JSON.parse(got) : null; } catch (e) { /* asserted below */ }
+    ok(got !== null && back && back.length === 2
+      && back[0].from === runs[0].from && back[1].to === runs[1].to,
+      'accepts a valid layout: ' + name);
+  }
+
+  const rejected = [
+    ['a gap in coverage', [{ from: 1, to: 2, color: 'bw' }, { from: 4, to: 5, color: 'color' }], 5],
+    ['pages out of order', [{ from: 3, to: 4, color: 'bw' }, { from: 1, to: 2, color: 'color' }], 4],
+    ['a run past the page count', [{ from: 1, to: 3, color: 'bw' }, { from: 4, to: 9, color: 'color' }], 5],
+    ['pages not fully covered', [{ from: 1, to: 2, color: 'bw' }, { from: 3, to: 4, color: 'color' }], 5],
+    ['only one colour mode', [{ from: 1, to: 2, color: 'bw' }, { from: 3, to: 5, color: 'bw' }], 5],
+    ['a single run', [{ from: 1, to: 5, color: 'color' }], 5],
+    ['zero or negative pages', [{ from: 0, to: 3, color: 'bw' }, { from: 4, to: 5, color: 'color' }], 5],
+    ['a reversed run', [{ from: 3, to: 1, color: 'bw' }, { from: 4, to: 5, color: 'color' }], 5],
+    ['not an array', 'nonsense', 5],
+    ['null', null, 5],
+    ['an unknown colour word', [{ from: 1, to: 3, color: 'bw' }, { from: 4, to: 5, color: 'red' }], 5],
+    ['a one-page job', [{ from: 1, to: 1, color: 'bw' }, { from: 2, to: 2, color: 'color' }], 1],
+  ];
+  for (const [name, runs, pages] of rejected) {
+    ok(sanitise(runs, pages) === null,
+      'rejects ' + name + ' and falls back to one mode');
+  }
+
+  // The worker has to act on it, or storing it changes nothing.
+  const workerSrc = fs.readFileSync(path.join(ROOT, 'pi', 'print-worker.py'), 'utf8');
+  ok(/color_runs/.test(workerSrc), 'the worker reads the colour runs');
+  ok(/page-ranges/.test(workerSrc),
+    'and prints each run as its own submission with a page range');
   // A merged job prints in colour mode whenever any page wanted colour, so its
   // color_mode is 'color' even when only some pages are. Labelling that "Color"
   // misrepresents what the customer chose; labelling a wholly-colour job "Mixed"

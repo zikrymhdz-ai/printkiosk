@@ -1124,8 +1124,11 @@ function uploadFail(msg) {
             color_mode: s.color || 'bw',
             // A merged batch can hold colour and black-and-white pages together,
             // so the split is sent and the server charges each page its own rate.
-            color_pages: (s.color_pages === undefined || s.color_pages === null)
-              ? undefined : s.color_pages,
+color_pages: (s.color_pages === undefined || s.color_pages === null)
+    ? undefined : s.color_pages,
+        // Page layout of a mixed-mode merge, so the B&W pages print in B&W.
+        color_runs: (s.color_runs === undefined || s.color_runs === null)
+          ? undefined : JSON.stringify(s.color_runs),
             paper_size: 'a4',
             sides: s.sides || 'single',
             copies: s.copies || 1,

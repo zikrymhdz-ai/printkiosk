@@ -352,32 +352,114 @@ def wait_for_outcome(printer, job_id, timeout):
     return False, "printer did not confirm within %ds" % timeout
 
 
+def _color_runs(job):
+    """Parse a merged job's colour layout into ordered, printable runs.
+
+    A merged job can hold colour and black-and-white pages together - a customer
+    who uploads one colour PDF and one B&W PDF gets one document. The price was
+    already split per page, but the print was not: the whole file went to CUPS as
+    ONE submission carrying ONE -o ColorModel, so the black-and-white pages came
+    out in colour as well. That is why "one colour, one black and white" kept
+    printing as two colour pages.
+
+    The fix is one lp submission per colour run with a page range, not two
+    colour runs each printed twice.
+
+    Returns a list of (page_range_string, is_color) in page order. Empty when the
+    job has no layout, or when the layout is unusable - in which case the caller
+    falls back to a single submission in the job's own colour mode, which is what
+    every job printed before mixed merging existed.
+    """
+    raw = job.get("color_runs")
+    if not raw:
+        return []
+
+    try:
+        runs = json.loads(raw) if isinstance(raw, str) else raw
+    except Exception:
+        log("  colour runs unparseable; printing the whole job in one mode")
+        return []
+    if not isinstance(runs, list) or len(runs) < 2:
+        return []
+
+    out = []
+    cursor = 1
+    for r in runs:
+        try:
+            frm = int(r["from"])
+            to = int(r["to"])
+            color = "color" if r.get("color") == "color" else "bw"
+        except Exception:
+            log("  colour runs malformed; printing the whole job in one mode")
+            return []
+        # Contiguity is what makes -o page-ranges safe to build from this: a gap
+        # or an overlap would silently skip or double-print a page.
+        if frm != cursor or to < frm:
+            log("  colour runs not contiguous from page 1; printing in one mode")
+            return []
+        out.append(("%d-%d" % (frm, to) if to > frm else str(frm), color == "color"))
+        cursor = to + 1
+
+    # Nothing gained by splitting a job that is one mode throughout.
+    modes = set(c for _, c in out)
+    if len(modes) < 2:
+        return []
+    return out
+
+
 def send_to_printer(pdf_path, job):
     """Submit to CUPS. Returns (ok, job_id_or_error)."""
     printer = CONFIG["printer"]
     sides = (job.get("sides") or "single").lower()
-    color = (job.get("color_mode") or "bw").lower()
-
-    args = ["lp", "-d", printer, "-t", "PrintKiosk-%s" % job.get("job_id", "job")]
 
     try:
         copies = int(job.get("copies") or 1)
     except (TypeError, ValueError):
         copies = 1
-    if copies > 1:
-        args += ["-n", str(max(1, min(99, copies)))]
+    copies = max(1, min(99, copies))
 
-    args += ["-o", "media=A4"]
-    args += ["-o", "ColorModel=Gray" if color != "color" else "ColorModel=RGB"]
+    runs = _color_runs(job)
+    base_color = (job.get("color_mode") or "bw").lower()
 
-    if sides in ("double", "duplex", "two-sided", "double_sided"):
-        # long-edge binding is portrait A4 duplex on the HL-L3240CDW.
-        args += ["-o", "sides=two-sided-long-edge"]
-    else:
-        args += ["-o", "sides=one-sided"]
+    def build(page_range, color):
+        args = ["lp", "-d", printer, "-t", "PrintKiosk-%s" % job.get("job_id", "job")]
+        if copies > 1:
+            args += ["-n", str(copies)]
+        args += ["-o", "media=A4"]
+        args += ["-o", "ColorModel=Gray" if not color else "ColorModel=RGB"]
+        if page_range:
+            args += ["-o", "page-ranges=" + page_range]
+        if sides in ("double", "duplex", "two-sided", "double_sided"):
+            # long-edge binding is portrait A4 duplex on the HL-L3240CDW.
+            args += ["-o", "sides=two-sided-long-edge"]
+        else:
+            args += ["-o", "sides=one-sided"]
+        args.append(pdf_path)
+        return args
 
-    args.append(pdf_path)
+    if not runs:
+        return _submit(build(None, base_color == "color"))
 
+    # One submission per colour run, in page order, so the tray receives them in
+    # the order the customer chose. A failure part-way leaves earlier runs
+    # printed, so the error names which ones went out.
+    ids = []
+    for page_range, is_color in runs:
+        label = "pages %s %s" % (page_range, "colour" if is_color else "B&W")
+        ok, result = _submit(build(page_range, is_color))
+        if not ok:
+            log("  lp rejected %s: %s" % (label, result))
+            return False, ("%s (pages %s already sent: %s)"
+                           % (result, page_range, ", ".join(ids) if ids else "none"))
+        ids.append(result or page_range)
+        log("  submitted %s as %s" % (label, result or "(id unknown)"))
+
+    # The wait keys off the first submission; CUPS runs them in order.
+    return True, ids[0]
+
+
+def _submit(args):
+    """Run one lp command. Returns (ok, job_id_or_error)."""
     proc = run_lp(args, timeout=CONFIG["queue_timeout"])
     if proc.returncode != 0:
         return False, (proc.stderr or proc.stdout or "lp exited %d" % proc.returncode).strip()[:400]

@@ -1695,6 +1695,11 @@ job_id: signD.job_id,
         // instead of billing a black-and-white photo at the colour price.
         color_pages: (s.color_pages === undefined || s.color_pages === null)
           ? undefined : s.color_pages,
+        // The page layout of a mixed-mode merge, so the printer can print the
+        // black-and-white pages in black and white. Only set when the job really
+        // does hold more than one mode.
+        color_runs: (s.color_runs === undefined || s.color_runs === null)
+          ? undefined : JSON.stringify(s.color_runs),
         paper_size: 'a4',
         sides: s.sides || 'single',
         copies: s.copies || 1,
@@ -1824,6 +1829,7 @@ var d;
       // Groups this file with the others in the same order.
       fd.append('order_id', currentOrderId());
         fd.append('color_mode', s.color || 'bw');
+    if (s.color_runs) fd.append('color_runs', JSON.stringify(s.color_runs));
         fd.append('paper_size', 'a4');
         fd.append('sides', s.sides || 'single');
         fd.append('copies', s.copies || 1);

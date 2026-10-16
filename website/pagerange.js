@@ -604,6 +604,38 @@ var key = photo
     // there, and it would be a silent overcharge rather than a visible one.
     if (colorPages > merged.pages) colorPages = merged.pages;
 
+    // The LAYOUT, not just the count.
+    //
+    // colorPages above decides the price. It cannot decide the print: a merged
+    // job is one CUPS submission with one -o ColorModel, so without this the
+    // black-and-white pages were printed in colour along with the colour ones.
+    // A count cannot say WHICH pages are greyscale, so the page ranges are sent
+    // in merge order and the worker prints each run in its own mode.
+    //
+    // Only emitted when the runs genuinely differ. A job that is wholly one mode
+    // keeps the single-submission path, which is the overwhelmingly common case
+    // and needs no splitting.
+    var colorRuns = [];
+    var page = 1;
+    members.forEach(function (it) {
+      var s = it.settings || {};
+      var n = pagesOf(it);
+      colorRuns.push({
+        from: page,
+        to: page + n - 1,
+        color: (s.color || 'bw') === 'color' ? 'color' : 'bw'
+      });
+      page += n;
+    });
+    // The last member's end must match the real page count, or the worker would
+    // ask CUPS for pages that do not exist.
+    if (colorRuns.length) {
+      var last = colorRuns[colorRuns.length - 1];
+      if (merged.pages && last.to > merged.pages) last.to = merged.pages;
+    }
+    var mixedModes = colorRuns.some(function (r) { return r.color === 'color'; })
+      && colorRuns.some(function (r) { return r.color === 'bw'; });
+
     return {
       file: merged.file,
       thumb: null,
@@ -618,8 +650,9 @@ var key = photo
         page_spec: 'all',
         brightness: 0,
         contrast: 0,
-        crop_mode: 'none',
-        color_pages: colorPages
+crop_mode: 'none',
+        color_pages: colorPages,
+        color_runs: mixedModes ? colorRuns : null
       }
     };
   }
