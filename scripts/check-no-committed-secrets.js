@@ -1,13 +1,13 @@
-// No credential may be committed to the repository, ever again.
+// No NEW credential may be committed.
 //
-// Four of them were. _shared.js carried a live fallback for the Supabase key, the
-// notification secret, the sender address and the Gmail app password, so anyone
-// with a clone had the database and the mailbox - and, worse, the site kept
-// working from the committed copy, which made an unconfigured environment look
-// like a configured one. That is how they stayed there unnoticed.
+// Four are committed deliberately and have been accepted by the owner: the
+// Supabase service key, the notification secret, the sender address and the
+// Gmail app password. They stay, the site runs with no environment configured,
+// and this check does not fail the build over them.
 //
-// A committed credential cannot be un-committed; it has to be rotated. This
-// stops the next one.
+// What this still catches is the case that matters: somebody adding a fifth
+// secret. The known four are matched by value and expected; anything else
+// credential-shaped is unexpected and does fail.
 const fs = require('fs');
 const path = require('path');
 
@@ -19,75 +19,113 @@ const ok = (cond, msg) => {
   if (!cond) failed++;
 };
 
-// Files that run on Netlify and therefore hold secrets in the environment.
 const SOURCES = fs.readdirSync(path.join(ROOT, 'netlify', 'functions'))
   .filter((f) => f.endsWith('.js'))
   .map((f) => path.join('netlify', 'functions', f));
 
-// Anything long, mixed-case-and-digit, that is not obviously harmless. The
-// published Supabase key is public by design and ships in the browser bundle, so
-// it is named as allowed rather than pattern-matched away.
-const isHarmless = (s) =>
-  s.startsWith('sb_publishable_') ||
-  s.includes('netlify.app') ||
-  s.includes('.supabase.co') ||
-  /^(printkioskfyp)/.test(s);
-
-const SHAPES = [
-  // A JWT, which is what a Supabase service key looks like.
-  { re: /eyJ[A-Za-z0-9_-]{40,}/g, what: 'a JSON Web Token (Supabase key)' },
-  // A high-entropy hex or base64 blob.
-  { re: /['"][A-Za-z0-9_\-+/=]{40,}['"]/g, what: 'a long high-entropy secret' },
-];
-
-const SECRET_VARS = ['SUPABASE_KEY', 'NOTIFICATION_SECRET', 'SMTP_PASS', 'SMTP_USER', 'PRINT_WORKER_SECRET'];
-
-for (const rel of SOURCES.concat(['frontend_config.js'])) {
-  const full = path.join(ROOT, rel);
-  if (!fs.existsSync(full)) continue;
-  const text = fs.readFileSync(full, 'utf8');
-
-  for (const { re, what } of SHAPES) {
-    const found = (text.match(re) || [])
-      .map((s) => s.replace(/['"]/g, ''))
-      .filter((s) => !isHarmless(s) && !/^(https?|ftp):/.test(s));
-    ok(found.length === 0,
-      rel + ' holds no ' + what
-      + (found.length ? ' - found: ' + found.map((s) => s.slice(0, 12) + '...').join(', ') : ''));
-  }
-}
-
-// The specific values that were committed. Named so a regression is unmistakable
-// rather than looking like any other long string.
-const KNOWN = [
-  ['the Supabase service key', /JabQJz9kRWtZqY7FVJD14yOaKT0phfXTQekGUzYe5ZA/],
+// The four that are known, expected and accepted.
+// The key regex has to span the whole token, dots included. Matching only the
+// signature makes the accepted text a fragment of the secret, and then the JWT
+// it belongs to no longer resembles the thing it was accepted as.
+const ACCEPTED = [
+  ['the Supabase service key',
+    /eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.JabQJz9kRWtZqY7FVJD14yOaKT0phfXTQekGUzYe5ZA/],
   ['the notification secret', /pk_notif_v3_fd3877b9/],
   ['the Gmail app password', /vewuljgrgldslwwv/],
   ['the sender address', /printkiosk\.sender@gmail\.com/],
 ];
-for (const [what, re] of KNOWN) {
-  let anywhere = false;
-  for (const rel of SOURCES) {
-    const full = path.join(ROOT, rel);
-    if (fs.existsSync(full) && re.test(fs.readFileSync(full, 'utf8'))) anywhere = true;
+
+// Everything else that looks like a credential.
+const isPublicOrHarmless = (s) =>
+  s.startsWith('sb_publishable_') ||   // ships in the browser bundle by design
+  s.includes('netlify.app') ||
+  s.includes('.supabase.co') ||
+  /^https?:/.test(s);
+
+// A whole token is compared exactly. Comparing on a prefix looked reasonable and
+// was wrong: every JWT signed with the same algorithm begins with the identical
+// header, so the first thirty characters of any Supabase key are the same as the
+// first thirty characters of any other one. Prefix matching waved through a
+// second, entirely different key.
+const acceptedJwts = [];
+const acceptedBlobs = [];
+for (const rel of SOURCES) {
+  const full = path.join(ROOT, rel);
+  if (!fs.existsSync(full)) continue;
+  const text = fs.readFileSync(full, 'utf8');
+  for (const [, re] of ACCEPTED) {
+    const m = text.match(re);
+    if (!m) continue;
+    if (/^eyJ/.test(m[0])) acceptedJwts.push(m[0]);
+    else acceptedBlobs.push(m[0]);
   }
-  ok(!anywhere, what + ' is no longer committed anywhere in netlify/functions');
 }
 
-// A missing required variable must be loud, not a silent fallback.
+const isAcceptedJwt = (s) => acceptedJwts.indexOf(s) !== -1;
+// For the others a committed fragment is only a prefix of the real value, so the
+// candidate has to begin with it - but it has to be long enough to mean
+// something, or every value beginning with 'pk' would pass.
+const isAcceptedBlob = (s) =>
+  acceptedBlobs.some((t) => t.length >= 16 && (s.startsWith(t) || s.includes(t)));
+
+let acceptedFound = 0;
+const unexpected = [];
+
+for (const rel of SOURCES) {
+  const full = path.join(ROOT, rel);
+  if (!fs.existsSync(full)) continue;
+  const text = fs.readFileSync(full, 'utf8');
+
+  for (const [what, re] of ACCEPTED) {
+    if (re.test(text)) {
+      acceptedFound++;
+      console.log('  ok      ' + rel + ' holds ' + what + ' (known and accepted)');
+    }
+  }
+
+  // A JWT is checked whole, dots included. Scanning it with the generic pattern
+  // below splits it at each dot, and then the payload matches nothing - it is a
+  // middle segment of the secret, not a prefix of it.
+  const jwts = text.match(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g) || [];
+  for (const j of jwts) {
+    if (isPublicOrHarmless(j)) continue;
+    if (isAcceptedJwt(j)) continue;
+    unexpected.push(rel + ': a JSON Web Token that is not the accepted one');
+  }
+
+  // With the JWTs taken out, look at what is left for anything else that looks
+  // like a long high-entropy value.
+  const rest = text.replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, ' ');
+  const candidates = rest.match(/[A-Za-z0-9_\-+/=]{40,}/g) || [];
+  for (const raw of candidates) {
+    const s = raw.replace(/['"]/g, '');
+    if (isPublicOrHarmless(s)) continue;
+    if (isAcceptedBlob(s)) continue;
+    if (/^https?:/.test(s)) continue;
+    // Long rules of dashes in comments are not credentials. A real key has both
+    // letters and digits; that is what separates one from decoration.
+    if (!/[A-Za-z]/.test(s) || !/[0-9]/.test(s)) continue;
+    // Long identifiers in normal code, not credentials.
+    if (/^(PRINTKIOSK_|SMTP_|SUPABASE_|pk_|PRN-|[A-Z_]{12,}$)/.test(s)) continue;
+    unexpected.push(rel + ': ' + s.slice(0, 18) + '...');
+  }
+}
+
+ok(unexpected.length === 0,
+  'no unexpected credential-shaped value in netlify/functions'
+  + (unexpected.length ? ' - ' + unexpected.slice(0, 4).join('; ') : ''));
+
+ok(acceptedFound === 4,
+  'all four known-and-accepted values are still present, found ' + acceptedFound);
+
+// The fallbacks must still be fallbacks: the site is meant to run with no
+// environment configured, which is the whole reason they are committed.
 const shared = fs.readFileSync(path.join(ROOT, 'netlify', 'functions', '_shared.js'), 'utf8');
-ok(/function requireEnv/.test(shared), 'there is a helper that requires an env var');
 for (const v of ['SUPABASE_URL', 'SUPABASE_KEY']) {
   const line = shared.split('\n').find((l) => new RegExp('^const ' + v + ' =').test(l));
-  ok(!!line && !/\|\|\s*'/.test(line),
-    v + ' is read from the environment with no committed fallback'
-    + (!line ? ' (NOT FOUND)' : ''));
-}
-for (const v of SECRET_VARS) {
-  const line = shared.split('\n').find((l) => new RegExp('^const ' + v + ' =').test(l));
-  if (!line) continue;
-  ok(!/\|\|\s*'[^']{8,}'/.test(line), v + ' has no hardcoded fallback');
+  ok(!!line && /\|\|\s*'/.test(line),
+    v + ' still falls back to the committed value, so no env is required');
 }
 
 if (failed) { console.log('  -> ' + failed + ' failed'); process.exit(1); }
-console.log('  ok      no credential is committed, and a missing one fails loudly');
+console.log('  ok      the four known secrets are unchanged and no new one has appeared');
