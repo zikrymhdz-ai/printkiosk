@@ -497,9 +497,22 @@ window.PKPageRange = (function () {
    * one combined job can hold both - and the price is worked out per page.
    * Sides and copies are per-job, not per-page, so those must still agree.
    *
-   * DOCUMENTS: grouped by colour, sides and copies. A PDF page cannot be made
-   * black and white without rasterising it, which would degrade the print, so
-   * documents that disagree on colour stay in separate jobs.
+* DOCUMENTS: also grouped without colour, and deliberately. Documents used to
+   * be split on colour, on the reasoning that a PDF page cannot be made black
+   * and white without rasterising it, which would degrade the print. That is
+   * true of the CONTENT, but it was never a reason to refuse the merge: a
+   * combined job is printed with a single colour mode, so a B&W document
+   * sharing a job with a colour one prints in colour mode.
+   *
+   * The trade is now explicit rather than avoided. The shop pays for the colour
+   * pages it was going to print anyway plus the B&W pages that join them, and
+   * the customer gets one document instead of two, with the price still split
+   * per page. Separating them was never cheaper for the customer - it was two
+   * documents instead of one - and B&W pages look the same printed in colour
+   * mode, because black text is black either way. Refusing to merge was
+   * optimising for a complaint nobody had made, at the cost of the one they had.
+   *
+   * Sides and copies remain per-job, not per-page, so those must still agree.
    *
    * File type is part of the key: a document and a photo are printed
    * differently, and the page refuses that batch up front via mixedTypes().
@@ -512,9 +525,9 @@ window.PKPageRange = (function () {
     (items || []).forEach(function (it) {
       var s = it.settings || {};
       var photo = isImage(it.file.name);
-      var key = photo
+var key = photo
         ? 'image|' + (s.sides || 'single') + '|' + (s.copies || 1)
-        : 'document|' + (s.color || 'bw') + '|' + (s.sides || 'single') + '|' + (s.copies || 1);
+        : 'document|' + (s.sides || 'single') + '|' + (s.copies || 1);
       if (!byKey[key]) {
         byKey[key] = [];
         groups.push(byKey[key]);
@@ -557,25 +570,40 @@ window.PKPageRange = (function () {
     }, Promise.resolve([]));
   }
 
-  /* Settings for a combined group.
+/* Settings for a combined group.
    *
-   * Every member shares sides and copies - the grouping guarantees it. Colour
-   * may differ only for photos, whose black-and-white pages were already baked
-   * into the pixels, so the combined job is printed as colour whenever any page
-   * wanted colour, and colorPages records how many so the price can be worked
-   * out per page instead of charging the colour rate for all of them.
+   * Every member shares sides and copies - the grouping guarantees it. Colour may
+   * differ, so the combined job is printed in colour mode whenever any page
+   * wanted colour, and colorPages records how MANY so the price is worked out per
+   * page instead of charging the colour rate for all of them.
    */
   function mergedItem(members, merged) {
     var first = (members[0] && members[0].settings) || {};
+
+    // How many pages this member actually contributes to the merge.
+    //
+    // settings.pages is what the customer is billed for - already reduced by any
+    // page selection - so that is the number to count, not the file's full
+    // length. Falling back to pdfPages covers a member whose selection has not
+    // been resolved yet.
+    function pagesOf(it) {
+      var s = it.settings || {};
+      var n = parseInt(s.pages, 10);
+      if (!isFinite(n) || n < 1) n = parseInt(it.pdfPages, 10);
+      return (isFinite(n) && n > 0) ? n : 1;
+    }
+
     var colorPages = 0;
     members.forEach(function (it) {
       var s = it.settings || {};
-      if ((s.color || 'bw') === 'color') colorPages += 1;
+      if ((s.color || 'bw') === 'color') colorPages += pagesOf(it);
     });
-    // Documents all share a colour by construction, so this is exact for them.
-    if (!isImage(members[0].file.name)) {
-      colorPages = (first.color || 'bw') === 'color' ? merged.pages : 0;
-    }
+
+    // Never claim more colour pages than the merged document has. An
+    // over-count bills the customer the colour rate for pages that are not
+    // there, and it would be a silent overcharge rather than a visible one.
+    if (colorPages > merged.pages) colorPages = merged.pages;
+
     return {
       file: merged.file,
       thumb: null,

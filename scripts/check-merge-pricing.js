@@ -52,38 +52,47 @@ const ok = (c, msg) => { console.log((c ? '  ok      ' : '  FAILED  ') + msg); i
     brightness: 0, contrast: 0, crop_mode: 'none',
   }, o);
 
-  // --- the reported case ---------------------------------------------------
-  // One photo in colour, one in black and white.
-  const mixedCase = [
-    { file: await pdf(1, 'a.pdf'), settings: settings({ color: 'color' }) },
-    { file: await pdf(1, 'b.pdf'), settings: settings({ color: 'bw' }) },
-  ];
-  const groups = PK.combineGroups(mixedCase);
-  ok(groups.length === 2,
-    'a colour file and a B&W file are NOT combined (groups: ' + groups.length + ')');
+// --- the reported case ---------------------------------------------------
+// One document in colour, one in black and white. These merge into ONE job: a
+// combined job prints in a single colour mode, but the price is still split per
+// page, so the customer gets one document instead of two without paying more
+// for it.
+const mixedCase = [
+  { file: await pdf(1, 'a.pdf'), settings: settings({ color: 'color' }) },
+  { file: await pdf(1, 'b.pdf'), settings: settings({ color: 'bw' }) },
+];
+const groups = PK.combineGroups(mixedCase);
+ok(groups.length === 1,
+  'a colour file and a B&W file are combined into one group (groups: ' + groups.length + ')');
 
-  const combined = await PK.combineByType(mixedCase);
-  ok(combined.length === 2,
-    'they stay two jobs, so each keeps its own colour and price');
+const combined = await PK.combineByType(mixedCase);
+ok(combined.length === 1,
+  'and therefore into one job, got ' + combined.length);
 
-  // Every job must still be exactly what it would have cost on its own.
-  let totalCombined = 0;
-  let totalSeparate = 0;
-  for (const job of combined) {
-    totalCombined += calculatePrice(job.settings.pages, job.settings.color, 'a4', job.settings.sides, job.settings.copies);
-  }
-  for (const it of mixedCase) {
-    totalSeparate += calculatePrice(it.settings.pages, it.settings.color, 'a4', it.settings.sides, it.settings.copies);
-  }
-  ok(Math.abs(totalCombined - totalSeparate) < 0.005,
-    'the charge is unchanged: combined ' + totalCombined.toFixed(2) + ' vs separate ' + totalSeparate.toFixed(2));
+// The invariant that matters most, and the reason the split exists at all:
+// merging must NEVER cost the customer more than the files would have cost on
+// their own. Billing both pages at the colour rate would be 2.20 instead of
+// 1.10 + 0.20, so a customer who merged to save time would be charged more for
+// it - the worst possible outcome for this feature.
+let totalCombined = 0;
+for (const job of combined) {
+  totalCombined += calculatePrice(job.settings.pages, job.settings.color, 'a4', job.settings.sides,
+    job.settings.copies, job.settings.color_pages);
+}
+let totalSeparate = 0;
+for (const it of mixedCase) {
+  totalSeparate += calculatePrice(it.settings.pages, it.settings.color, 'a4', it.settings.sides,
+    it.settings.copies);
+}
+ok(Math.abs(totalCombined - totalSeparate) < 0.005,
+  'the charge is unchanged: combined ' + totalCombined.toFixed(2) + ' vs separate ' + totalSeparate.toFixed(2));
 
-  // The colour job must not have absorbed the B&W one's colour.
-  const colorJob = combined.find(j => j.settings.color === 'color');
-  const bwJob = combined.find(j => j.settings.color === 'bw');
-  ok(!!colorJob && !!bwJob, 'one colour job and one B&W job exist');
-  ok(bwJob && calculatePrice(bwJob.settings.pages, 'bw', 'a4', bwJob.settings.sides, bwJob.settings.copies) < calculatePrice(1, 'color', 'a4', 'single', 1),
-    'the B&W job is charged the B&W rate, not the colour rate');
+// The split must be visible in the job itself, not merely implied by the total.
+const mergedJob = combined[0];
+ok(mergedJob && mergedJob.settings.color_pages === 1,
+  'exactly one page is counted as colour, got ' + (mergedJob && mergedJob.settings.color_pages));
+ok(mergedJob && mergedJob.settings.color === 'color',
+  'the job prints in colour mode because one member wanted colour');
 
   // --- the invariant, across every combination -----------------------------
   const modes = ['bw', 'color'];
@@ -125,9 +134,11 @@ const ok = (c, msg) => { console.log((c ? '  ok      ' : '  FAILED  ') + msg); i
   }
   ok(broke === 0, 'all ' + checked + ' same-setting combinations merge to one job at an identical price');
 
-  // Differing settings must never be merged, whatever differs.
+  // Sides and copies are per-job, not per-page, so they must never merge.
+  // Colour is NOT in this list: a combined job prints in one colour mode, but
+  // the price is still split per page, so a B&W document belongs with a colour
+  // one. Splitting them gave the customer two documents instead of one.
   const diffs = [
-    ['colour', { color: 'color' }, { color: 'bw' }],
     ['sides', { sides: 'double' }, { sides: 'single' }],
     ['copies', { copies: 3 }, { copies: 1 }],
   ];
@@ -140,9 +151,45 @@ const ok = (c, msg) => { console.log((c ? '  ok      ' : '  FAILED  ') + msg); i
     ok(g.length === 2, 'files differing in ' + label + ' are kept apart (groups: ' + g.length + ')');
   }
 
-  // Photos follow the same rule EXCEPT for colour: a black-and-white photo is
-  // baked into the pixels before merging, so photos differing only in colour do
-  // belong in one job. Sides and copies are per-job, so they still must match.
+  // Documents differing only in colour merge into one job, exactly as photos do.
+  const docsMixedColour = [
+    { file: await pdf(2, 'colour.pdf'), settings: settings({ color: 'color', pages: 2 }) },
+    { file: await pdf(3, 'bw.pdf'), settings: settings({ color: 'bw', pages: 3 }) },
+  ];
+  ok(PK.combineGroups(docsMixedColour).length === 1,
+    'documents differing only in colour are grouped into one job');
+
+  // And the price of that one job must still be split per page: 2 colour pages
+  // at 1.10 and 3 B&W pages at 0.20 is 2.80, not 5 pages of colour (5.50).
+  const mergedDocs = await PK.combineByType(docsMixedColour);
+  ok(mergedDocs.length === 1, 'the mixed-colour documents become one job, got ' + mergedDocs.length);
+  if (mergedDocs.length === 1) {
+    const s = mergedDocs[0].settings;
+    ok(mergedDocs[0].pdfPages === 5, 'and it has all 5 pages, got ' + mergedDocs[0].pdfPages);
+    ok(s.color_pages === 2,
+      'only the colour pages are counted as colour, got ' + s.color_pages);
+    ok(s.color === 'color',
+      'the job prints in colour mode because one member wanted colour');
+    const price = calculatePrice(s.pages, s.color, 'a4', s.sides, s.copies, s.color_pages);
+    ok(Math.abs(price - 2.80) < 0.005,
+      'the merged job is priced per page, not all-colour: RM' + price.toFixed(2));
+    // The over-count guard: color_pages must never exceed the pages present,
+    // which would bill the colour rate for pages that are not there.
+    const manyColour = [
+      { file: await pdf(1, 'c1.pdf'), settings: settings({ color: 'color', pages: 1 }) },
+      { file: await pdf(9, 'c2.pdf'), settings: settings({ color: 'color', pages: 9 }) },
+    ];
+    const over = await PK.combineByType(manyColour);
+    if (over.length === 1) {
+      ok(over[0].settings.color_pages <= over[0].pdfPages,
+        'colour pages never exceed the pages actually in the document (' +
+        over[0].settings.color_pages + ' of ' + over[0].pdfPages + ')');
+    }
+  }
+
+  // Photos follow the same rule: a black-and-white photo is baked into the
+  // pixels before merging, so photos differing only in colour do belong in one
+  // job. Sides and copies are per-job, so they still must match.
   const photosMixedColour = [
     { file: png('c.png'), settings: settings({ color: 'color' }) },
     { file: png('w.png'), settings: settings({ color: 'bw' }) },
