@@ -431,9 +431,25 @@ async function handleClearJobs(event) {
   if (result.error) return err('Failed to load jobs', 500);
   const jobs = Array.isArray(result.data) ? result.data : [];
 
+  const body = JSON.parse(event.body || '{}');
+
+  // An optional selection: clear THESE rather than everything clearable.
+  //
+  // Scoped to the caller's own rows, which is what the query above already
+  // enforces - so a job id belonging to somebody else is not merely rejected,
+  // it never appears in the candidate set at all. That is why the ids are
+  // intersected here rather than trusted: the selection can narrow what happens,
+  // it cannot widen it.
+  const selection = Array.isArray(body.job_ids)
+    ? new Set(body.job_ids.filter((v) => typeof v === 'string' && v.length > 0 && v.length < 64))
+    : null;
+  if (selection && selection.size > 300) return err('Too many jobs selected', 400);
+
   const clearable = [];
   const kept = [];
+  let notSelected = 0;
   for (const j of jobs) {
+    if (selection && !selection.has(j.job_id)) { notSelected++; continue; }
     const reason = clearableReason(j);
     if (reason === null) clearable.push(j);
     else kept.push({ job_id: j.job_id, reason: reason });
@@ -441,13 +457,13 @@ async function handleClearJobs(event) {
 
   // Nothing was asked for, so this was a dry run: report the split without
   // deleting anything. Lets the UI say "3 will be cleared, 2 kept" accurately.
-  const body = JSON.parse(event.body || '{}');
   if (body.confirm !== true) {
     return json({
       success: true,
       dry_run: true,
       clearable: clearable.map(j => j.job_id),
-      kept: kept
+      kept: kept,
+      not_selected: notSelected
     });
   }
 

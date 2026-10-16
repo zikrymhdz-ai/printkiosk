@@ -506,14 +506,27 @@
 
     <!-- ===== JOBS PAGE ===== -->
     <div id="pageJobs" class="slide-section">
-      <div class="card">
-        <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
-          <span class="card-title">My Print Jobs</span>
-          <button class="btn btn-sm" onclick="clearAllJobs()" id="clearAllBtn"
-                  style="background:#fff;color:var(--gray-600);border:1px solid var(--gray-200);">
-            Clear finished &amp; unpaid
-          </button>
-        </div>
+<div class="card">
+    <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+      <span class="card-title">My Print Jobs</span>
+      <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+        <!-- Bulk selection. Only clearable jobs carry a checkbox, so "select
+             all" can never sweep up a job the server would refuse - a PIN job or
+             one paid and awaiting print would fail on every attempt. -->
+        <button class="btn btn-sm" onclick="toggleSelectAllJobs()" id="selectAllJobsBtn"
+        style="background:#fff;color:var(--gray-600);border:1px solid var(--gray-200);">
+          Select all
+        </button>
+        <button class="btn btn-sm" onclick="deleteSelectedJobs()" id="deleteSelectedBtn" disabled
+        style="background:#fff;color:var(--gray-400);border:1px solid var(--gray-200);">
+          Delete selected
+        </button>
+        <button class="btn btn-sm" onclick="clearAllJobs()" id="clearAllBtn"
+        style="background:#fff;color:var(--gray-600);border:1px solid var(--gray-200);">
+          Clear finished &amp; unpaid
+        </button>
+      </div>
+    </div>
         <p class="text-xs text-muted" style="margin:0 0 12px 0;">
           Clears jobs that printed successfully, were cancelled, or were never paid for.
           Jobs with a Print PIN are always kept, since you can still collect them at the kiosk.
@@ -2326,9 +2339,70 @@ function loadJobs() {
     });
 }
 
+// ---- bulk selection of jobs to clear ---------------------------------------
+//
+// Kept outside the list renderer so a re-render (a poll, a delete, a payment
+// landing) does not silently drop the customer's choices - or, worse, keep
+// ticking jobs that are no longer on screen.
+var selectedJobIds = new Set();
+
+function currentSelectableJobIds() {
+  return Array.prototype.slice.call(document.querySelectorAll('.job-select'))
+    .map(function (el) { return el.getAttribute('data-job-id'); })
+    .filter(Boolean);
+}
+
+function onJobSelectChange() {
+  var live = currentSelectableJobIds();
+  // Drop anything that is no longer offered as selectable.
+  selectedJobIds.forEach(function (id) {
+    if (live.indexOf(id) === -1) selectedJobIds.delete(id);
+  });
+  document.querySelectorAll('.job-select').forEach(function (el) {
+    if (selectedJobIds.has(el.getAttribute('data-job-id'))) el.checked = true;
+  });
+  updateSelectionUI();
+}
+
+function toggleSelectAllJobs() {
+  var live = currentSelectableJobIds();
+  var allSelected = live.length > 0 && live.every(function (id) { return selectedJobIds.has(id); });
+  selectedJobIds.clear();
+  if (!allSelected) live.forEach(function (id) { selectedJobIds.add(id); });
+  document.querySelectorAll('.job-select').forEach(function (el) {
+    el.checked = !allSelected;
+  });
+  updateSelectionUI();
+}
+
+function updateSelectionUI() {
+  var n = selectedJobIds.size;
+  var del = document.getElementById('deleteSelectedBtn');
+  var all = document.getElementById('selectAllJobsBtn');
+  if (del) {
+    del.disabled = n === 0;
+    del.textContent = n ? 'Delete selected (' + n + ')' : 'Delete selected';
+    del.style.color = n ? 'var(--danger)' : 'var(--gray-400)';
+    del.style.borderColor = n ? 'var(--danger)' : 'var(--gray-200)';
+  }
+  if (all) {
+    var live = currentSelectableJobIds();
+    var allSelected = live.length > 0 && live.every(function (id) { return selectedJobIds.has(id); });
+    all.textContent = allSelected ? 'Clear selection' : 'Select all';
+  }
+}
+
 function renderJobsList(jobs, list) {
+  // Forget any selection for a job that is no longer listed, so the toolbar
+  // cannot ask the server to clear something the customer can no longer see.
+  var listed = (jobs || []).map(function (j) { return j.job_id; });
+  selectedJobIds.forEach(function (id) {
+    if (listed.indexOf(id) === -1) selectedJobIds.delete(id);
+  });
+
   if (!jobs.length) {
     list.innerHTML = '<div style="text-align:center;color:var(--gray-400);padding:40px 16px;"><p style="font-size:14px;">No jobs yet</p></div>';
+    updateSelectionUI();
     return;
   }
   list.innerHTML = jobs.map(j => {
@@ -2400,9 +2474,13 @@ function renderJobsList(jobs, list) {
           // clearable -- offering a button that always fails is worse than
           // showing nothing.
           (jobCanBeCleared(j)
-            ? '<button title="Clear this job" onclick="deleteJob(\'' + j.job_id + '\')" style="background:none; border:none; cursor:pointer; padding:4px; color:var(--gray-400); transition:color 0.2s;" onmouseover="this.style.color=\'var(--danger)\'" onmouseout="this.style.color=\'var(--gray-400)\'">' +
-                '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>' +
-              '</button>'
+            ? '<label title="Select this job" style="display:flex; align-items:center; cursor:pointer;">' +
+                '<input type="checkbox" class="job-select" data-job-id="' + j.job_id + '" onchange="onJobSelectChange()" ' +
+                  'style="width:17px; height:17px; accent-color:var(--primary); cursor:pointer; margin:0 8px 0 0;">' +
+                '<span title="Clear this job" onclick="deleteJob(\'' + j.job_id + '\')" style="background:none; border:none; cursor:pointer; padding:4px; color:var(--gray-400); transition:color 0.2s;" onmouseover="this.style.color=\'var(--danger)\'" onmouseout="this.style.color=\'var(--gray-400)\'">' +
+                  '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>' +
+                '</span>' +
+              '</label>'
             : '<span title="' + (j.print_pin
                 ? 'Kept: has a Print PIN and can still be collected at the kiosk'
                 : 'Kept: this job cannot be cleared yet') + '" style="padding:4px; color:var(--gray-300);">' +
@@ -2468,6 +2546,72 @@ function deleteJob(jobId) {
   }).catch(function () {
     alert('Could not reach the server. Nothing was cleared.');
   });
+}
+
+// Delete the jobs the customer ticked.
+//
+// Dry run first, exactly as clearAllJobs() does, and for the same reason: the
+// server decides what is actually clearable, so the confirmation can name the
+// jobs being kept and why instead of asking "are you sure?" and then quietly
+// keeping some of them. The selection is only ever a narrowing - the server
+// intersects it with the caller's own jobs, so it cannot widen what is cleared.
+function deleteSelectedJobs() {
+  var ids = Array.from(selectedJobIds);
+  if (!ids.length) { alert('Select at least one job first.'); return; }
+
+  fetch(API('data', 'clear-jobs'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Session-Token': token },
+    body: JSON.stringify({ confirm: false, job_ids: ids })
+  }).then(function (r) { return r.json(); })
+  .then(function (d) {
+    if (!d || !d.success) { alert('Could not check which jobs can be cleared.'); return; }
+
+    var clearable = d.clearable || [];
+    var kept = d.kept || [];
+
+    if (clearable.length === 0) {
+      alert('Nothing can be cleared.\n\n'
+        + (kept.length
+          ? 'The ' + kept.length + ' job' + (kept.length === 1 ? '' : 's') + ' you selected cannot be cleared yet:\n'
+            + kept.slice(0, 8).map(function (k) { return '  ' + k.job_id + ' - ' + k.reason; }).join('\n')
+            + (kept.length > 8 ? '\n  ...and ' + (kept.length - 8) + ' more' : '')
+          : 'None of the jobs you selected are clearable.'));
+      return;
+    }
+
+    var msg = 'Delete ' + clearable.length + ' job' + (clearable.length === 1 ? '' : 's') + '?\n\n'
+      + clearable.slice(0, 8).map(function (id) { return '  ' + id; }).join('\n')
+      + (clearable.length > 8 ? '\n  ...and ' + (clearable.length - 8) + ' more' : '');
+
+    if (kept.length) {
+      msg += '\n\nThese will be KEPT:\n'
+        + kept.slice(0, 8).map(function (k) { return '  ' + k.job_id + ' - ' + k.reason; }).join('\n')
+        + (kept.length > 8 ? '\n  ...and ' + (kept.length - 8) + ' more' : '');
+    }
+    msg += '\n\nDeleted files cannot be recovered.';
+
+    if (!confirm(msg)) return;
+
+    fetch(API('data', 'clear-jobs'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Session-Token': token },
+      body: JSON.stringify({ confirm: true, job_ids: ids })
+    }).then(function (r) { return r.json(); })
+    .then(function (res) {
+      if (!res || !res.success) { alert('Could not delete the jobs.'); return; }
+      var cleared = res.cleared || [];
+      if (!cleared.length) { alert('Nothing was deleted.'); return; }
+      uploadedJobs = uploadedJobs.filter(function (j) { return cleared.indexOf(j.job_id) === -1; });
+      localStorage.setItem('uploadedJobs', JSON.stringify(uploadedJobs));
+      cleared.forEach(function (id) { selectedJobIds.delete(id); });
+      updateSelectionUI();
+      alert('Deleted ' + cleared.length + ' job' + (cleared.length === 1 ? '' : 's') + '.');
+      loadJobs();
+    })
+    .catch(function () { alert('Could not reach the server. Nothing was deleted.'); });
+  })
+  .catch(function () { alert('Could not reach the server. Nothing was deleted.'); });
 }
 
 // Clear everything the customer is allowed to clear, in one go.
