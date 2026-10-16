@@ -2606,12 +2606,25 @@ function fmtDateTime(v) {
 
 // Mirrors clearableReason() in data.js. The server enforces this regardless --
 // this exists so the button is not offered for a job that will be refused.
+// Mirrors clearableReason() in netlify/functions/data.js, in the same order.
+//
+// The order is the whole point. An earlier version of this checked print_pin
+// first, which is what the server used to do - so every unpaid pending job hid
+// its own checkbox, because a PIN is handed out when the job is created. The
+// server was fixed and this was not, so the button stayed invisible for exactly
+// the jobs that had become deletable. The rules are asserted against each other
+// in check-job-bulk-clear.js, because a mirror that drifts is worse than no
+// mirror: it hides a control the server will happily accept.
 function jobCanBeCleared(j) {
-  if (j.print_pin) return false;
   var status = j.status || '';
   var paid = j.paid === true || j.paid === 'true';
+  // Printed or cancelled: the PIN is dead weight, there is nothing to collect.
   if (status === 'completed' || status === 'cancelled') return true;
-  if (status === 'pending' && !paid) return true;
+  // Unpaid: a PIN was never protection, because collecting means paying.
+  if (!paid && status === 'pending') return true;
+  // Still to print: protected by the PIN. This is what keeps ready_to_print and
+  // printing rows safe, and paid jobs awaiting the kiosk.
+  if (j.print_pin) return false;
   return false;
 }
 

@@ -365,22 +365,29 @@ function clearableReason(job) {
   const status = job.status || '';
   const paid = job.paid === true || job.paid === 'true';
 
-  // Unpaid work is always clearable, PIN or not.
+  // Finished work first, PIN or not.
   //
-  // A PIN is assigned when the job is CREATED, so every pending job has one -
-  // but an unpaid document cannot be collected, because collecting it means
-  // paying for it. Testing the PIN first therefore refused to clear every
-  // unpaid job, which is backwards: the jobs with the least at stake were the
-  // only ones a customer could not delete, and "has a print PIN and can still be
-  // collected" is advice about a document they never paid for.
+  // A PIN is only meaningful while the document is still waiting at the kiosk.
+  // Once it has printed there is nothing left to collect, so the PIN is dead
+  // weight - but it is not cleared from the row, so testing it first locked away
+  // every printed job that still carried one: 28 of 65 in the live table, none
+  // of them deletable, and no reason a customer could act on.
+  if (status === 'completed' || status === 'cancelled') return null;
+
+  // Unpaid work is clearable, PIN or not.
+  //
+  // A PIN is assigned when the job is CREATED, so every pending job has one - but
+  // an unpaid document cannot be collected, because collecting it means paying for
+  // it. Testing the PIN first refused to clear every unpaid job, which is
+  // backwards: the jobs with the least at stake were the only ones a customer
+  // could not delete, and "has a print PIN and can still be collected" is advice
+  // about a document they never paid for.
   if (!paid && status === 'pending') return null;
 
-  // Checked before status: a PIN is the strongest signal regardless of state.
+  // Checked before the remaining statuses: a PIN is the strongest signal on a job
+  // that has not printed. This is what protects ready_to_print, printing, and any
+  // paid job still awaiting the kiosk.
   if (job.print_pin) return 'has a print PIN and can still be collected';
-
-  if (status === 'completed') return null;
-  if (status === 'cancelled') return null;
-  if (status === 'pending' && !paid) return null;
 
   if (status === 'failed' || status === 'refund_issued') return 'needs staff to arrange a refund or reprint';
   if (status === 'pending' && paid) return 'paid and awaiting print';

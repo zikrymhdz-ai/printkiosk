@@ -25,6 +25,7 @@ const path = require('path');
 const ROOT = path.join(__dirname, '..');
 const cust = fs.readFileSync(path.join(ROOT, 'website', 'customer.html'), 'utf8');
 const data = fs.readFileSync(path.join(ROOT, 'netlify', 'functions', 'data.js'), 'utf8');
+const html = fs.readFileSync(path.join(ROOT, 'website', 'customer.html'), 'utf8');
 
 let failed = 0;
 const ok = (cond, msg) => {
@@ -174,12 +175,20 @@ ok(!/case 'get-all-jobs'[\s\S]*?print_jobs[\s\S]{0,400}?'select': '\*'[\s\S]{0,4
 // the only ones a customer could not delete.
 const cr = data.match(/function clearableReason[\s\S]*?\n\}/);
 ok(!!cr, 'clearableReason found');
+// Hoisted, not scoped to the block below: the client/server comparison further
+// down needs the same function.
+let reason = null;
 if (cr) {
-  const reason = new Function(cr[0] + '\nreturn clearableReason;')();
+  reason = new Function(cr[0] + '\nreturn clearableReason;')();
 
   const clearCases = [
     ['a pending UNPAID job that has a PIN', { status: 'pending', paid: false, print_pin: '827191' }],
     ['a pending unpaid job with no PIN', { status: 'pending', paid: false, print_pin: null }],
+    // 28 of 65 printed jobs in the live table still carried their PIN. A PIN on
+    // something already printed is meaningless, so it must not block deletion.
+    ['a PRINTED job that still carries its PIN', { status: 'completed', paid: true, print_pin: '553311' }],
+    ['a cancelled job that still carries its PIN', { status: 'cancelled', paid: true, print_pin: '553311' }],
+    ['a printed unpaid job', { status: 'completed', paid: false, print_pin: null }],
   ];
   for (const [name, job] of clearCases) {
     ok(reason(job) === null, name + ' is clearable');
@@ -208,6 +217,45 @@ const pinAt = cr ? cr[0].indexOf('if (job.print_pin)') : -1;
 const unpaidAt = cr ? cr[0].indexOf('!paid') : -1;
 ok(unpaidAt > 0 && pinAt > unpaidAt,
   'the unpaid rule is checked before the PIN rule, or it never applies');
+
+// The client must reach the same verdict as the server, always.
+//
+// This is the check that would have caught the actual bug. The server's rule was
+// corrected to let unpaid jobs be deleted; the page's copy of the rule still
+// tested print_pin first, so it hid the checkbox for precisely the jobs that had
+// become deletable. Nothing failed, the suite stayed green, and the button simply
+// was not there. Two copies of one rule drift unless something compares them.
+const clientSrc = (html.match(/function jobCanBeCleared[\s\S]*?\n\}/) || [])[0];
+ok(!!clientSrc, 'the page has its own jobCanBeCleared rule');
+if (clientSrc) {
+  const clientRule = new Function(clientSrc + '\nreturn jobCanBeCleared;')();
+  const STATES = [
+    { status: 'pending', paid: false, print_pin: '827191' },
+    { status: 'pending', paid: false, print_pin: null },
+    { status: 'pending', paid: true, print_pin: '827191' },
+    { status: 'pending', paid: true, print_pin: null },
+    { status: 'completed', paid: true, print_pin: '553311' },
+    { status: 'completed', paid: true, print_pin: null },
+    { status: 'completed', paid: false, print_pin: '7' },
+    { status: 'cancelled', paid: true, print_pin: '553311' },
+    { status: 'ready_to_print', paid: true, print_pin: '91' },
+    { status: 'printing', paid: true, print_pin: '12' },
+    { status: 'failed', paid: true, print_pin: null },
+    { status: 'refund_issued', paid: true, print_pin: null },
+  ];
+  let drift = 0;
+  for (const job of STATES) {
+    const serverSays = cr ? reason(job) === null : null;
+    const clientSays = clientRule(job) === true;
+    if (cr && serverSays !== clientSays) {
+      drift++;
+      console.log('    -> ' + JSON.stringify(job) +
+        ': server ' + (serverSays ? 'allows' : 'blocks') +
+        ', page ' + (clientSays ? 'shows delete' : 'hides delete'));
+    }
+  }
+  ok(drift === 0, 'the page and the server agree on all ' + STATES.length + ' job states');
+}
 
 if (failed) { console.log('  -> ' + failed + ' failed'); process.exit(1); }
 console.log('  ok      bulk clearing is scoped to the owner and pruned to what is on screen');
