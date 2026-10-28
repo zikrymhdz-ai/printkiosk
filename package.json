@@ -4,7 +4,8 @@
   "description": "Smart 24/7 Printing Kiosk - Netlify Functions",
   "private": true,
   "dependencies": {
-    "bcryptjs": "^3.0.3"
+    "bcryptjs": "^3.0.3",
+    "pdf-lib": "^1.17.1"
   },
   "engines": {
     "node": ">=18.0.0"
@@ -12,6 +13,6 @@
   "scripts": {
     "version:sync": "node scripts/sync-version.js",
     "check:version": "node scripts/sync-version.js",
-    "test": "node scripts/sync-version.js && node scripts/check-syntax.js && node scripts/check-kiosk-globals.js && node scripts/check-kiosk-cancel.js && node scripts/check-kiosk-amount.js && node scripts/check-kiosk-paid-only.js && node scripts/check-mixed-colour-payment.js && node scripts/check-payment-uniqueness.js && node scripts/check-face-logic.js && node scripts/check-printer-honesty.js && node scripts/check-clear-jobs.js && node scripts/check-job-bulk-clear.js && node scripts/check-face-perf.js && node scripts/check-printer-diagnostics.js && node scripts/check-printer-freshness.js && node scripts/check-worker-config.js && node scripts/check-no-committed-secrets.js && node scripts/check-shared-imports.js && node scripts/check-page-extract.js && node scripts/check-printer-identity.js  && node scripts/check-ipptool-parse.js && python scripts/check_ipptool_fallback.py && node scripts/check-order-payment.js && node scripts/check-merge-files.js && node scripts/check-merge-pricing.js && node scripts/show-lp-commands.js --check && python scripts/check_image_adjust.py && node scripts/check-html-encoding.js && node scripts/check-version-sync.js"
+    "test": "node scripts/sync-version.js && node scripts/check-syntax.js && node scripts/check-kiosk-globals.js && node scripts/check-kiosk-cancel.js && node scripts/check-kiosk-amount.js && node scripts/check-kiosk-paid-only.js && node scripts/check-mixed-colour-payment.js && node scripts/check-payment-uniqueness.js && node scripts/check-face-logic.js && node scripts/check-printer-honesty.js && node scripts/check-clear-jobs.js && node scripts/check-bulk-clear-batch.js && node scripts/check-delete-ui.js && node scripts/check-job-bulk-clear.js && node scripts/check-face-perf.js && node scripts/check-printer-diagnostics.js && node scripts/check-kiosk-heartbeat-precedence.js && node scripts/check-printer-freshness.js && node scripts/check-print-retry.js && node scripts/check-worker-config.js && node scripts/check-no-committed-secrets.js && node scripts/check-shared-imports.js && node scripts/check-page-extract.js && node scripts/check-printer-identity.js  && node scripts/check-ipptool-parse.js && python scripts/check_ipptool_fallback.py && python scripts/check_cups_job_state.py && node scripts/check-order-payment.js && node scripts/check-merge-files.js && node scripts/check-merge-pricing.js && node scripts/show-lp-commands.js --check && python scripts/check_image_adjust.py && node scripts/check-html-encoding.js && node scripts/check-version-sync.js"
   }
 }

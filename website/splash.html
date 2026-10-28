@@ -246,6 +246,8 @@
   </div>
 </div>
 
+<script src="../frontend_config.js"></script>
+<script src="pstore.js"></script>
 <script>
   // confetti burst timed with logo reveal
   const host = document.getElementById('confettiHost');
@@ -262,15 +264,48 @@
     host.appendChild(dot);
   }
 
-  // play intro, then go to login
   const stage = document.getElementById('stage');
 
-  setTimeout(()=>{
+  // Where to land after the intro. The login page can also restore a session,
+  // but going through it first flashed the form before forwarding. Here the
+  // persisted token is checked against the sessions table (exists + not
+  // expired) while the intro plays, so a valid session opens home directly.
+  var target = 'login.html';
+
+  function decide(page) { target = page; }
+
+  function leave() {
     stage.classList.add('fade-out');
-    setTimeout(()=>{
-      window.location.href = 'login.html';
-    }, 480);
-  }, 2600);
+    setTimeout(function () { window.location.href = target; }, 480);
+  }
+
+  (function restoreSession() {
+    if (!window.PKS || typeof API !== 'function') { decide('login.html'); return; }
+    PKS.init().then(function () {
+      var token = null;
+      try { token = localStorage.getItem('session_token'); } catch (e) {}
+      if (!token) { decide('login.html'); return; }
+
+      return fetch(API('auth', 'verify-session'), {
+        headers: { 'X-Session-Token': token }
+      }).then(function (r) {
+        return r.json().then(function (d) { return { ok: r.ok && d && d.success, data: d }; });
+      }).then(function (res) {
+        if (res.ok && res.data && res.data.user) {
+          PKS.set('user', JSON.stringify(res.data.user));
+          decide(res.data.user.role === 'admin' ? '../admin/admin.html' : 'customer.html');
+        } else {
+          PKS.remove('session_token');
+          PKS.remove('user');
+          decide('login.html');
+        }
+      });
+    }).catch(function () { decide('login.html'); });
+  })();
+
+  // The intro runs for 2.6s; navigate when it ends using whatever the check
+  // resolved to. If the check is still in flight, login.html repeats it.
+  setTimeout(leave, 2600);
 </script>
 
 </body>

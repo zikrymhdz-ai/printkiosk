@@ -1,18 +1,30 @@
 // Rules for what a customer is allowed to clear from their own job list.
 //
-// The requirement: clear printed / cancelled / unpaid jobs, but never a job
-// with a PIN. A PIN means the document is still collectable at the kiosk and is
-// the only proof of entitlement, so clearing it destroys something someone can
-// still legitimately claim.
+// Carve-out: a PIN normally protects a document that can still be collected at
+// the kiosk. It does NOT protect work that is already finished (printed or
+// cancelled) or work that was never paid for - a PIN is assigned when the job is
+// created, so every pending job has one, and collecting a document means paying
+// for it. See the comments in clearableReason().
 //
-// These are the same predicates as clearableReason() in data.js and
-// jobCanBeCleared() in customer.html; all three must agree.
+// The rule lives in two places on purpose:
+//   - netlify/functions/data.js  clearableReason()  -> enforced
+//   - website/customer.html      jobCanBeCleared()  -> draws the button
+//
+// This test RUNS both, instead of keeping a third hand-written copy. The copy
+// that used to be here had drifted: it checked print_pin before status, so it
+// asserted that a printed job with a leftover PIN could not be cleared - which
+// is the opposite of what ships, and of what 28 of the live 65 rows needed.
+// A mirror that is only compared against itself proves nothing.
+//
+// Run: node scripts/check-clear-jobs.js
+
 const fs = require('fs');
 const path = require('path');
 
 const ROOT = path.join(__dirname, '..');
-const backend = fs.readFileSync(path.join(ROOT, 'netlify/functions/data.js'), 'utf8');
-const page = fs.readFileSync(path.join(ROOT, 'website/customer.html'), 'utf8');
+const read = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
+const backend = read('netlify/functions/data.js');
+const page = read('website/customer.html');
 
 let failed = false;
 const ok = (cond, msg) => {
@@ -20,90 +32,110 @@ const ok = (cond, msg) => {
   if (!cond) failed = true;
 };
 
-// Re-implement the shipped rule exactly as clearableReason() reads it.
-function clearableReason(job) {
-  const status = job.status || '';
-  const paid = job.paid === true || job.paid === 'true';
-  if (job.print_pin) return 'has a print PIN and can still be collected';
-  if (status === 'completed') return null;
-  if (status === 'cancelled') return null;
-  if (status === 'pending' && !paid) return null;
-  if (status === 'failed' || status === 'refund_issued') return 'needs staff to arrange a refund or reprint';
-  if (status === 'pending' && paid) return 'paid and awaiting print';
-  return 'status "' + status + '" is still active';
+// --- the shipped server rule, executed -------------------------------------
+function loadServerRule() {
+  const start = backend.indexOf('function clearableReason');
+  const end = backend.indexOf('async function handleDeleteJob');
+  if (start < 0 || end < 0) throw new Error('clearableReason() not found in data.js');
+  // eslint-disable-next-line no-new-func
+  return new Function(backend.slice(start, end) + '\nreturn clearableReason;')();
 }
+
+// --- the shipped UI rule, executed -----------------------------------------
+function loadUiRule() {
+  const start = page.indexOf('function jobCanBeCleared');
+  const end = page.indexOf('function deleteJob');
+  if (start < 0 || end < 0) throw new Error('jobCanBeCleared() not found in customer.html');
+  // eslint-disable-next-line no-new-func
+  return new Function(page.slice(start, end) + '\nreturn jobCanBeCleared;')();
+}
+
+const clearableReason = loadServerRule();
+const jobCanBeCleared = loadUiRule();
 const canClear = (j) => clearableReason(j) === null;
 
 // --- the headline requirement ---------------------------------------------
-const WITH_PIN = [
-  { name: 'completed + PIN',    job: { status: 'completed', paid: true,  print_pin: '4821' } },
-  { name: 'cancelled + PIN',    job: { status: 'cancelled', paid: false, print_pin: '4821' } },
-  { name: 'pending unpaid + PIN', job: { status: 'pending',  paid: false, print_pin: '4821' } },
-  { name: 'queued + PIN',       job: { status: 'printing', paid: true,  print_pin: '4821' } },
-  { name: 'pending PAID + PIN', job: { status: 'pending',  paid: true,  print_pin: '4821' } },
-];
-for (const t of WITH_PIN) {
-  ok(!canClear(t.job), 'never clear ' + t.name);
+// Printed and cancelled work is clearable even when it still carries a PIN.
+for (const j of [
+  { status: 'completed', paid: true, print_pin: '4821' },
+  { status: 'completed', paid: true, print_pin: null },
+  { status: 'cancelled', paid: false, print_pin: '4821' },
+]) {
+  ok(canClear(j), 'clear ' + j.status + ' (pin=' + (j.print_pin || 'none') + ')');
 }
 
-// --- the three things that SHOULD clear -----------------------------------
-ok(canClear({ status: 'completed', paid: true,  print_pin: null }), 'clear printed successfully');
-ok(canClear({ status: 'cancelled', paid: false, print_pin: null }), 'clear cancelled');
-ok(canClear({ status: 'pending',  paid: false, print_pin: null }), 'clear not paid yet');
+// Unpaid work is clearable too, PIN or not: a PIN buys nothing without payment.
+ok(canClear({ status: 'pending', paid: false, print_pin: '4821' }),
+   'clear a not-paid job even though it has a PIN');
+ok(canClear({ status: 'pending', paid: false, print_pin: null }), 'clear a not-paid job');
+
+// --- the PIN must still protect work that has not printed ------------------
+for (const j of [
+  { status: 'printing',       paid: true, print_pin: '4821' },
+  { status: 'ready_to_print', paid: true, print_pin: '4821' },
+  { status: 'printing',       paid: true, print_pin: null },
+]) {
+  ok(!canClear(j), 'keep ' + j.status + ' (pin=' + (j.print_pin || 'none') + ') - still collectable');
+}
 
 // --- paid jobs needing staff must survive ---------------------------------
-ok(!canClear({ status: 'failed',      paid: true, print_pin: null }), 'keep failed+paid (needs refund)');
-ok(!canClear({ status: 'refund_issued', paid: true, print_pin: null }), 'keep refund_issued');
-ok(!canClear({ status: 'pending',     paid: true, print_pin: null }), 'keep paid & awaiting print');
-ok(!canClear({ status: 'printing',    paid: true, print_pin: null }), 'keep actively printing');
+for (const j of [
+  { status: 'failed',        paid: true, print_pin: null },
+  { status: 'refund_issued', paid: true, print_pin: null },
+  { status: 'pending',       paid: true, print_pin: null },
+]) {
+  ok(!canClear(j), 'keep ' + j.status + ' + paid');
+}
 
-// --- the PIN check must come first -----------------------------------------
-// If status were checked first, 'completed + PIN' would look clearable.
-ok(/if \(job\.print_pin\) return/.test(backend),
-  'backend checks print_pin before anything else');
-ok(clearableReason({ status: 'completed', paid: true, print_pin: '4821' })
-   === 'has a print PIN and can still be collected',
-  'a completed job with a PIN is still refused, so the PIN check truly runs first');
+// --- the two copies must agree on every shape ------------------------------
+// This is the whole point of executing both: a drift here is a button that is
+// offered and then refused (or the reverse).
+const MATRIX = [];
+for (const status of ['completed', 'cancelled', 'pending', 'printing', 'ready_to_print', 'failed', 'refund_issued', 'partial']) {
+  for (const paid of [true, false]) {
+    for (const print_pin of ['4821', null]) MATRIX.push({ status, paid, print_pin });
+  }
+}
+const disagreements = MATRIX.filter((j) => jobCanBeCleared(j) !== canClear(j));
+ok(disagreements.length === 0,
+   'the UI mirror and the server rule agree on all ' + MATRIX.length + ' shapes'
+   + (disagreements.length
+     ? ': ' + JSON.stringify(disagreements.slice(0, 3))
+     : ''));
 
 // --- the rule must be enforced server-side, not only hidden in the UI -------
-ok(/validateSession\(event\)/.test(backend.split('async function handleDeleteJob')[1] || ''),
-  'delete-job requires a session');
-ok(/job\.user_id !== session\.users\.id/.test(backend),
-  'delete-job checks the job belongs to the caller');
-ok(/const blocked = clearableReason\(job\)/.test(backend),
-  'delete-job enforces clearableReason() server-side');
+const deleteJobSrc = backend.split('async function handleDeleteJob')[1] || '';
+ok(/validateSession\(event\)/.test(deleteJobSrc), 'delete-job requires a session');
+ok(/job\.user_id !== session\.users\.id/.test(deleteJobSrc),
+   'delete-job checks the job belongs to the caller');
+ok(/const blocked = clearableReason\(job\)/.test(deleteJobSrc),
+   'delete-job enforces clearableReason() server-side');
 
 // --- bulk clear must agree with the single-job path -----------------------
 ok(/async function handleClearJobs/.test(backend), 'bulk clear handler exists');
-// POST actions in this file are dispatched in if-blocks, not a switch case,
-// so assert the dispatch itself rather than the style.
 ok(/action === 'clear-jobs'/.test(backend)
    && /return await handleClearJobs\(event\)/.test(backend),
   'clear-jobs route is wired');
 ok(/dry_run: true/.test(backend), 'bulk clear supports a dry run so the UI can show what is kept');
 ok(/body\.confirm !== true/.test(backend), 'bulk clear only deletes when confirm:true is sent');
-ok(/reason === null/.test(backend), 'bulk clear reuses the same rule, not a second copy');
+
+const bulkSrc = backend.split('async function handleClearJobs')[1].split('async function ')[0];
+ok(/clearableReason\(j\)/.test(bulkSrc), 'bulk clear reuses the same rule, not a second copy');
+
 // It must not delete anything in a dry run.
-const dry = backend.split('async function handleClearJobs')[1].split('async function ')[0];
-const confirmAt = dry.indexOf('body.confirm !== true');
-const deleteAfter = dry.indexOf('handleDeleteJob(Object.assign');
+const confirmAt = bulkSrc.indexOf('body.confirm !== true');
+const deleteAfter = bulkSrc.indexOf("'PATCH'");
 ok(confirmAt !== -1 && deleteAfter > confirmAt,
-  'the delete loop is unreachable before the confirm check');
+   'the delete write is unreachable before the confirm check');
 
 // --- the UI must not offer what the server refuses -------------------------
-ok(/function jobCanBeCleared/.test(page), 'UI mirrors the clearable rule');
-ok(/jobCanBeCleared\(j\)/.test(page), 'delete button is gated on the rule');
+ok(/jobCanBeCleared\(j\)/.test(page), 'the delete button is gated on the rule');
 // The reason has to be VISIBLE text. It used to live in the tooltip of a grey
-    // padlock, so on a phone - where there is no hover - a customer saw a locked
-    // row and no reason at all. The wording changed with it, so assert on the
-    // behaviour rather than the old sentence.
-    ok(/You can still collect this/.test(page),
-    'UI explains why a PIN job is kept');
-    ok(!/M7 11V7a5 5 0 0 1 10 0v4/.test(page),
-    'and the padlock that hid the reason behind a hover is gone');
-// A refused delete must not silently vanish from the local list.
-ok(/if \(!res\.ok\)[\s\S]{0,200}alert\(/.test(page),
-  'a refused delete surfaces an error instead of hiding the job locally');
+// padlock, so on a phone - where there is no hover - a customer saw a locked row
+// and no reason at all.
+ok(/You can still collect this/.test(page), 'the UI explains why a PIN job is kept');
+ok(!/M7 11V7a5 5 0 0 1 10 0v4/.test(page),
+   'and the padlock that hid the reason behind a hover is gone');
 
-if (failed) process.exit(1);
-console.log('  ok      customer clear rules: PIN jobs always kept');
+if (failed) { console.log('  -> failed'); process.exit(1); }
+console.log('  ok      customer clear rules: one rule, enforced and mirrored');

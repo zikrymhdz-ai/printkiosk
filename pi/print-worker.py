@@ -252,43 +252,251 @@ def run_lp(args, timeout):
     )
 
 
-def cups_job_state(printer, job_id):
-    """Return the state of one specific CUPS job, or None if it has vanished.
+def printer_option_names(printer):
+    """The option names this CUPS queue actually accepts, lowercased.
 
-    'lp' only tells us the job was ACCEPTED into the queue. It says nothing
-    about whether paper ever came out, so relying on "the queue is empty now"
-    is not a success check at all: an aborted, cancelled or offline-rejected
-    job also leaves the queue, and a fast single-page job is already gone
-    before the first poll.
+    A queue built with `lpadmin -p Brother -E -v ipp://...` is a driverless
+    IPP Everywhere queue. Those take the IPP standard attribute
+    `print-color-mode`; `ColorModel` is a Brother PPD option that only exists
+    on a queue with the vendor driver installed. Sending the wrong spelling is
+    at best ignored and at worst refused by the printer *after* CUPS has
+    already answered "request id is Brother-NN", which is exactly the shape of
+    "the kiosk says it printed and no paper came out".
 
-    'lpstat -W all' reports per-job state:
-        completed  -> it really did print
-        aborted    -> the printer gave up (jam, no paper, offline)
-        canceled   -> removed before printing
+    The queue's own option list is the only honest answer. Guessing from the
+    device URI is not: a queue with a brother PPD can also point at ipp://.
     """
     try:
         proc = subprocess.run(
-            ["lpstat", "-W", "all", "-o", job_id],
+            ["lpoptions", "-p", printer, "-l"],
             capture_output=True, text=True, timeout=30,
         )
     except Exception:
-        return None
+        return set()
 
-    out = proc.stdout
-    if not out.strip():
-        return None
-
-    # Line looks like: Brother-12  user  24576  Tue 14 Oct ... printing
-    for line in out.splitlines():
-        if job_id not in line:
+    names = set()
+    for line in (proc.stdout or "").splitlines():
+        line = line.strip()
+        if not line:
             continue
-        low = line.lower()
-        for state in ("completed", "aborted", "canceled", "cancelled"):
-            if state in low:
-                return state
-        for state in ("printing", "processing", "pending", "held"):
-            if state in low:
-                return state
+        # "ColorModel/Color Mode: *Gray RGB"  or  "media/Media Size: iso_a4..."
+        head = re.split(r"[/:]", line, 1)[0].strip().lower()
+        if head:
+            names.add(head)
+    return names
+
+
+# What each CUPS job state means for us. 'completed' is the ONLY success: CUPS
+# writes it when the backend has handed every byte to the printer and the
+# printer reported the job finished.
+_JOB_STATES_DONE = ("completed",)
+_JOB_STATES_FAILED = ("aborted", "canceled", "cancelled")
+_JOB_STATES_ACTIVE = ("printing", "processing", "pending", "held", "stopped",
+                      "active")
+
+# Produced only by the lpstat fallback: the job is out of the active queue and
+# in the scheduler's finished list, but without the state word that would tell
+# 'completed' from 'canceled'.
+_JOB_STATE_FINISHED = "finished"
+
+# job-state enum from RFC 8011, as Get-Job-Attributes returns it.
+#
+# BOTH spellings occur: ipptool -tv prints the NAME, not the number --
+#
+#     job-state (enum) = completed
+#
+# -- while a raw protocol dump gives the enum value. Matching only digits was
+# how the first version of this check silently parsed nothing and fell back to
+# lpstat on every poll, which is the very thing this is meant to replace.
+_JOB_STATE_IPP = {
+    3: "pending", 4: "held", 5: "printing", 6: "stopped",
+    7: "canceled", 8: "aborted", 9: "completed",
+}
+_JOB_STATE_NAMES = {
+    "pending": "pending",
+    "pending-held": "held", "held": "held",
+    "processing": "printing",
+    "processing-stopped": "stopped", "stopped": "stopped",
+    "canceled": "canceled", "cancelled": "canceled",
+    "aborted": "aborted",
+    "completed": "completed",
+}
+
+# How long to keep looking for a job that the scheduler has not listed yet.
+# `lp` prints the request id only after cupsd has spooled the file, so the job
+# is normally visible on the very first poll; this only covers a busy daemon.
+JOB_VISIBLE_GRACE = 20
+
+# How long to keep looking after a job we DID see leaves the list. CUPS writes
+# the finished entry and drops the active one in separate calls, so a single
+# "not there" poll must not be read as an outcome.
+JOB_HISTORY_GRACE = 8
+
+# Jobs already reported as "listed but no state word", so the journal gets the
+# raw lpstat line once per job rather than once per 2 s poll.
+_warned_unparsed = set()
+
+
+def _lpstat(args):
+    """stdout of one lpstat call, or None if it could not be run at all."""
+    try:
+        proc = subprocess.run(
+            ["lpstat"] + list(args), capture_output=True, text=True, timeout=30,
+        )
+    except Exception:
+        return None
+    return proc.stdout or ""
+
+
+def _job_lines(out):
+    """{job id: rest of the line, lowercased} from `lpstat -o` output.
+
+    The job id is the FIRST column, so it is compared exactly. The old code
+    asked `if job_id in line`, which also matches 'Brother-1' inside
+    'Brother-12' and would report a different job's state as this one's.
+    """
+    jobs = {}
+    for line in (out or "").splitlines():
+        parts = line.split(None, 1)
+        if parts:
+            jobs[parts[0]] = (parts[1] if len(parts) > 1 else "").lower()
+    return jobs
+
+
+def _job_uri(job_id):
+    """The local scheduler's URI for a job id such as 'Brother-41'."""
+    num = str(job_id).rsplit("-", 1)[-1]
+    if not num.isdigit():
+        return ""
+    return "ipp://localhost:631/jobs/%s" % num
+
+
+def get_job_attrs_test():
+    """A Get-Job-Attributes request, asking for state and reason.
+
+    Same tactic as get_printer_attrs_test(): copy CUPS' own test file where it
+    is installed, because this ipptool build has refused a generated file
+    before ("Unexpected token ATTRIBUTE seen on line 4"), and only hand-write
+    one if CUPS has none.
+    """
+    system = "/usr/share/cups/ipptool/get-job-attributes.test"
+    target = os.path.join(tempfile.gettempdir(), "pk-get-job-attributes.test")
+    wanted = ("job-state,job-state-reasons,job-impressions-completed"
+              ",job-impressions,job-name")
+
+    if os.path.exists(system):
+        try:
+            with open(system, "r") as f:
+                src = f.read()
+            if "requested-attributes" not in src:
+                src = src.replace(
+                    "STATUS successful-ok",
+                    "ATTRIBUTE requested-attributes\n"
+                    "    requested-attributes %s\n"
+                    "    STATUS successful-ok" % wanted)
+            with open(target, "w") as f:
+                f.write(src)
+            return target
+        except Exception:
+            pass
+
+    with open(target, "w") as f:
+        f.write(
+            '{\n'
+            '    OPERATION Get-Job-Attributes\n'
+            '    GROUP operation-attributes-tag\n'
+            '    ATTRIBUTE charset\n'
+            '        charset "utf-8"\n'
+            '    ATTRIBUTE naturalLanguage\n'
+            '        naturalLanguage "en"\n'
+            '    ATTRIBUTE uri\n'
+            '        uri "$uri"\n'
+            '    ATTRIBUTE requested-attributes\n'
+            '        requested-attributes %s\n'
+            '    STATUS successful-ok\n'
+            '}\n' % wanted
+        )
+    return target
+
+
+def cups_job_ipp(job_id):
+    """(state, reasons) for one job, asked of the local scheduler over IPP.
+
+    ('', '') means the scheduler could not be asked, not that the job is gone.
+
+    This exists because `lpstat` is not enough on this Pi. `lpstat -W all -o`
+    prints, verbatim:
+
+        Brother-41  user  36864  Tue 27 Oct 2026 17:33:03 +08
+
+    There is no state column, so a job that printed, a job the printer refused
+    and a job someone cancelled are the same line with a different date. The
+    scheduler does know -- it reports job-state as an enum -- and ipptool is
+    already a dependency, so ask it directly.
+    """
+    uri = _job_uri(job_id)
+    if not uri or not shutil_which("ipptool"):
+        return "", ""
+    try:
+        proc = subprocess.run(
+            ["ipptool", "-tv", uri, get_job_attrs_test()],
+            capture_output=True, text=True, timeout=30,
+        )
+    except Exception:
+        return "", ""
+    text = (proc.stdout or "") + "\n" + (proc.stderr or "")
+
+    m = re.search(r"job-state(?:\s*\([^)\r\n]*\))?\s*=\s*([A-Za-z][A-Za-z-]*|\d+)", text)
+    if not m:
+        return "", ""
+    raw = m.group(1).strip().lower()
+    state = (_JOB_STATE_IPP.get(int(raw), "") if raw.isdigit()
+             else _JOB_STATE_NAMES.get(raw, ""))
+
+    reasons = ""
+    r = re.search(r"job-state-reasons(?:\s*\([^)\r\n]*\))?\s*=\s*([^\r\n]+)", text)
+    if r:
+        reasons = r.group(1).strip()
+        if reasons.lower() in ("none", "no-reasons-given", "-"):
+            reasons = ""
+    return state, reasons
+
+
+def cups_job_state(printer, job_id):
+    """What CUPS knows about one job, or None if it has no record of it.
+
+    'lp' only says the job was ACCEPTED into the queue. It says nothing about
+    whether paper came out, so an empty queue is not a success check at all: an
+    aborted, cancelled or offline-rejected job also leaves the queue.
+
+    Returns 'completed', one of _JOB_STATES_FAILED, one of _JOB_STATES_ACTIVE,
+    'finished' (fallback only), or 'listed', and None when CUPS does not have
+    the job at all.
+
+    Two bugs lived here, and together they reported every job as printed:
+      1. It ran `lpstat -W all -o <job_id>`. `-o` takes DESTINATION names, so
+         the job id was read as a printer called "Brother-40"; lpstat found no
+         such destination and printed nothing, every single time.
+      2. That empty output was then read as "finished, and CUPS has already
+         purged the history", which wait_for_outcome turned into success. Every
+         job on 2026-10-27 'completed' in 16-20 s with nothing on the tray.
+    """
+    if not job_id:
+        return None
+
+    state, _ = cups_job_ipp(job_id)
+    if state:
+        return state
+
+    # ipptool could not answer (missing, or cupsd refused). Fall back to what
+    # lpstat can still prove: presence in, or absence from, the active queue.
+    if job_id in _job_lines(_lpstat(["-o"])):
+        return "active"
+    if job_id in _job_lines(_lpstat(["-W", "completed", "-o"])):
+        return _JOB_STATE_FINISHED
+    if job_id in _job_lines(_lpstat(["-W", "all", "-o"])):
+        return "listed"
+
     return None
 
 
@@ -309,7 +517,12 @@ def printer_alert(printer):
     low = out.lower()
 
     for reason in ("out of paper", "paper jam", "no paper", "printer stopped",
-                   "offline", "unable to connect", "error"):
+                   "offline", "unable to connect", "error",
+                   # A disabled queue is a hard stop, not a warning: nothing
+                   # will print until `cupsenable` runs, however healthy the
+                   # printer looks. Found because the fallback completion path
+                   # accepted a job from a queue that said "disabled since ...".
+                   "disabled"):
         if reason in low:
             # Grab the trailing "(Reason)" text if CUPS supplies one.
             m = re.search(r"\(([^)]*)\)", out)
@@ -317,39 +530,113 @@ def printer_alert(printer):
     return ""
 
 
+def cups_job_reason(job_id):
+    """CUPS' own explanation for a job, for a failure message.
+
+    The scheduler's job-state-reasons is the useful one - it names the actual
+    problem ('document-format-error', 'job-completed-with-errors',
+    'aborted-by-system'). The lpstat `-l` detail is kept as a second source
+    because it costs nothing and some builds put it there instead.
+    """
+    _, reasons = cups_job_ipp(job_id)
+    if reasons:
+        return reasons
+
+    out = _lpstat(["-W", "all", "-l", "-o"])
+    lines, keep = [], False
+    for line in (out or "").splitlines():
+        if line[:1] not in ("", " ", "\t"):
+            parts = line.split()
+            keep = bool(parts) and parts[0] == job_id
+            if keep:
+                lines.append(line.strip())
+        elif keep and line.strip():
+            lines.append(line.strip())
+    return " | ".join(lines)[:300]
+
+
 def wait_for_outcome(printer, job_id, timeout):
-    """Block until this specific job finishes. Returns (ok, reason)."""
-    deadline = time.time() + timeout
-    last = ""
+    """Block until CUPS says what happened to this specific job.
+
+    Returns (ok, reason). ok is True ONLY when CUPS reports the job completed.
+    A job that cannot be found is a failure, not a success: not seeing it is
+    not evidence that paper came out, and treating that silence as success is
+    why every job 'completed' on 2026-10-27 while the tray stayed empty.
+    """
+    if not job_id:
+        return False, ("CUPS returned no job id, so the submission cannot be"
+                       " verified - check the queue: lpstat -W all -o")
+
+    started = time.time()
+    deadline = started + timeout
+    appeared = None       # when CUPS first listed this job
+    vanished = None       # when it stopped being listed again
+    last_state = ""
 
     while time.time() < deadline:
+        now = time.time()
         state = cups_job_state(printer, job_id)
+        if state:
+            last_state = state
 
         if state == "completed":
             return True, ""
-        if state in ("aborted", "canceled", "cancelled"):
-            alert = printer_alert(printer)
-            return False, alert or ("job %s by the printer (%s)" % (state, alert or "no reason given"))
 
-        # CUPS can purge job history (PreserveJobHistory defaults to Off), so
-        # the job may disappear without us ever seeing 'completed'. Only treat
-        # that as success if the printer is healthy, otherwise report the
-        # printer's own stop reason.
-        if state is None and time.time() > deadline - timeout + 15:
+        if state in _JOB_STATES_FAILED:
             alert = printer_alert(printer)
-            if not alert:
-                return True, ""
-            return False, alert
+            detail = cups_job_reason(job_id)
+            return False, ("printer %s job %s (%s)"
+                           % (state, job_id, alert or detail or "no reason given"))
 
-        if state is None:
+        # The lpstat fallback could only prove "finished", not "printed". Take
+        # it - failing every job whenever ipptool is unavailable would break the
+        # kiosk - but say in the journal that this was the weaker evidence.
+        if state == _JOB_STATE_FINISHED:
             alert = printer_alert(printer)
             if alert:
                 return False, alert
-            last = alert
+            log("job %s left the queue; the scheduler's IPP state was"
+                " unreadable, so completion was inferred from lpstat" % job_id)
+            return True, ""
 
+        if state:
+            if appeared is None:
+                appeared = now
+            # A stop reason while the job is still queued is fatal: the job
+            # will sit there forever and the customer is standing at the kiosk.
+            alert = printer_alert(printer)
+            if alert:
+                return False, alert
+            time.sleep(2)
+            continue
+
+        # CUPS has no job by this id.
+        if appeared is None:
+            if now - started < JOB_VISIBLE_GRACE:
+                time.sleep(2)
+                continue
+            return False, ("job %s never appeared in the CUPS queue, although lp"
+                           " accepted it - check lpstat -W all -o and"
+                           " /var/log/cups/error_log" % job_id)
+
+        # It was in the queue and now it is not. That happens when CUPS does not
+        # preserve job history, and it is NOT proof of printing: a cancelled or
+        # aborted job drops out of the list too. Give the scheduler a few polls
+        # to publish the finished entry, then fail honestly.
+        if vanished is None:
+            vanished = now
+        elif now - vanished >= JOB_HISTORY_GRACE:
+            alert = printer_alert(printer)
+            return False, ("job %s left the queue without CUPS ever reporting it"
+                           " completed%s - check the paper tray and"
+                           " /var/log/cups/error_log"
+                           % (job_id, (": " + alert) if alert else ""))
         time.sleep(2)
 
-    return False, "printer did not confirm within %ds" % timeout
+    detail = cups_job_reason(job_id)
+    return False, ("printer did not confirm job %s within %ds (last state: %s%s)"
+                   % (job_id, timeout, last_state or "not listed",
+                      ("; " + detail) if detail else ""))
 
 
 def _color_runs(job):
@@ -408,7 +695,7 @@ def _color_runs(job):
 
 
 def send_to_printer(pdf_path, job):
-    """Submit to CUPS. Returns (ok, job_id_or_error)."""
+    """Submit to CUPS. Returns (ok, job_ids_or_error)."""
     printer = CONFIG["printer"]
     sides = (job.get("sides") or "single").lower()
 
@@ -421,12 +708,27 @@ def send_to_printer(pdf_path, job):
     runs = _color_runs(job)
     base_color = (job.get("color_mode") or "bw").lower()
 
+    # See printer_option_names(): the colour option has a different name on a
+    # Brother PPD queue than on a driverless IPP Everywhere queue, and sending
+    # the wrong one is how a job is accepted and then silently produces nothing.
+    opts = printer_option_names(printer)
+    color_opt = None
+    if "print-color-mode" in opts:
+        color_opt = ("print-color-mode", "color", "monochrome")
+    elif "colormodel" in opts:
+        color_opt = ("ColorModel", "RGB", "Gray")
+    else:
+        log("  queue %s advertises no colour option; submitting without one"
+            " (images are already baked to greyscale before printing)" % printer)
+
     def build(page_range, color):
         args = ["lp", "-d", printer, "-t", "PrintKiosk-%s" % job.get("job_id", "job")]
         if copies > 1:
             args += ["-n", str(copies)]
         args += ["-o", "media=A4"]
-        args += ["-o", "ColorModel=Gray" if not color else "ColorModel=RGB"]
+        if color_opt:
+            name, on, off = color_opt
+            args += ["-o", "%s=%s" % (name, on if color else off)]
         if page_range:
             args += ["-o", "page-ranges=" + page_range]
         if sides in ("double", "duplex", "two-sided", "double_sided"):
@@ -438,7 +740,8 @@ def send_to_printer(pdf_path, job):
         return args
 
     if not runs:
-        return _submit(build(None, base_color == "color"))
+        ok, result = _submit(build(None, base_color == "color"))
+        return ok, ([result] if ok else result)
 
     # One submission per colour run, in page order, so the tray receives them in
     # the order the customer chose. A failure part-way leaves earlier runs
@@ -451,11 +754,12 @@ def send_to_printer(pdf_path, job):
             log("  lp rejected %s: %s" % (label, result))
             return False, ("%s (pages %s already sent: %s)"
                            % (result, page_range, ", ".join(ids) if ids else "none"))
-        ids.append(result or page_range)
+        ids.append(result or "")
         log("  submitted %s as %s" % (label, result or "(id unknown)"))
 
-    # The wait keys off the first submission; CUPS runs them in order.
-    return True, ids[0]
+    # Every submission has to be verified by the caller; CUPS runs them in
+    # order, so the last one finishing means the rest did too.
+    return True, ids
 
 
 def _submit(args):
@@ -751,6 +1055,51 @@ def _looks_unauthorized(text):
             or "forbidden" in low)
 
 
+# ipptool's wording for "the device never answered". The list matters: the first
+# version only knew "cannot connect", so this network's real message -
+# "Unable to connect to 10.100.131.48 on port 631 - Host is down" - fell through
+# to the attribute parser and was reported as "reachable, but no toner
+# attributes in the response. Got: Unable to connect ...". That sentence
+# contradicts itself, and it sent staff hunting for a parsing bug while the
+# printer's address was simply dead.
+TRANSPORT_FAILURES = (
+    "unable to connect", "cannot connect", "connection refused",
+    "no route to host", "host is down", "could not resolve",
+    "connection timed out", "operation timed out", "network is unreachable",
+    "connection reset",
+)
+
+
+def _transport_failure(text):
+    """The ipptool line proving the request never reached the printer, or "".
+
+    Returns the matching LINE rather than a boolean so the journal can quote
+    what ipptool actually said; the caller only has to add the address.
+    """
+    for line in (text or "").splitlines():
+        low = line.lower()
+        if any(marker in low for marker in TRANSPORT_FAILURES):
+            return line.strip()
+    return ""
+
+
+def _cups_uri_hint():
+    """Point at the address CUPS itself uses, when it differs from PRINTER_URI.
+
+    Printing goes through `lp` and the queue NAME; PRINTER_URI only feeds this
+    supply probe. So the queue can print perfectly while the env file points at
+    an address the printer has since left (DHCP). Naming both turns "cannot
+    reach 10.100.131.48" into something staff can act on without guessing.
+    """
+    try:
+        uri = _queue_device_uri(CONFIG["printer"])
+    except Exception:
+        return ""
+    if not uri or uri == CONFIG["printer_uri"]:
+        return ""
+    return " (CUPS queue %s prints via %s)" % (CONFIG["printer"], uri)
+
+
 def read_supplies():
     """Ask the printer what it actually has. Returns (levels, online, why, model).
 
@@ -799,9 +1148,7 @@ def read_supplies():
                 return "refused (authorization)"
             if re.search(r'Unknown option|Usage:\s*ipptool', t or ""):
                 return "rejected our arguments"
-            low = (t or "").lower()
-            if "cannot connect" in low or "connection refused" in low \
-                    or "no route to host" in low or "could not resolve" in low:
+            if _transport_failure(t):
                 return "unreachable"
             # re.search rather than a count, matching the "did anything answer"
             # test below: presence is what matters here, and one code path for
@@ -822,11 +1169,16 @@ def read_supplies():
             first_error = first_error or line
             # A transport failure is about the printer, not about which test
             # file was used, so trying the other candidate cannot help.
-            low = (text or "").lower()
-            if "cannot connect" in low or "connection refused" in low \
-                    or "no route to host" in low or "could not resolve" in low:
-                transport_error = "cannot reach %s - %s" % (CONFIG["printer_uri"], line)
+            transport = _transport_failure(text)
+            if transport:
+                transport_error = "cannot reach %s - %s" % (CONFIG["printer_uri"], transport)
+                text = None
                 break
+            # Any OTHER non-zero exit is still not a response. Dropping the text
+            # is what stops an error transcript being parsed as an attribute
+            # dump below - the bug that produced "reachable, but no toner
+            # attributes ... Got: Unable to connect".
+            text = None
             continue
 
         # An authorization refusal is about THIS request, not about the
@@ -869,7 +1221,7 @@ def read_supplies():
         text = None
 
     if transport_error:
-        return None, False, transport_error, None
+        return None, False, transport_error + _cups_uri_hint(), None
 
     # ipptool refused our own arguments, so it never contacted the printer.
     # This must never be reported as "no toner attributes": the printer was
@@ -1147,18 +1499,24 @@ def process(job):
         if not ok:
             raise RuntimeError("lp rejected job: %s" % result)
 
-        job_id = result
-        log("%s: submitted to CUPS as %s" % (public_id, job_id or "(id unknown)"))
+        # One id per colour run. Every submission has to be confirmed: checking
+        # only the first would call a half-printed merged job a success.
+        job_ids = result if isinstance(result, list) else [result]
+        job_id = job_ids[0] if job_ids else ""
+        log("%s: submitted to CUPS as %s"
+            % (public_id, ", ".join(i or "(id unknown)" for i in job_ids)))
 
-        # Wait for THIS job to reach a terminal state. Only 'completed' counts
-        # as success -- an aborted or cancelled job means no paper came out.
-        printed, reason = wait_for_outcome(
-            CONFIG["printer"], job_id, CONFIG["queue_timeout"]
-        )
-        if not printed:
-            raise RuntimeError(reason or "printer did not confirm the job")
+        # Wait for EACH job to reach a terminal state. Only 'completed' counts
+        # as success -- an aborted, cancelled or vanished job means no paper.
+        for cid in job_ids:
+            printed, reason = wait_for_outcome(
+                CONFIG["printer"], cid, CONFIG["queue_timeout"]
+            )
+            if not printed:
+                raise RuntimeError(reason or "printer did not confirm the job")
 
-        log("%s: PRINTED (cups job %s)" % (public_id, job_id or "n/a"))
+        log("%s: PRINTED (cups job %s)"
+            % (public_id, ", ".join(i for i in job_ids if i) or "n/a"))
         report(job["id"], public_id, "completed", None, attempts, page_verified)
 
     except urllib.error.URLError as e:

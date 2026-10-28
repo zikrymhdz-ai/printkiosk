@@ -44,7 +44,7 @@ const PRICE_DOUBLE_SIDED_MULTIPLIER = 0.7;
 // Bumped whenever the kiosk front-end changes. The kiosk compares this against
 // the version it was loaded with and reloads itself, so an unattended screen
 // never keeps running a stale copy of walkin.html.
-const APP_VERSION = '2026.10.14-99';
+const APP_VERSION = '2026.10.27-104';
 
 const ALLOWED_EXTENSIONS = ['pdf', 'doc', 'docx', 'jpg', 'jpeg', 'png'];
 
@@ -529,6 +529,90 @@ const EXT_MIME_MAP = {
   'png': 'image/png'
 };
 
+// A4 in points (1pt = 1/72 inch): 210mm x 297mm = 595pt x 842pt.
+const A4_W = 595;
+const A4_H = 842;
+
+// Merge several uploaded files into one PDF document.
+//
+// Each item is { url, file_name, settings } where settings carries color_mode
+// and pages. PDFs are merged page-by-page; images are embedded as single pages
+// scaled to fit within A4. Returns the merged PDF as a Buffer, the total page
+// count, and per-file metadata (pages, color_mode, color_pages) so the caller
+// can price the merged job per page and store colour runs for the printer.
+//
+// pdf-lib's create() and copyPages() are async; image width/height are pixels
+// but addPage() takes points, so images are fitted to A4 rather than dropped
+// in raw (a 12MP phone photo would otherwise become a 55-inch page).
+async function mergeFilesToPDF(items) {
+  const { PDFDocument, rgb } = require('pdf-lib');
+
+  const pdfDoc = await PDFDocument.create();
+  const sources = [];
+  let totalPages = 0;
+
+  for (const item of items) {
+    const ext = (item.file_name || '').split('.').pop().toLowerCase();
+    const res = await fetch(item.url);
+    if (!res.ok) throw new Error('Failed to download ' + item.file_name + ': HTTP ' + res.status);
+    const bytes = new Uint8Array(await res.arrayBuffer());
+
+    if (ext === 'pdf') {
+      const srcPdf = await PDFDocument.load(bytes);
+      const pageCount = srcPdf.getPageCount();
+      const copied = await pdfDoc.copyPages(srcPdf, srcPdf.getPageIndices());
+      for (const page of copied) pdfDoc.addPage(page);
+      totalPages += pageCount;
+      sources.push({
+        file_name: item.file_name,
+        pages: pageCount,
+        color_mode: item.settings && item.settings.color ? item.settings.color : 'bw',
+        color_pages: item.settings && item.settings.color_pages !== undefined
+          ? Math.max(0, Math.min(parseInt(item.settings.color_pages, 10) || 0, pageCount))
+          : (item.settings && item.settings.color === 'color' ? pageCount : 0)
+      });
+    } else if (['jpg', 'jpeg', 'png'].includes(ext)) {
+      // Embed image as a single page, scaled to fit within A4 bounds.
+      let image;
+      if (ext === 'png') image = await pdfDoc.embedPng(bytes);
+      else image = await pdfDoc.embedJpg(bytes);
+
+      const imgW = image.width;
+      const imgH = image.height;
+      const ar = imgW / imgH;
+      let pageW, pageH;
+      if (ar >= 1) {
+        pageW = Math.min(A4_W, A4_H * ar);
+        pageH = pageW / ar;
+      } else {
+        pageH = Math.min(A4_H, A4_W / ar);
+        pageW = pageH * ar;
+      }
+      pageW = Math.max(1, pageW);
+      pageH = Math.max(1, pageH);
+
+      const page = pdfDoc.addPage([pageW, pageH]);
+      page.drawImage(image, {
+        x: 0, y: 0, width: pageW, height: pageH
+      });
+      totalPages += 1;
+      sources.push({
+        file_name: item.file_name,
+        pages: 1,
+        color_mode: item.settings && item.settings.color ? item.settings.color : 'bw',
+        color_pages: item.settings && item.settings.color === 'color' ? 1 : 0
+      });
+    } else {
+      throw new Error('Cannot merge ' + ext + ' files');
+    }
+  }
+
+  const mergedBytes = await pdfDoc.save();
+  const buffer = Buffer.from(mergedBytes);
+
+  return { buffer, totalPages, sources };
+}
+
 async function supabaseStorageDelete(bucket, path) {
   const url = SUPABASE_URL + '/storage/v1/object/' + bucket + '/' + encodeURIComponent(path);
   const headers = {
@@ -688,5 +772,6 @@ module.exports = {
   generateSessionToken, validateSession, calculatePrice, assignUniqueMatchAmount, createJobWithUniqueFee, assignUniqueOrderTotal, pickFreeOffset, MAX_MATCH_OFFSETS, freshnessOf, DEFAULT_POLL_SECONDS, computePaper,
   generateVerificationCode, isValidGmail, isValidMalaysianPhone,
   normalizePhone, sendVerificationEmail, smtpSend,
-  supabaseStorageUpload, supabaseStorageSignedUrl, supabaseStorageDelete, parseMultipartFormData, EXT_MIME_MAP
+  supabaseStorageUpload, supabaseStorageSignedUrl, supabaseStorageDelete, parseMultipartFormData, EXT_MIME_MAP,
+  mergeFilesToPDF, A4_W, A4_H
 };

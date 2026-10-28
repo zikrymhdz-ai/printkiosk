@@ -16,11 +16,11 @@
 <link rel="stylesheet" href="../styles.css">
 <link href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.css" rel="stylesheet">
 <script src="../frontend_config.js"></script>
-<script src="pstore.js?v=2026.10.14-99"></script>
+<script src="pstore.js?v=2026.10.27-104"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script>pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
 <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
-<script src="pagerange.js?v=2026.10.14-99"></script>
+<script src="pagerange.js?v=2026.10.27-104"></script>
 <script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/dist/face-api.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.js"></script>
 <style>
@@ -175,6 +175,20 @@
     transition: width 0.4s ease; }
   .pk-overlay-note { font-size: 12px; color: var(--gray-400); margin: 0; }
   .pk-countdown { font-variant-numeric: tabular-nums; font-weight: 700; color: var(--primary); }
+
+  /* ---- Per-row delete: the bin becomes a spinner while the server works ---- */
+  .job-del { display: inline-flex; align-items: center; justify-content: center;
+    width: 18px; height: 18px; padding: 4px; color: var(--gray-400);
+    cursor: pointer; transition: color 0.2s; }
+  .job-del:hover { color: var(--danger); }
+  .job-del.busy { pointer-events: none; color: var(--primary); }
+  .job-del.busy > svg { display: none; }
+  .job-del .job-spin { display: none; width: 14px; height: 14px; border-radius: 50%;
+    border: 2px solid var(--gray-200); border-top-color: var(--primary);
+    animation: spin 0.9s linear infinite; }
+  .job-del.busy .job-spin { display: inline-block; }
+  /* A bulk delete disables the toolbar; keep it obviously inert. */
+  .jobs-busy #deleteSelectedBtn, .jobs-busy #clearAllBtn, .jobs-busy #selectAllJobsBtn { opacity: 0.55; }
 </style>
 </head>
 <body>
@@ -688,7 +702,7 @@
 <div id="uploadOverlay" class="pk-overlay hidden">
   <div class="pk-overlay-card">
     <div class="pk-spinner"></div>
-    <h3 class="pk-overlay-title">Uploading file, please wait&hellip;</h3>
+    <h3 class="pk-overlay-title" id="uploadOverlayTitle">Uploading file, please wait&hellip;</h3>
     <p class="pk-overlay-sub" id="uploadOverlaySub">Sending your document to the shop</p>
     <div class="pk-progress"><div class="pk-progress-fill" id="uploadProgressFill"></div></div>
     <p class="pk-overlay-note" id="uploadOverlayNote">Keep this page open.</p>
@@ -1699,8 +1713,10 @@ function showUploadOverlay(show, opts) {
   opts = opts || {};
   if (!show) { el.classList.add('hidden'); return; }
 
+  var title = document.getElementById('uploadOverlayTitle');
   var sub = document.getElementById('uploadOverlaySub');
   var note = document.getElementById('uploadOverlayNote');
+  if (title) title.textContent = opts.title || 'Uploading file, please wait\u2026';
   if (sub) sub.textContent = opts.sub || 'Sending your document to the shop';
   if (note) note.textContent = opts.note || 'Keep this page open.';
 
@@ -1709,6 +1725,19 @@ function showUploadOverlay(show, opts) {
   if (fill) fill.style.width = pct + '%';
 
   el.classList.remove('hidden');
+}
+
+// A delete can take several seconds on a big history. Changing the toolbar
+// button's text was not enough: on a phone the toolbar scrolls off screen, so
+// the customer taps Delete and sees nothing happen - the same problem the
+// upload loader was added to fix. One full-screen overlay covers every delete.
+function showDeleteOverlay(title, sub) {
+  showUploadOverlay(true, {
+    title: title || 'Deleting your jobs\u2026',
+    sub: sub || 'Please keep this page open.',
+    note: 'Nothing else changes until this finishes.',
+    progress: 90
+  });
 }
 
 async function placeOrder() {
@@ -1971,24 +2000,37 @@ var d;
   showUploadOverlay(true, { sub: 'Finalising your order...', progress: 100, note: 'Almost done...' });
   if (!pendingUploadJobs.length) { showUploadOverlay(false); alert('No files uploaded successfully'); btn.disabled = false; btn.textContent = 'Upload & Get PIN'; return; }
 
-  // Ask the server what the whole order costs. The browser's own sum is not
-  // trusted: the amount quoted must be exactly the one the payment matcher
-  // looks for, or the customer pays and it never settles.
+  // Multi-file batches are merged into ONE document, ONE job, ONE payment.
+  // Single-file orders keep using seal-order unchanged.
+  var mergedJob = null;
   var sealedOrderTotal = null;
   try {
-    var sealRes = await fetch(API('upload', 'seal-order'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Session-Token': token || '' },
-      body: JSON.stringify({ order_id: currentOrderId() })
-    });
-    var sealData = await sealRes.json();
-    if (!sealData.success) throw new Error(sealData.error || 'Could not price this order');
-    sealedOrderTotal = sealData.order_total;
-    // This batch is done; the next upload must be a new order.
-    resetOrderId();
-  } catch (sealErr) {
+    if (pendingUploadJobs.length > 1) {
+      var mergeRes = await fetch(API('upload', 'merge-order'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Session-Token': token || '' },
+        body: JSON.stringify({ order_id: currentOrderId() })
+      });
+      var mergeData = await mergeRes.json();
+      if (!mergeData.success) throw new Error(mergeData.error || 'Could not merge this order');
+      mergedJob = mergeData.job;
+      sealedOrderTotal = mergeData.total_price;
+      // The old individual rows were deleted server-side; next upload is a new order.
+      resetOrderId();
+    } else {
+      var sealRes = await fetch(API('upload', 'seal-order'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Session-Token': token || '' },
+        body: JSON.stringify({ order_id: currentOrderId() })
+      });
+      var sealData = await sealRes.json();
+      if (!sealData.success) throw new Error(sealData.error || 'Could not price this order');
+      sealedOrderTotal = sealData.order_total;
+      resetOrderId();
+    }
+  } catch (finaliseErr) {
     showUploadOverlay(false);
-    alert(sealErr.message || 'Could not price this order. Nothing has been charged.');
+    alert(finaliseErr.message || 'Could not finalise this order. Nothing has been charged.');
     btn.disabled = false;
     btn.textContent = 'Upload & Get PIN';
     return;
@@ -1997,15 +2039,19 @@ var d;
   var totalPages = 0;
   var totalCopies = 0;
   var totalPrice = 0;
-  pendingUploadJobs.forEach(function(j) { totalPages += j.pages; totalCopies += j.copies || 1; totalPrice += parseFloat(j.total_price) || 0; });
-  redeemOriginalTotal = totalPrice; // base amount before any coin discount
-    // Quote the server-priced order total so the displayed amount and the amount
-    // the payment matcher looks for are the same number.
-    if (sealedOrderTotal !== null) totalPrice = sealedOrderTotal;
-  var fileNames = pendingUploadJobs.map(function(j) { return j.file_name; });
-  var pinDisplay = pendingUploadJobs.length ? (pendingUploadJobs[0].print_pin || orderPin) : orderPin;
-  var allJobIds = pendingUploadJobs.map(function(j) { return j.job_id; });
-var colorModes = pendingUploadJobs.map(function(j) {
+  if (mergedJob) {
+    totalPages = parseInt(mergedJob.pages, 10) || 0;
+    totalCopies = parseInt(mergedJob.copies, 10) || 1;
+    totalPrice = parseFloat(mergedJob.total_price) || 0;
+  } else {
+    pendingUploadJobs.forEach(function(j) { totalPages += j.pages; totalCopies += j.copies || 1; totalPrice += parseFloat(j.total_price) || 0; });
+  }
+  redeemOriginalTotal = totalPrice;
+  if (sealedOrderTotal !== null) totalPrice = sealedOrderTotal;
+  var fileNames = mergedJob ? [mergedJob.file_name] : pendingUploadJobs.map(function(j) { return j.file_name; });
+  var pinDisplay = mergedJob ? (mergedJob.print_pin || orderPin) : (pendingUploadJobs.length ? (pendingUploadJobs[0].print_pin || orderPin) : orderPin);
+  var allJobIds = mergedJob ? [mergedJob.job_id] : pendingUploadJobs.map(function(j) { return j.job_id; });
+var colorModes = mergedJob ? [mergedJob.color_mode || 'bw'] : pendingUploadJobs.map(function(j) {
   // A merged job prints in colour mode whenever ANY page wanted colour, so its
   // color_mode says 'color' even when only half its pages are colour. Reporting
   // that as "Color" told a customer who merged one B&W document with one colour
@@ -2024,9 +2070,9 @@ var bulkColor = colorModes.every(function(c) { return c === colorModes[0]; }) ? 
   const entry = {
     job_id: allJobIds.join(','),
     print_pin: pinDisplay,
-    file_name: pendingUploadJobs.length === 1 ? fileNames[0] : pendingUploadJobs.length + ' files',
-    file_type: 'bulk',
-    file_count: pendingUploadJobs.length,
+    file_name: mergedJob ? mergedJob.file_name : (pendingUploadJobs.length === 1 ? fileNames[0] : pendingUploadJobs.length + ' files'),
+    file_type: mergedJob ? 'document' : 'bulk',
+    file_count: mergedJob ? 1 : pendingUploadJobs.length,
     pages: totalPages,
     color_mode: bulkColor,
     copies: totalCopies,
@@ -2035,7 +2081,7 @@ var bulkColor = colorModes.every(function(c) { return c === colorModes[0]; }) ? 
     status: 'pending',
     created_at: new Date().toISOString(),
     user_id: user ? user.id : null,
-    server_jobs: pendingUploadJobs
+    server_jobs: mergedJob ? [mergedJob] : pendingUploadJobs
   };
   uploadedJobs.push(entry);
   localStorage.setItem('uploadedJobs', JSON.stringify(uploadedJobs));
@@ -2050,7 +2096,7 @@ var bulkColor = colorModes.every(function(c) { return c === colorModes[0]; }) ? 
     document.getElementById('step3Pre').style.display = 'none';
     document.getElementById('step3Pay').style.display = 'none';
     document.getElementById('step3Post').style.display = 'block';
-    showReceipt(pendingUploadJobs, entry);
+    showReceipt(entry.server_jobs, entry);
     var fmsg = document.getElementById('paymentMsg');
     if (fmsg) fmsg.textContent = 'Fully covered by your coins - no payment needed. Use the PIN at the kiosk.';
     loadJobs();
@@ -2067,7 +2113,7 @@ var bulkColor = colorModes.every(function(c) { return c === colorModes[0]; }) ? 
   document.getElementById('payColor').textContent = bulkColor === 'color' ? 'Color' : bulkColor === 'mixed' ? 'Mixed' : 'B&W';
   document.getElementById('payCopies').textContent = totalCopies;
   document.getElementById('payTotal').textContent = 'RM ' + totalPrice.toFixed(2);
-  document.getElementById('payEarnCoins').textContent = pendingUploadJobs.length;
+  document.getElementById('payEarnCoins').textContent = mergedJob ? 1 : pendingUploadJobs.length;
   document.getElementById('payAmountPost').textContent = 'RM ' + totalPrice.toFixed(2);
 
   // Show the payment-match fee breakdown when the server added one.
@@ -2078,11 +2124,11 @@ var bulkColor = colorModes.every(function(c) { return c === colorModes[0]; }) ? 
   // than the difference actually billed, so the receipt looked wrong even when
   // the total was right.
   var sealedFee = (sealedOrderTotal !== null)
-    ? sealedOrderTotal - pendingUploadJobs.reduce(function (a, j) {
+    ? sealedOrderTotal - (mergedJob ? parseFloat(mergedJob.base_price) || 0 : pendingUploadJobs.reduce(function (a, j) {
         var b = parseFloat(j.base_price);
         return a + (isNaN(b) ? (parseFloat(j.total_price) || 0) : b);
-      }, 0)
-    : pendingUploadJobs.reduce(function (a, j) { return a + (parseFloat(j.match_fee) || 0); }, 0);
+      }, 0))
+    : (mergedJob ? parseFloat(mergedJob.match_fee) || 0 : pendingUploadJobs.reduce(function (a, j) { return a + (parseFloat(j.match_fee) || 0); }, 0));
   var totalFee = Math.max(0, Math.round(sealedFee * 100) / 100);
   var feeRow = document.getElementById('payMatchFeeRow');
   var feeNote = document.getElementById('payMatchNote');
@@ -2158,7 +2204,7 @@ function startBackgroundPaymentWatch(jobIds) {
         document.getElementById('step3Post').style.display = 'block';
         var cbx = document.getElementById('confirmingBox');
         if (cbx) cbx.style.display = 'none';
-        showReceipt(pendingUploadJobs, entry);
+        showReceipt(entry.server_jobs, entry);
         loadJobs();
       })
       .catch(function () { /* transient; the next tick tries again */ });
@@ -2245,8 +2291,12 @@ function stopPayPolling() {
 
 function getPayTargetIds() {
   var job = uploadedJobs.find(function(j) { return j.job_id === currentJobId; });
-  var serverJobs = pendingUploadJobs.length ? pendingUploadJobs
-    : (job ? (job.server_jobs || []) : []);
+  if (!job) return [];
+  // A merged order stores its single merged job in server_jobs; individual
+  // uploads keep every file in pendingUploadJobs.
+  var serverJobs = job.server_jobs && job.server_jobs.length
+    ? job.server_jobs
+    : (pendingUploadJobs.length ? pendingUploadJobs : []);
   if (!serverJobs.length && job) {
     var ids = String(job.job_id || '').split(',').map(function(s) { return s.trim(); }).filter(Boolean);
     serverJobs = ids.map(function(id) {
@@ -2497,111 +2547,209 @@ function renderJobsList(jobs, list) {
     updateSelectionUI();
     return;
   }
-  list.innerHTML = jobs.map(j => {
-    const isPaid = j.paid;
-    const isCompleted = j.status === 'completed';
-    const status = j.status;
-    const statusClass = isCompleted ? 'badge-success' : status === 'partially_completed' ? 'badge-warning' : statusBadge(status);
-    const STATUS_LABELS = {
-      print_requested: 'Queued for printing',
-      printing: 'Printing now',
-      failed: 'Not printed',
-      ready_to_print: 'Ready to print',
-      // Plain wording on purpose. "superseded" was an internal placeholder and
-      // meant nothing to anyone reading it.
-      cancelled: 'Cancelled',
-      refund_issued: 'Refunded'
-    };
-    let statusLabel = isCompleted ? 'Printed' : status === 'partially_completed' ? 'Partially Printed'
-      : (STATUS_LABELS[status] || (status.charAt(0).toUpperCase() + status.slice(1).replace(/_/g, ' ')));
+var orders = groupIntoOrders(jobs);
+  list.innerHTML = orders.map(renderOrderCard).join('');
+}
 
-    let paymentBlock = '';
-    if (!isPaid && status === 'pending') {
-      paymentBlock = '<div style="margin-top:12px; padding:12px; background:#fef3c7; border:1px solid #fcd34d; border-radius:var(--radius); display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px;">' +
-        '<span style="font-size:13px; font-weight:600; color:#92400e;">Not paid yet</span>' +
-        '<button class="btn btn-primary btn-sm" onclick="returnToPayment(\'' + j.job_id + '\', ' + parseFloat(j.total_price).toFixed(2) + ')">Pay Now</button>' +
-        '</div>';
-    }
-
-    let pinBlock = '';
-    // Never advertise a PIN for a job that cannot print: it sends the customer
-    // to the kiosk for nothing.
-    if (j.print_pin && isPaid && !isCompleted && status !== 'cancelled' && status !== 'failed') {
-      pinBlock = '<div style="margin-top:8px; padding:8px 12px; background:var(--primary-light); border-radius:var(--radius); text-align:center;">' +
-        '<span class="text-xs" style="color:var(--primary-dark);">Print PIN: <strong style="font-family:monospace; font-size:15px; letter-spacing:3px;">' + j.print_pin + '</strong></span></div>';
-    }
-
-    let completedBlock = '';
-    if (isCompleted) {
-      completedBlock = '<div style="margin-top:8px; padding:8px 12px; background:#dcfce7; border:1px solid #86efac; border-radius:var(--radius); text-align:center;">' +
-        '<span class="text-xs" style="color:#166534;">Printed successfully</span></div>';
-    }
-
-    // A job that will never print needs an explanation, not just a word. These
-    // are paid jobs, so silence here looks like we lost their money.
-    let problemBlock = '';
-    if (status === 'cancelled' || status === 'failed') {
-      const why = status === 'cancelled'
-        ? 'This job was cancelled and was not printed.'
-        : 'This job could not be printed.';
-      problemBlock = '<div style="margin-top:8px; padding:10px 12px; background:#fef2f2; border:1px solid #fecaca; border-radius:var(--radius);">' +
-        '<p class="text-xs" style="color:#991b1b; font-weight:600; margin:0;">' + why + '</p>' +
-        (isPaid && status !== 'refund_issued'
-          ? '<p class="text-xs" style="color:#991b1b; margin:4px 0 0;">You were charged RM ' +
-            parseFloat(j.total_price || 0).toFixed(2) + ' for this job. Please contact us to arrange a refund or a free reprint.</p>'
-          : '') +
-        '</div>';
-    }
-
-    return '<div class="job-card" style="padding:16px; border:1px solid var(--gray-200); border-radius:var(--radius); margin-bottom:12px;">' +
-      '<div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:8px;">' +
-        '<div>' +
-          '<p style="font-size:14px; font-weight:700; color:var(--gray-900);">' + (j.file_name || '-') + '</p>' +
-          '<p class="text-xs text-muted" style="margin-top:2px;">Job: ' + j.job_id + '</p>' +
-        '</div>' +
-        '<div style="display:flex; align-items:center; gap:8px;">' +
-          '<span class="badge ' + statusClass + '">' + statusLabel + '</span>' +
-          // Only offer the delete control for jobs the server will actually
-          // clear. A PIN job, or a paid job still awaiting print, is not
-          // clearable -- offering a button that always fails is worse than
-          // showing nothing.
-          (jobCanBeCleared(j)
-            ? '<label title="Select this job" style="display:flex; align-items:center; cursor:pointer;">' +
-                '<input type="checkbox" class="job-select" data-job-id="' + j.job_id + '" onchange="onJobSelectChange()" ' +
-                  'style="width:17px; height:17px; accent-color:var(--primary); cursor:pointer; margin:0 8px 0 0;">' +
-                '<span title="Clear this job" onclick="deleteJob(\'' + j.job_id + '\')" style="background:none; border:none; cursor:pointer; padding:4px; color:var(--gray-400); transition:color 0.2s;" onmouseover="this.style.color=\'var(--danger)\'" onmouseout="this.style.color=\'var(--gray-400)\'">' +
-                  '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>' +
-                '</span>' +
-              '</label>'
-// No padlock.
+// One card per order, with the files listed inside it.
 //
-// It was a grey padlock with the reason in its tooltip, which meant the reason
-// - the only useful part - was invisible unless you hovered, and on a phone there
-// is no hover. A customer saw a locked row and no idea why.
+// A two-file upload has always produced two rows sharing one order_id and one
+// PIN. They were drawn as two separate job cards, so someone who had paid once
+// for two documents saw two jobs, and at the kiosk had to work out whether those
+// were really one order or two.
 //
-// A job that cannot be cleared says so in words instead, and only when the
-// reason is one they can act on. "Has a Print PIN and can still be collected" is
-// worth saying: it explains why a paid document is still sitting there. For the
-// rest the status badge already says what is happening - Queued for printing,
-// Printing now - so an extra line would be noise.
+// The rows stay separate on purpose. That is what keeps copies, duplex and
+// colour independent per file, and what the price is summed over. Only the
+// presentation changes: the order is the unit a customer pays for and collects.
+function groupIntoOrders(jobs) {
+  var byKey = {};
+  var order = [];
+  (jobs || []).forEach(function (j) {
+    // A guest's single file has no order_id. Falling back to the job id keeps it
+    // in a card of its own rather than collapsing every guest job into one.
+    var key = j.order_id ? 'o:' + j.order_id : 'j:' + j.job_id;
+    if (!byKey[key]) {
+      byKey[key] = { key: key, order_id: j.order_id || null, files: [] };
+      order.push(byKey[key]);
+    }
+    byKey[key].files.push(j);
+  });
+  return order;
+}
+
+// The status that matters for the order as a whole.
 //
-// Still no delete control on these rows: the server refuses, and a button that
-// always fails is worse than none.
-: (j.print_pin
+// One file printing while another is still queued is a job that is being
+// printed, not a job that is queued - so the most advanced state wins, rather
+// than whichever row happened to sort first.
+function orderStatus(files) {
+  var has = function (s) { return files.some(function (f) { return f.status === s; }); };
+  if (has('printing')) return 'printing';
+  if (has('print_requested')) return 'print_requested';
+  if (has('ready_to_print')) return 'ready_to_print';
+  if (has('pending')) return 'pending';
+  if (has('partially_completed')) return 'partially_completed';
+  if (has('failed')) return 'failed';
+  if (has('refund_issued')) return 'refund_issued';
+  if (has('cancelled')) return 'cancelled';
+  return files[0].status;
+}
+
+// Hoisted out of the renderer: the order card and the per-file rows both need
+// them, and a local inside the old jobs.map could not be reached from either.
+var JOB_STATUS_LABELS = {
+  print_requested: 'Queued for printing',
+  printing: 'Printing now',
+  failed: 'Not printed',
+  ready_to_print: 'Ready to print',
+  cancelled: 'Cancelled',
+  refund_issued: 'Refunded',
+  partially_completed: 'Partially Printed'
+};
+
+function jobStatusLabel(s) {
+  if (s === 'completed') return 'Printed';
+  if (JOB_STATUS_LABELS[s]) return JOB_STATUS_LABELS[s];
+  return (s || '').charAt(0).toUpperCase() + (s || '').slice(1).replace(/_/g, ' ');
+}
+
+function jobColourLabel(mode) {
+  return mode === 'color' ? 'Color' : mode === 'mixed' ? 'Mixed' : 'B&W';
+}
+
+// One file inside an order card.
+//
+// Its own checkbox, its own trash, its own settings line - because copies,
+// duplex, colour and pages are per file, and a card that flattened them into one
+// row would be reporting something untrue.
+function renderOrderFile(f) {
+  var paid = f.paid === true || f.paid === 'true';
+  var isCompleted = f.status === 'completed';
+  var can = jobCanBeCleared(f);
+  var statusClass = isCompleted ? 'badge-success'
+    : f.status === 'partially_completed' ? 'badge-warning'
+    : statusBadge(f.status);
+
+  var controls = can
+    ? '<label title="Select this file" style="display:flex; align-items:center; cursor:pointer;">' +
+        '<input type="checkbox" class="job-select" data-job-id="' + f.job_id + '" onchange="onJobSelectChange()" ' +
+          'style="width:17px; height:17px; accent-color:var(--primary); cursor:pointer; margin:0 8px 0 0;">' +
+        // data-del-job-id is how setJobDeleteBusy() finds this row again to show
+        // the spinner and to stop a second tap firing a second request.
+        '<span class="job-del" data-del-job-id="' + f.job_id + '" title="Delete this file" onclick="deleteJob(\'' + f.job_id + '\')">' +
+          '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>' +
+          '<span class="job-spin"></span>' +
+        '</span>' +
+      '</label>'
+    // No padlock. It was a grey padlock with the reason in its tooltip, which
+    // meant the reason - the only useful part - was invisible unless you hovered,
+    // and on a phone there is no hover.
+    : (f.print_pin
         ? '<span class="text-xs text-muted" style="white-space:nowrap;">You can still collect this</span>'
-        : '')) +
-        '</div>' +
-      '</div>' +
-      '<div style="display:flex; gap:16px; margin-top:10px; flex-wrap:wrap;">' +
-        '<div><span class="text-xs text-muted">Pages</span><p class="text-sm" style="font-weight:600;">' + j.pages + '</p></div>' +
-        '<div><span class="text-xs text-muted">Color</span><p class="text-sm" style="font-weight:600;">' + (j.color_mode === 'color' ? 'Color' : j.color_mode === 'mixed' ? 'Mixed' : 'B&W') + '</p></div>' +
-        '<div><span class="text-xs text-muted">Copies</span><p class="text-sm" style="font-weight:600;">' + j.copies + '</p></div>' +
-        '<div><span class="text-xs text-muted">Amount</span><p class="text-sm" style="font-weight:700; color:var(--primary);">RM ' + parseFloat(j.total_price).toFixed(2) + '</p></div>' +
-        '<div><span class="text-xs text-muted">Uploaded</span><p class="text-sm" style="font-weight:600;">' + fmtDateTime(j.created_at) + '</p></div>' +
-      '</div>' +
-      pinBlock + completedBlock + problemBlock + paymentBlock +
+        : '');
+
+  // Pay Now only where it is real: an unpaid file. A paid file awaiting the
+  // kiosk must not offer payment again.
+  var paymentBlock = (!paid && f.status === 'pending')
+    ? '<div style="margin-top:10px; padding:10px; background:#fef3c7; border:1px solid #fcd34d; border-radius:var(--radius); display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px;">' +
+      '<span style="font-size:13px; font-weight:600; color:#92400e;">Not paid yet</span>' +
+      '<button class="btn btn-primary btn-sm" onclick="returnToPayment(\'' + f.job_id + '\', ' + parseFloat(f.total_price || 0).toFixed(2) + ')">Pay Now</button>' +
+    '</div>'
+    : '';
+
+  var problemBlock = '';
+  if (f.status === 'cancelled' || f.status === 'failed') {
+    var why = f.status === 'cancelled'
+      ? 'This file was cancelled and was not printed.'
+      : 'This file could not be printed.';
+    problemBlock = '<div style="margin-top:10px; padding:10px; background:#fef2f2; border:1px solid #fecaca; border-radius:var(--radius);">' +
+      '<p class="text-xs" style="color:#991b1b; font-weight:600; margin:0;">' + why + '</p>' +
+      (paid && f.status !== 'refund_issued'
+        ? '<p class="text-xs" style="color:#991b1b; margin:4px 0 0;">You were charged RM ' +
+          parseFloat(f.total_price || 0).toFixed(2) + ' for this file. Please contact us to arrange a refund or a free reprint.</p>'
+        : '') +
     '</div>';
-  }).join('');
+  }
+
+  return '<div style="border-top:1px solid var(--gray-100); padding-top:10px; margin-top:10px;">' +
+    '<div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:8px;">' +
+      '<div style="min-width:0;">' +
+        '<p style="font-size:13px; font-weight:600; color:var(--gray-900); word-break:break-word;">' + (f.file_name || '-') + '</p>' +
+        '<p class="text-xs text-muted" style="margin-top:2px;">' + f.job_id + '</p>' +
+      '</div>' +
+      '<div style="display:flex; align-items:center; gap:8px;">' +
+        '<span class="badge ' + statusClass + '">' + jobStatusLabel(f.status) + '</span>' + controls +
+      '</div>' +
+    '</div>' +
+    '<div style="display:flex; gap:14px; margin-top:8px; flex-wrap:wrap;">' +
+      '<div><span class="text-xs text-muted">Pages</span><p class="text-sm" style="font-weight:600;">' + f.pages + '</p></div>' +
+      '<div><span class="text-xs text-muted">Color</span><p class="text-sm" style="font-weight:600;">' + jobColourLabel(f.color_mode) + '</p></div>' +
+      '<div><span class="text-xs text-muted">Copies</span><p class="text-sm" style="font-weight:600;">' + f.copies + '</p></div>' +
+      '<div><span class="text-xs text-muted">Duplex</span><p class="text-sm" style="font-weight:600;">' + (f.sides === 'double' ? 'Yes' : 'No') + '</p></div>' +
+      '<div><span class="text-xs text-muted">Amount</span><p class="text-sm" style="font-weight:700; color:var(--primary);">RM ' + parseFloat(f.total_price || 0).toFixed(2) + '</p></div>' +
+    '</div>' +
+    paymentBlock + problemBlock +
+  '</div>';
+}
+
+function renderOrderCard(order) {
+  var files = order.files;
+  var many = files.length > 1;
+  var status = orderStatus(files);
+  var isCompleted = status === 'completed';
+  var statusClass = isCompleted ? 'badge-success'
+    : status === 'partially_completed' ? 'badge-warning'
+    : statusBadge(status);
+
+  var total = files.reduce(function (a, f) { return a + (parseFloat(f.total_price) || 0); }, 0);
+  var pages = files.reduce(function (a, f) { return a + (parseInt(f.pages) || 0); }, 0);
+
+  // One PIN for the order. It is the number typed at the kiosk, so it belongs on
+  // the order card rather than repeated on every file.
+  var pin = null;
+  files.forEach(function (f) { if (!pin && f.print_pin) pin = f.print_pin; });
+  var pinBlock = '';
+  if (pin) {
+    var printable = files.some(function (f) {
+      return f.paid && f.status !== 'completed' && f.status !== 'cancelled' && f.status !== 'failed';
+    });
+    if (printable) {
+      pinBlock = '<div style="margin-top:12px; padding:10px 12px; background:var(--primary-light); border-radius:var(--radius); text-align:center;">' +
+        '<span class="text-xs" style="color:var(--primary-dark);">Print PIN: <strong style="font-family:monospace; font-size:15px; letter-spacing:3px;">' + pin + '</strong></span>' +
+        '<p class="text-xs" style="color:var(--primary-dark); margin:4px 0 0;">One PIN collects every file in this order.</p>' +
+      '</div>';
+    }
+  }
+
+  var title = many ? (files.length + ' files') : (files[0].file_name || '-');
+  var sub = many
+    ? (files.length + ' file' + (files.length > 1 ? 's' : '') + ' in one order')
+    : ('Job: ' + files[0].job_id);
+
+  var completedBlock = '';
+  if (many && isCompleted) {
+    completedBlock = '<div style="margin-top:10px; padding:10px; background:#dcfce7; border:1px solid #86efac; border-radius:var(--radius); text-align:center;">' +
+      '<span class="text-xs" style="color:#166534;">All files printed successfully</span></div>';
+  }
+
+  return '<div class="job-card" style="padding:16px; border:1px solid var(--gray-200); border-radius:var(--radius); margin-bottom:12px;">' +
+    '<div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:8px;">' +
+      '<div style="min-width:0;">' +
+        '<p style="font-size:14px; font-weight:700; color:var(--gray-900); word-break:break-word;">' + title + '</p>' +
+        '<p class="text-xs text-muted" style="margin-top:2px;">' + sub + '</p>' +
+      '</div>' +
+      '<span class="badge ' + statusClass + '">' + jobStatusLabel(status) + '</span>' +
+    '</div>' +
+    pinBlock + completedBlock +
+    files.map(renderOrderFile).join('') +
+    (many
+      ? '<div style="border-top:1px solid var(--gray-100); margin-top:12px; padding-top:10px; display:flex; gap:16px; flex-wrap:wrap;">' +
+          '<div><span class="text-xs text-muted">Total pages</span><p class="text-sm" style="font-weight:600;">' + pages + '</p></div>' +
+          '<div><span class="text-xs text-muted">Order total</span><p class="text-sm" style="font-weight:700; color:var(--primary);">RM ' + total.toFixed(2) + '</p></div>' +
+          '<div><span class="text-xs text-muted">Uploaded</span><p class="text-sm" style="font-weight:600;">' + fmtDateTime(files[0].created_at) + '</p></div>' +
+        '</div>'
+      : '') +
+  '</div>';
 }
 
 // Shared by the job cards and the transaction list so both agree. The time of
@@ -2615,9 +2763,9 @@ function fmtDateTime(v) {
        + ', ' + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
 }
 
-// Mirrors clearableReason() in data.js. The server enforces this regardless --
-// this exists so the button is not offered for a job that will be refused.
 // Mirrors clearableReason() in netlify/functions/data.js, in the same order.
+// The server enforces this regardless -- this exists so the button is not
+// offered for a job that will be refused.
 //
 // The order is the whole point. An earlier version of this checked print_pin
 // first, which is what the server used to do - so every unpaid pending job hid
@@ -2639,29 +2787,132 @@ function jobCanBeCleared(j) {
   return false;
 }
 
-function deleteJob(jobId) {
-  if (!confirm('Delete this job?')) return;
-  var job = uploadedJobs.find(function (j) { return j.job_id === jobId; });
-  // Fail loudly rather than optimistically removing it from the list. The
-  // previous version filtered the job out whether or not the server accepted,
-  // so a refused delete still made the job vanish locally and reappear on the
-  // next load.
-  fetch(API('data', 'delete-job'), {
+/* ---- talking to the shop server ---------------------------------------
+ *
+ * Every delete used to be a bare fetch().catch() that said one thing:
+ * "Could not reach the server." That covered four different situations, and
+ * three of them were not the customer's connection:
+ *
+ *   - the phone really was offline;
+ *   - the request gave up (a bulk clear cost 0.7 s PER JOB, one job at a time;
+ *     see handleClearJobs in data.js);
+ *   - the function died and Netlify answered with an HTML page, so r.json()
+ *     threw and the catch fired;
+ *   - the server refused the delete and said exactly why - the only message a
+ *     customer can act on, hidden behind a network error.
+ *
+ * postJson() reports what actually happened, and always gives up on its own so
+ * a button can never stay disabled for ever.
+ */
+var POST_TIMEOUT_MS = 30000;
+
+function postJson(url, payload) {
+  var controller = (typeof AbortController === 'function') ? new AbortController() : null;
+  var timedOut = false;
+  var timer = controller
+    ? setTimeout(function () { timedOut = true; controller.abort(); }, POST_TIMEOUT_MS)
+    : null;
+
+  var opts = {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Session-Token': token },
-    body: JSON.stringify({ job_id: jobId })
-  }).then(function (r) {
-    return r.json().then(function (d) { return { ok: r.ok, data: d }; });
-  }).then(function (res) {
-    if (!res.ok) {
-      alert(res.data && res.data.error ? res.data.error : 'Could not clear this job.');
-      return;
+    body: JSON.stringify(payload || {})
+  };
+  if (controller) opts.signal = controller.signal;
+
+  return fetch(url, opts).then(function (r) {
+    // Read as text first: a 502/504 from the platform is an HTML page, and
+    // r.json() on it throws - which is what used to be reported as "offline".
+    return r.text().then(function (raw) {
+      var data = null;
+      try { data = JSON.parse(raw); } catch (e) { data = null; }
+
+      if (!data || typeof data !== 'object') {
+        return {
+          ok: false, status: r.status, data: null, reason: 'bad-response',
+          message: 'The shop server answered with an error (HTTP ' + r.status + '). '
+            + 'Nothing was deleted - please try again in a moment.'
+        };
+      }
+      if (!r.ok) {
+        return {
+          ok: false, status: r.status, data: data, reason: 'refused',
+          message: data.error || ('The server refused this (HTTP ' + r.status + ').')
+        };
+      }
+      return { ok: true, status: r.status, data: data, reason: 'ok', message: '' };
+    });
+  }).catch(function (e) {
+    if (timedOut) {
+      return {
+        ok: false, status: 0, data: null, reason: 'timeout',
+        message: 'The shop server did not answer within ' + Math.round(POST_TIMEOUT_MS / 1000)
+          + ' seconds. Nothing was deleted - check your connection and try again.'
+      };
     }
+    return {
+      ok: false, status: 0, data: null, reason: 'offline',
+      message: 'Could not reach the shop server. Nothing was deleted - check your internet '
+        + 'connection and try again.'
+    };
+  }).finally(function () { if (timer) clearTimeout(timer); });
+}
+
+// Jobs currently being deleted, so a double tap cannot send two requests for
+// the same row (the second one came back "Job not found" and looked like a bug).
+var deletingJobIds = {};
+
+function setJobDeleteBusy(jobId, busy) {
+  if (busy) deletingJobIds[jobId] = true; else delete deletingJobIds[jobId];
+  var el = document.querySelector('.job-del[data-del-job-id="' + jobId + '"]');
+  if (el) el.classList.toggle('busy', !!busy);
+}
+
+// Bulk buttons: disabled and renamed while the work is in flight, restored
+// afterwards from updateSelectionUI() so they cannot get stuck on "Deleting...".
+var jobsToolbarBusy = false;
+
+function setJobsToolbarBusy(busy, btn, label) {
+  jobsToolbarBusy = !!busy;
+  document.body.classList.toggle('jobs-busy', !!busy);
+  var del = document.getElementById('deleteSelectedBtn');
+  var all = document.getElementById('clearAllBtn');
+  var sel = document.getElementById('selectAllJobsBtn');
+
+  if (busy) {
+    [del, all, sel].forEach(function (b) { if (b) b.disabled = true; });
+    if (btn) {
+      if (!btn.dataset.idleLabel) btn.dataset.idleLabel = btn.textContent;
+      btn.textContent = label || 'Deleting...';
+    }
+    return;
+  }
+
+  if (btn && btn.dataset.idleLabel) btn.textContent = btn.dataset.idleLabel;
+  if (all) all.disabled = false;
+  if (sel) sel.disabled = false;
+  updateSelectionUI();
+}
+
+function deleteJob(jobId) {
+  if (deletingJobIds[jobId]) return;
+  if (!confirm('Delete this job?')) return;
+
+  // Fail loudly rather than optimistically removing it from the list: the
+  // server decides, and a refused delete used to make the row vanish locally
+  // and then reappear on the next load.
+  setJobDeleteBusy(jobId, true);
+  showDeleteOverlay('Deleting this job\u2026', 'Removing it from your list.');
+  postJson(API('data', 'delete-job'), { job_id: jobId }).then(function (res) {
+    if (!res.ok) { alert(res.message); return; }
     uploadedJobs = uploadedJobs.filter(function (j) { return j.job_id !== jobId; });
     localStorage.setItem('uploadedJobs', JSON.stringify(uploadedJobs));
+    // Re-read from the server: the local array is only a cache, and a
+    // successful delete is exactly when a stale cache is worth distrusting.
     loadJobs();
-  }).catch(function () {
-    alert('Could not reach the server. Nothing was cleared.');
+  }).finally(function () {
+    setJobDeleteBusy(jobId, false);
+    showUploadOverlay(false);
   });
 }
 
@@ -2673,16 +2924,20 @@ function deleteJob(jobId) {
 // keeping some of them. The selection is only ever a narrowing - the server
 // intersects it with the caller's own jobs, so it cannot widen what is cleared.
 function deleteSelectedJobs() {
+  if (jobsToolbarBusy) return;
   var ids = Array.from(selectedJobIds);
   if (!ids.length) { alert('Select at least one job first.'); return; }
 
-  fetch(API('data', 'clear-jobs'), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Session-Token': token },
-    body: JSON.stringify({ confirm: false, job_ids: ids })
-  }).then(function (r) { return r.json(); })
-  .then(function (d) {
-    if (!d || !d.success) { alert('Could not check which jobs can be cleared.'); return; }
+  var btn = document.getElementById('deleteSelectedBtn');
+  setJobsToolbarBusy(true, btn, 'Checking...');
+  showDeleteOverlay('Checking your jobs\u2026', 'Working out which of them can be deleted.');
+
+  postJson(API('data', 'clear-jobs'), { confirm: false, job_ids: ids }).then(function (res) {
+    var d = res.data;
+    if (!res.ok || !d || !d.success) {
+      alert(res.message || 'Could not check which jobs can be cleared.');
+      return;
+    }
 
     var clearable = d.clearable || [];
     var kept = d.kept || [];
@@ -2710,25 +2965,42 @@ function deleteSelectedJobs() {
 
     if (!confirm(msg)) return;
 
-    fetch(API('data', 'clear-jobs'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Session-Token': token },
-      body: JSON.stringify({ confirm: true, job_ids: ids })
-    }).then(function (r) { return r.json(); })
-    .then(function (res) {
-      if (!res || !res.success) { alert('Could not delete the jobs.'); return; }
-      var cleared = res.cleared || [];
+    btn.textContent = 'Deleting...';
+    showDeleteOverlay('Deleting ' + clearable.length + ' job' + (clearable.length === 1 ? '' : 's') + '\u2026',
+      'Please keep this page open.');
+
+    return postJson(API('data', 'clear-jobs'), { confirm: true, job_ids: ids }).then(function (out) {
+      var r = out.data || {};
+      var cleared = r.cleared || [];
+
+      // A partial clear is reported as partial. Saying "nothing was deleted"
+      // when half of them went is the kind of message that makes a customer
+      // stop believing the screen at all.
+      if (!out.ok || !r.success) {
+        if (cleared.length) {
+          uploadedJobs = uploadedJobs.filter(function (j) { return cleared.indexOf(j.job_id) === -1; });
+          localStorage.setItem('uploadedJobs', JSON.stringify(uploadedJobs));
+          cleared.forEach(function (id) { selectedJobIds.delete(id); });
+          loadJobs();
+        }
+        alert(cleared.length
+          ? 'Deleted ' + cleared.length + ' job' + (cleared.length === 1 ? '' : 's')
+            + ', but not all of them. ' + out.message
+          : (out.message || 'Could not delete the jobs.'));
+        return;
+      }
+
       if (!cleared.length) { alert('Nothing was deleted.'); return; }
       uploadedJobs = uploadedJobs.filter(function (j) { return cleared.indexOf(j.job_id) === -1; });
       localStorage.setItem('uploadedJobs', JSON.stringify(uploadedJobs));
       cleared.forEach(function (id) { selectedJobIds.delete(id); });
-      updateSelectionUI();
-      alert('Deleted ' + cleared.length + ' job' + (cleared.length === 1 ? '' : 's') + '.');
       loadJobs();
-    })
-    .catch(function () { alert('Could not reach the server. Nothing was deleted.'); });
-  })
-  .catch(function () { alert('Could not reach the server. Nothing was deleted.'); });
+      alert('Deleted ' + cleared.length + ' job' + (cleared.length === 1 ? '' : 's') + '.');
+    });
+  }).finally(function () {
+    setJobsToolbarBusy(false, btn);
+    showUploadOverlay(false);
+  });
 }
 
 // Clear everything the customer is allowed to clear, in one go.
@@ -2737,13 +3009,17 @@ function deleteSelectedJobs() {
 // keep, so the confirmation can name the jobs being kept and why rather than
 // saying "are you sure?" and then silently keeping them.
 function clearAllJobs() {
-  fetch(API('data', 'clear-jobs'), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Session-Token': token },
-    body: JSON.stringify({ confirm: false })
-  }).then(function (r) { return r.json(); })
-  .then(function (d) {
-    if (!d || !d.success) { alert('Could not check which jobs can be cleared.'); return; }
+  if (jobsToolbarBusy) return;
+  var btn = document.getElementById('clearAllBtn');
+  setJobsToolbarBusy(true, btn, 'Checking...');
+  showDeleteOverlay('Checking your jobs\u2026', 'Working out which of them can be cleared.');
+
+  postJson(API('data', 'clear-jobs'), { confirm: false }).then(function (res) {
+    var d = res.data;
+    if (!res.ok || !d || !d.success) {
+      alert(res.message || 'Could not check which jobs can be cleared.');
+      return;
+    }
 
     var clearable = d.clearable || [];
     var kept = d.kept || [];
@@ -2768,22 +3044,36 @@ function clearAllJobs() {
 
     if (!confirm(msg)) return;
 
-    fetch(API('data', 'clear-jobs'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Session-Token': token },
-      body: JSON.stringify({ confirm: true })
-    }).then(function (r) { return r.json(); })
-    .then(function (res) {
-      if (!res || !res.success) { alert('Could not clear jobs.'); return; }
-      var cleared = res.cleared || [];
+    btn.textContent = 'Clearing...';
+    showDeleteOverlay('Clearing ' + clearable.length + ' job' + (clearable.length === 1 ? '' : 's') + '\u2026',
+      'Please keep this page open.');
+
+    return postJson(API('data', 'clear-jobs'), { confirm: true }).then(function (out) {
+      var r = out.data || {};
+      var cleared = r.cleared || [];
+
+      if (!out.ok || !r.success) {
+        if (cleared.length) {
+          uploadedJobs = uploadedJobs.filter(function (j) { return cleared.indexOf(j.job_id) === -1; });
+          localStorage.setItem('uploadedJobs', JSON.stringify(uploadedJobs));
+          loadJobs();
+        }
+        alert(cleared.length
+          ? 'Cleared ' + cleared.length + ' job' + (cleared.length === 1 ? '' : 's')
+            + ', but not all of them. ' + out.message
+          : (out.message || 'Could not clear jobs.'));
+        return;
+      }
+
       uploadedJobs = uploadedJobs.filter(function (j) { return cleared.indexOf(j.job_id) === -1; });
       localStorage.setItem('uploadedJobs', JSON.stringify(uploadedJobs));
       loadJobs();
       alert('Cleared ' + cleared.length + ' job' + (cleared.length === 1 ? '' : 's') + '.');
-    })
-    .catch(function () { alert('Could not reach the server. Nothing was cleared.'); });
-  })
-  .catch(function () { alert('Could not reach the server. Nothing was cleared.'); });
+    });
+  }).finally(function () {
+    setJobsToolbarBusy(false, btn);
+    showUploadOverlay(false);
+  });
 }
 
 function returnToPayment(jobId, price) {

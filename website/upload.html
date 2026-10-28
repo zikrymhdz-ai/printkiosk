@@ -16,10 +16,10 @@
 <link rel="stylesheet" href="../styles.css">
 <link href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.css" rel="stylesheet">
 <script src="../frontend_config.js"></script>
-<script src="pstore.js?v=2026.10.14-99"></script>
+<script src="pstore.js?v=2026.10.27-104"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
-<script src="pagerange.js?v=2026.10.14-99"></script>
+<script src="pagerange.js?v=2026.10.27-104"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.js"></script>
 <script>pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
 <style>
@@ -42,6 +42,32 @@
   .file-tab .ft-settings { font-size:11px; color:var(--gray-500); overflow:hidden; text-overflow:ellipsis; }
   .file-tab .ft-remove { color:var(--gray-400); padding:0 2px; font-size:15px; line-height:1; }
   .file-tab .ft-remove:hover { color:#dc2626; }
+
+  /* ---- Uploading loader ------------------------------------------------
+   * The "Uploading file 1 of 1..." text lived on the button at the BOTTOM of
+   * the settings step, so on a phone - where that button is usually scrolled
+   * off screen - tapping Upload & Pay looked like nothing had happened at all.
+   * A guest sends one file and then waits, with no way to tell a slow mobile
+   * upload from a dead page. This is a full-screen, fixed overlay: it cannot be
+   * scrolled away, it names the file and the byte progress, and the Back
+   * button underneath it is inert until the upload finishes.
+   */
+  .pk-overlay { position: fixed; inset: 0; z-index: 900; display: flex; align-items: center;
+    justify-content: center; background: rgba(15,23,42,0.72); backdrop-filter: blur(3px); padding: 24px; }
+  .pk-overlay.hidden { display: none; }
+  .pk-overlay-card { background: #fff; border-radius: 20px; padding: 32px 26px; text-align: center;
+    max-width: 360px; width: 100%; box-shadow: 0 24px 60px rgba(15,23,42,0.35); }
+  .pk-spinner { width: 52px; height: 52px; margin: 0 auto 18px; border-radius: 50%;
+    border: 5px solid var(--primary-light); border-top-color: var(--primary);
+    animation: spin 0.9s linear infinite; }
+  .pk-overlay-title { font-size: 18px; font-weight: 700; color: var(--gray-900); margin: 0 0 6px; }
+  .pk-overlay-sub { font-size: 13px; color: var(--gray-500); margin: 0 0 18px;
+    overflow-wrap: anywhere; }
+  .pk-progress { height: 8px; border-radius: 999px; background: var(--gray-100); overflow: hidden; margin-bottom: 12px; }
+  .pk-progress-fill { height: 100%; width: 0%; border-radius: 999px; background: var(--primary);
+    transition: width 0.3s ease; }
+  .pk-overlay-note { font-size: 12px; color: var(--gray-400); margin: 0; }
+  @keyframes spin { to { transform: rotate(360deg); } }
 </style>
 </head>
 <body>
@@ -277,7 +303,15 @@ let qGuest = false;
   var params = new URLSearchParams(window.location.search);
   if (params.get('guest') === '1') {
     qGuest = true;
-    try { localStorage.removeItem('session_token'); localStorage.removeItem('user'); } catch(e) {}
+    // Clear through the shared store, not localStorage alone: on a native
+    // build the token also lives in Capacitor Preferences, and PKS.init()
+    // below would otherwise hydrate it straight back and sign the guest in.
+    if (window.PKS) {
+      PKS.remove('session_token');
+      PKS.remove('user');
+    } else {
+      try { localStorage.removeItem('session_token'); localStorage.removeItem('user'); } catch(e) {}
+    }
   }
 })();
 
@@ -550,6 +584,10 @@ function goStep2() {
 }
 
 function goStep3() {
+  // Every way into the payment step goes through here, so this is the one place
+  // that must drop the upload loader: a loader left over the QR code hides the
+  // thing the customer is meant to scan.
+  hideUploadOverlay();
   document.querySelectorAll('.step').forEach(s => s.classList.remove('active'));
   document.getElementById('step3').classList.add('active');
   document.getElementById('step1Dot').className = 'step-dot done';
@@ -976,6 +1014,66 @@ function toastMsg(msg) {
   setTimeout(function() { t.style.display = 'none'; }, 2200);
 }
 
+/* ===== UPLOAD LOADER =====
+ *
+ * One place that owns the overlay, so it cannot be left showing: every exit
+ * from submitPhoneUpload() - success, refusal, a thrown error, or the browser
+ * giving up - ends in hideUploadOverlay(). A loader that stays up is worse than
+ * no loader: the customer cannot tell whether to wait or try again.
+ */
+function showUploadOverlay(opts) {
+  var el = document.getElementById('uploadOverlay');
+  if (!el) return;
+  opts = opts || {};
+  var title = document.getElementById('uploadOverlayTitle');
+  var sub = document.getElementById('uploadOverlaySub');
+  var note = document.getElementById('uploadOverlayNote');
+  if (title && opts.title) title.textContent = opts.title;
+  if (sub) sub.textContent = opts.sub || 'Sending it to the shop';
+  if (note) note.textContent = opts.note || 'Keep this page open until it finishes.';
+  setUploadProgress(opts.progress || 0);
+  el.classList.remove('hidden');
+}
+
+function setUploadProgress(pct, sub) {
+  var fill = document.getElementById('uploadProgressFill');
+  if (fill) fill.style.width = Math.max(0, Math.min(100, Math.round(pct || 0))) + '%';
+  if (sub) {
+    var el = document.getElementById('uploadOverlaySub');
+    if (el) el.textContent = sub;
+  }
+}
+
+function hideUploadOverlay() {
+  var el = document.getElementById('uploadOverlay');
+  if (el) el.classList.add('hidden');
+}
+
+// PUT the bytes with real progress.
+//
+// fetch() cannot report upload progress at all, which is why a 6MB photo on
+// mobile data showed a still bar and looked frozen. XMLHttpRequest can, and it
+// is the only way to tell the customer their file is actually moving.
+function putWithProgress(url, headers, body, onProgress) {
+  return new Promise(function (resolve, reject) {
+    var xhr = new XMLHttpRequest();
+    xhr.open('PUT', url, true);
+    Object.keys(headers || {}).forEach(function (k) { xhr.setRequestHeader(k, headers[k]); });
+    xhr.upload.onprogress = function (e) {
+      if (e && e.lengthComputable && typeof onProgress === 'function') {
+        onProgress(e.loaded / e.total);
+      }
+    };
+    xhr.onload = function () {
+      resolve({ ok: xhr.status >= 200 && xhr.status < 300, status: xhr.status, text: xhr.responseText || '' });
+    };
+    xhr.onerror = function () { reject(new Error('network')); };
+    xhr.ontimeout = function () { reject(new Error('timeout')); };
+    xhr.onabort = function () { reject(new Error('aborted')); };
+    xhr.send(body);
+  });
+}
+
 /* ===== UPLOAD (ALL FILES) ===== */
 async function submitPhoneUpload() {
   if (!bulkFiles.length) return;
@@ -984,6 +1082,16 @@ async function submitPhoneUpload() {
   var btn = document.querySelector('#step2 .btn-primary');
   btn.disabled = true;
   btn.textContent = 'Uploading...';
+
+  // Show the loader BEFORE any awaiting work, so the tap always has a visible
+  // result even when reading and re-encoding the file takes a second.
+  showUploadOverlay({
+    title: 'Uploading your file...',
+    sub: bulkFiles.length > 1
+      ? 'Preparing ' + bulkFiles.length + ' files'
+      : (bulkFiles[0].file.name || 'Your file'),
+    progress: 4
+  });
 
   var orderPin = String(Math.floor(100000 + Math.random() * 900000));
 
@@ -1007,6 +1115,7 @@ async function submitPhoneUpload() {
 }
 
 function uploadFail(msg) {
+    hideUploadOverlay();
     alert(msg);
     btn.disabled = false;
     btn.textContent = 'Upload & Pay';
@@ -1093,6 +1202,13 @@ function uploadFail(msg) {
 
       var data;
       if (IS_NETLIFY) {
+        // Band this file's share of the bar: each file gets its own slice, so
+        // "2 of 3" and the bar can never disagree.
+        var sliceStart = 5 + (i / bulkFiles.length) * 85;
+        var slice = 85 / bulkFiles.length;
+        setUploadProgress(sliceStart,
+          'Sending "' + fileName + '" (' + (i + 1) + ' of ' + bulkFiles.length + ')');
+
         // Signed upload: bytes go directly to Supabase Storage (Netlify's 6MB cap never applies)
         var signRes = await fetch(API('upload', 'sign-upload'), {
           method: 'POST',
@@ -1102,17 +1218,35 @@ function uploadFail(msg) {
         var signD = await parseRes(signRes);
         if (!signRes.ok && !signD.success) { uploadFail(signD.error || 'Upload failed'); return; }
 
-        var upRes = await fetch(signD.upload_url, {
-          method: 'PUT',
-          headers: { 'Content-Type': signD.content_type || upFile.type || 'application/octet-stream', 'x-upsert': 'true' },
-          body: upFile
-        });
+        setUploadProgress(sliceStart + slice * 0.1, 'Uploading "' + fileName + '"...');
+
+        // Real byte progress: fetch() cannot report it, so a slow photo looked
+        // like a frozen page. The bar moves with the bytes actually sent.
+        var upRes;
+        try {
+          upRes = await putWithProgress(
+            signD.upload_url,
+            { 'Content-Type': signD.content_type || upFile.type || 'application/octet-stream', 'x-upsert': 'true' },
+            upFile,
+            function (frac) {
+              setUploadProgress(sliceStart + slice * (0.1 + 0.8 * frac),
+                'Uploading "' + fileName + '" - ' + Math.round(frac * 100) + '%');
+            }
+          );
+        } catch (netErr) {
+          uploadFail(netErr && netErr.message === 'network'
+            ? 'The connection dropped while sending "' + fileName + '". Nothing was charged - please try again.'
+            : 'The upload of "' + fileName + '" was interrupted. Nothing was charged - please try again.');
+          return;
+        }
         if (!upRes.ok) {
           var upMsg = 'Storage upload failed (HTTP ' + upRes.status + ')';
-          try { var upJ = JSON.parse(await upRes.text()); upMsg = upJ.message || upJ.error || upMsg; } catch (e) {}
+          try { var upJ = JSON.parse(upRes.text); upMsg = upJ.message || upJ.error || upMsg; } catch (e) {}
           uploadFail(storageErrorMessage(upMsg, upRes.status, upFile.size));
           return;
         }
+
+        setUploadProgress(sliceStart + slice * 0.95, 'Creating your print job...');
 
         var jobRes = await fetch(API('upload'), {
           method: 'POST',
@@ -1164,6 +1298,8 @@ formData.append('file', blob, fileName);
         formData.append('contrast', s.contrast || 0);
         formData.append('crop_mode', s.crop_mode || 'none');
         formData.append('finish', 'none');
+        setUploadProgress(5 + (i / bulkFiles.length) * 85,
+          'Sending "' + fileName + '" (' + (i + 1) + ' of ' + bulkFiles.length + ')');
         var res = await fetch(API('upload'), {
           method: 'POST',
           headers: { 'X-Session-Token': qToken },
@@ -1183,7 +1319,18 @@ formData.append('file', blob, fileName);
     return;
   }
 
-  if (!phoneUploadedJobs.length) { alert('No files uploaded successfully'); btn.disabled = false; btn.textContent = 'Upload & Pay'; return; }
+  if (!phoneUploadedJobs.length) {
+    // Leaving the loader up here would have hidden the alert behind it.
+    hideUploadOverlay();
+    alert('No files uploaded successfully');
+    btn.disabled = false;
+    btn.textContent = 'Upload & Pay';
+    return;
+  }
+
+  // Uploaded. The rest is the server pricing the batch, which can still take a
+  // moment: keep the overlay up so the customer does not tap Upload again.
+  setUploadProgress(92, 'Working out what you need to pay...');
 
   // Ask the server what the whole order costs. The browser's own sum is not
   // trusted: the amount quoted to the customer must be exactly the one the
@@ -1355,6 +1502,7 @@ function cancelPhonePayment() {
 }
 
 function resetUpload() {
+  hideUploadOverlay();
   bulkFiles = [];
   selectedFileIndex = 0;
   phoneCurrentJobId = null;
@@ -1368,5 +1516,15 @@ function resetUpload() {
 }
 </script>
 <div id="toastMsg" style="display:none; position:fixed; bottom:60px; left:50%; transform:translateX(-50%); background:rgba(17,24,39,0.92); color:white; padding:10px 18px; border-radius:10px; font-size:13px; z-index:9999; max-width:90vw; text-align:center;"></div>
+
+<div id="uploadOverlay" class="pk-overlay hidden" role="status" aria-live="polite">
+  <div class="pk-overlay-card">
+    <div class="pk-spinner"></div>
+    <h3 class="pk-overlay-title" id="uploadOverlayTitle">Uploading your file&hellip;</h3>
+    <p class="pk-overlay-sub" id="uploadOverlaySub">Sending it to the shop</p>
+    <div class="pk-progress"><div class="pk-progress-fill" id="uploadProgressFill"></div></div>
+    <p class="pk-overlay-note" id="uploadOverlayNote">Keep this page open until it finishes.</p>
+  </div>
+</div>
 </body>
 </html>

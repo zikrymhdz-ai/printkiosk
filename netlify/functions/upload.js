@@ -1,4 +1,4 @@
-const { json, err, supabaseRequest, validateSession, generateJobId, calculatePrice, assignUniqueMatchAmount, createJobWithUniqueFee, assignUniqueOrderTotal, ALLOWED_EXTENSIONS, SUPABASE_URL, supabaseStorageSignedUrl, parseMultipartFormData, EXT_MIME_MAP, JOB_PAYABLE_WINDOW_MIN, supabaseStorageUpload } = require('./_shared');
+const { json, err, supabaseRequest, validateSession, generateJobId, calculatePrice, assignUniqueMatchAmount, createJobWithUniqueFee, assignUniqueOrderTotal, ALLOWED_EXTENSIONS, SUPABASE_URL, supabaseStorageSignedUrl, parseMultipartFormData, EXT_MIME_MAP, JOB_PAYABLE_WINDOW_MIN, supabaseStorageUpload, supabaseStorageDelete, mergeFilesToPDF } = require('./_shared');
 
 // A guest uploading without an account gets one file only: they have no
 // identity, so a bundle of theirs could not be attributed to them when a
@@ -74,6 +74,11 @@ exports.handler = async (event) => {
   // whole order and records it against every file in it.
   if (url.searchParams.get('action') === 'seal-order') {
     return handleSealOrder(event);
+  }
+
+  // Merge all files in an order into ONE print job, ONE document, ONE payment.
+  if (url.searchParams.get('action') === 'merge-order') {
+    return handleMergeOrder(event);
   }
 
   return handleUpload(event);
@@ -258,6 +263,176 @@ async function handleSealOrder(event) {
     fee: Math.round((orderTotal - sumBase) * 100) / 100,
     files: jobs.length,
     job_ids: ids
+  });
+}
+
+// Merge all files of one order into a single print job, stored as one merged
+// document with one payment amount. Each file keeps its own colour / copies
+// settings, and the total is summed per page (colour RM1.10, B&W RM0.20).
+//
+// After this runs, the old individual rows are deleted and replaced by one row
+// carrying origin_job_ids so the merge can still be traced.
+async function handleMergeOrder(event) {
+  const session = await validateSession(event);
+  const userId = session ? session.user_id : null;
+  if (!userId) return err('Only signed-in customers can merge an order', 403);
+
+  let body;
+  try { body = JSON.parse(event.body || '{}'); } catch (e) { return err('Invalid request body'); }
+
+  const orderId = String(body.order_id || '').trim().slice(0, 40);
+  if (!orderId || !/^[A-Za-z0-9_-]{8,40}$/.test(orderId)) return err('Invalid order reference');
+
+  // Fetch every file belonging to this order, in creation order.
+  const found = await supabaseRequest('GET', '/print_jobs', null, {
+    'order_id': 'eq.' + orderId,
+    'user_id': 'eq.' + userId,
+    'select': 'id,job_id,file_name,file_path,pages,color_mode,color_pages,copies,sides,total_price,print_pin,status',
+    'order': 'created_at.asc'
+  });
+  if (found.error) return err('Failed to read order files', 500);
+  const jobs = Array.isArray(found.data) ? found.data : [];
+  if (!jobs.length) return err('No files found for this order', 404);
+  if (jobs.length > MAX_BUNDLE_FILES) {
+    return err('An order can contain at most ' + MAX_BUNDLE_FILES + ' files');
+  }
+  if (jobs.some(j => j.paid === true)) return err('This order has already been paid', 400);
+
+  // Build the items for the PDF merge: download each file from Supabase Storage.
+  const items = jobs.map(function (j) {
+    return {
+      url: j.file_path,
+      file_name: j.file_name,
+      settings: {
+        color: j.color_mode || 'bw',
+        pages: parseInt(j.pages, 10) || 1,
+        color_pages: j.color_pages !== null && j.color_pages !== undefined
+          ? parseInt(j.color_pages, 10)
+          : (j.color_mode === 'color' ? (parseInt(j.pages, 10) || 1) : 0),
+        copies: parseInt(j.copies, 10) || 1,
+        sides: j.sides || 'single'
+      }
+    };
+  });
+
+  let merged;
+  try { merged = await mergeFilesToPDF(items); } catch (e) {
+    return err('Failed to merge files: ' + (e.message || e), 500);
+  }
+
+  // Compute the total price per file (colour RM1.10 / B&W RM0.20 per page),
+  // then sum. Copies multiply each file's pages; sides discounts.
+  let itemTotal = 0;
+  for (let i = 0; i < jobs.length; i++) {
+    const j = jobs[i];
+    const pages = parseInt(j.pages, 10) || 1;
+    const copies = parseInt(j.copies, 10) || 1;
+    const sides = j.sides === 'double' ? 0.7 : 1.0;
+    const colorPages = j.color_pages !== null && j.color_pages !== undefined
+      ? Math.max(0, Math.min(parseInt(j.color_pages, 10), pages))
+      : (j.color_mode === 'color' ? pages : 0);
+    const bwPages = pages - colorPages;
+    const base = colorPages * PRICE_COLOR_PER_PAGE + bwPages * PRICE_BW_PER_PAGE;
+    itemTotal += base * sides * copies;
+  }
+  itemTotal = Math.round(itemTotal * 100) / 100;
+
+  // Reserve one unique payment amount for the whole merged order.
+  const cutoff = new Date(Date.now() - JOB_PAYABLE_WINDOW_MIN * 60 * 1000).toISOString();
+  const liveOrders = await supabaseRequest('GET', '/print_jobs', null, {
+    'paid': 'eq.false',
+    'status': 'eq.pending',
+    'select': 'order_total,total_price',
+    'created_at': 'gte.' + cutoff,
+    'limit': '500'
+  });
+  const usedTotals = [];
+  if (!liveOrders.error && Array.isArray(liveOrders.data)) {
+    for (const j of liveOrders.data) {
+      for (const field of ['order_total', 'total_price']) {
+        const v = parseFloat(j[field]);
+        if (!Number.isNaN(v)) usedTotals.push(v);
+      }
+    }
+  }
+  for (const j of jobs) {
+    const v = parseFloat(j.total_price);
+    if (!Number.isNaN(v)) usedTotals.push(v);
+  }
+
+  const baseCents = Math.round(itemTotal * 100);
+  const used = new Set(usedTotals.map(v => Math.round(v * 100)));
+  let freeOffset = null;
+  for (let k = 0; k < MAX_MATCH_OFFSETS; k++) {
+    if (!used.has(baseCents + k)) { freeOffset = k; break; }
+  }
+  const totalPrice = freeOffset !== null
+    ? (baseCents + freeOffset) / 100
+    : (baseCents + MAX_MATCH_OFFSETS - 1) / 100;
+
+  // Generate the merged job identity.
+  const mergedJobId = generateJobId();
+  const mergedPin = String(Math.floor(100000 + Math.random() * 900000));
+  const mergedFileName = 'merged_' + orderId + '.pdf';
+  const safeName = 'print_' + Date.now() + '_' + mergedFileName.replace(/[^a-zA-Z0-9._-]/g, '_');
+  const storagePath = mergedJobId + '/' + safeName;
+  const publicUrl = SUPABASE_URL + '/storage/v1/object/public/print-jobs/' + storagePath;
+
+  // Upload the merged PDF to Supabase Storage.
+  const storageResult = await supabaseStorageUpload('print-jobs', storagePath, merged.buffer, 'application/pdf');
+  if (storageResult.error) {
+    return err('Failed to store merged file: ' + storageResult.message, 500);
+  }
+
+  // Build the single merged job row.
+  const originIds = jobs.map(j => j.job_id);
+  const jobData = {
+    job_id: mergedJobId,
+    user_id: userId,
+    session_id: require('crypto').randomBytes(16).toString('hex'),
+    order_id: orderId,
+    file_name: mergedFileName,
+    file_path: publicUrl,
+    file_type: 'document',
+    pages: merged.totalPages,
+    color_mode: jobs.some(j => j.color_mode === 'color') ? 'color' : 'bw',
+    paper_size: 'a4',
+    sides: 'single',
+    copies: 1,
+    brightness: 0,
+    contrast: 0,
+    crop_mode: 'none',
+    finish: 'none',
+    base_price: itemTotal,
+    match_fee: freeOffset !== null ? freeOffset / 100 : (MAX_MATCH_OFFSETS - 1) / 100,
+    total_price: totalPrice,
+    status: 'pending',
+    paid: false,
+    print_pin: mergedPin,
+    origin_job_ids: JSON.stringify(originIds)
+  };
+
+  const result = await supabaseRequest('POST', '/print_jobs', jobData);
+  if (result.error) {
+    return err('Failed to create merged job: ' + (result.message || ''), 500);
+  }
+
+  // Delete the old individual rows now that they are absorbed into one.
+  for (const j of jobs) {
+    await supabaseRequest('DELETE', '/print_jobs?id=eq.' + j.id);
+  }
+
+  const createdJob = result.data[0];
+  return json({
+    success: true,
+    job: createdJob,
+    job_id: mergedJobId,
+    print_pin: mergedPin,
+    total_price: totalPrice,
+    pages: merged.totalPages,
+    files: jobs.length,
+    origin_job_ids: originIds,
+    message: 'Files merged into one job'
   });
 }
 

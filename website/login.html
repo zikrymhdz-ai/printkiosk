@@ -549,7 +549,9 @@ document.getElementById('loginForm').addEventListener('submit', async (e) => {
     }
     const rememberMe = document.getElementById('rememberMe').checked;
     if (rememberMe) {
-      PKS.set('remembered_login', JSON.stringify({ email: email.trim(), password: password }));
+      // Email only. Saving the password would leave a plaintext credential in
+      // storage, and the browser's own password manager already handles it.
+      PKS.set('remembered_login', JSON.stringify({ email: email.trim() }));
     } else {
       PKS.remove('remembered_login');
     }
@@ -580,10 +582,19 @@ document.getElementById('loginForm').addEventListener('submit', async (e) => {
         const cred = JSON.parse(remembered);
         if (cred && cred.email) {
           emailInp.value = cred.email;
-          if (cred.password) passInp.value = cred.password;
           rememberMeInp.checked = true;
         }
-      } catch (e) {}
+        // An older build also stored the password. Strip it on load, keeping
+        // the email when there is one, so the plaintext does not linger.
+        if (cred && Object.prototype.hasOwnProperty.call(cred, 'password')) {
+          if (cred.email) PKS.set('remembered_login', JSON.stringify({ email: cred.email }));
+          else PKS.remove('remembered_login');
+        }
+      } catch (e) {
+        // Unreadable value: remove it rather than leave a blob of unknown
+        // content behind.
+        PKS.remove('remembered_login');
+      }
     }
 
     const token = localStorage.getItem('session_token');

@@ -376,10 +376,16 @@ function pkFlushErrors() {
     var probe = 'main=' + (window.__pkMainStarted ? 'RAN' : 'NOT-RAN')
       + ' config=' + (window.__pkConfig || '?')
       + ' api=' + (window.__pkApi || '?')
-      + ' cam=' + (document.getElementById('kioskCam') ? 'ok' : 'missing');
+      + ' camEl=' + (document.getElementById('kioskCam') ? 'present' : 'missing');
     var hb = window.__pkHb || {};
+    // "0ok" alone reads like a failure. A fetch that has neither resolved nor
+    // rejected yet is still IN FLIGHT - which is the normal state 800 ms after
+    // load, while a Netlify cold start is still spinning up. Say that instead
+    // of a bare "-", which looked like a broken heartbeat on a working screen.
+    var hbState = hb.lastStatus
+      || (((hb.tried || 0) > (hb.ok || 0)) ? 'in-flight' : '-');
     probe += ' hb=' + (hb.tried || 0) + 'try/' + (hb.ok || 0) + 'ok'
-      + ' st=' + (hb.lastStatus || '-')
+      + ' st=' + hbState
       + (hb.lastError ? ' ERR=' + hb.lastError : '')
       + (hb.lastBody ? ' body=' + hb.lastBody : '')
       + ' pi=' + (window.IS_RPI ? '1' : '0')
@@ -1043,7 +1049,7 @@ function throttledUnknownLog(distance) {
 /* ===== REMOTE KIOSK CONTROL (admin) ===== */
 // Must match APP_VERSION in netlify/functions/_shared.js. If the deployed
 // version differs, the kiosk reloads itself so it never runs a stale page.
-var KIOSK_APP_VERSION = '2026.10.14-99';
+var KIOSK_APP_VERSION = '2026.10.27-104';
 
 // Latest printer verdict from the backend: can we print, and if not why.
 // Refreshed by loadPrinterStatus() and consulted by printTapped() at the
@@ -1607,16 +1613,25 @@ if (alert) {
 } else if (status === 'online') {
         dot.className = 'dot dot-green';
         line.textContent = 'Online - ready to print';
-      } else if (status === 'offline' || status === 'unknown') {
+      } else if (status === 'unknown') {
+        // Deliberately not the old "cannot reach" wording. Toner levels are
+        // read over IPP, but the job itself goes out through the CUPS queue -
+        // so the read can fail while printing works perfectly. The old red line
+        // claimed the printer was unreachable for exactly that state and made a
+        // working kiosk look broken (seen live 2026-10-27: the queue printed
+        // job Brother-37 while every poll reported "Host is down").
+        dot.className = 'dot dot-yellow';
+        var whyUnknown = d.printer_error || p.printer_error;
+        line.textContent = 'Printer status unavailable'
+          + (whyUnknown ? ': ' + String(whyUnknown).slice(0, 90) : '');
+      } else if (status === 'offline') {
         dot.className = 'dot dot-red';
         // Say WHY rather than only that it is unknown. The worker knows the
         // concrete reason - "ipptool not installed" versus "connection
         // refused" need different fixes, and neither could be told apart
         // before.
         var why = d.printer_error || p.printer_error;
-        line.textContent = status === 'unknown'
-          ? ('Cannot reach printer' + (why ? ': ' + why : ' - printer not reporting'))
-          : ('Offline - please see staff' + (why ? ' (' + why + ')' : ''));
+        line.textContent = 'Offline - please see staff' + (why ? ' (' + why + ')' : '');
       } else if (status === 'low') {
         dot.className = 'dot dot-yellow';
         line.textContent = 'Low on toner - please see staff';

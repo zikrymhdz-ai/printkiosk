@@ -7,6 +7,17 @@ const WORKER_ROUTES = ['claim-job', 'report-print', 'report-supplies', 'watchdog
 // Statuses the Pi print worker is allowed to leave a job in.
 const PRINT_OUTCOMES = ['completed', 'failed'];
 
+// How many times the worker may report a failure before the job is parked as
+// 'failed' for staff. Must match the worker's own PRINT_MAX_ATTEMPTS default.
+const MAX_PRINT_ATTEMPTS = 3;
+
+// Supply columns that arrived after the first printer_status table. Used only
+// when PostgREST refuses a write without naming which column it could not find.
+const OPTIONAL_SUPPLY_COLUMNS = [
+  'printer_error', 'printer_target', 'printer_model', 'printer_uri',
+  'printer_alert', 'poll_interval'
+];
+
 exports.handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') return json({});
 
@@ -183,7 +194,21 @@ async function reportPrint(event) {
     // Retries left: put it back in the queue so the worker picks it up again.
     const attempts = parseInt(body.attempts, 10);
     const used = Number.isFinite(attempts) ? attempts : 1;
-    if (used < 3) {
+
+    // PERSIST the count. It used to be computed and thrown away, so the next
+    // claim read print_attempts = 0 again, every report computed 'used = 1',
+    // and the cap below never fired. A job that can never print was retried
+    // every 5 s for ever - seen live on 2026-10-27: 15 attempts over 90 s,
+    // print_attempts still 0, status flipping printing -> print_requested.
+    patch.print_attempts = used;
+
+    // Some failures are permanent, and retrying them only repeats the same
+    // error: a stored file that is gone (the job completed once and
+    // deleteJobFile removed it), or one that is not readable. A 4xx from
+    // storage is an answer, not a hiccup.
+    const permanent = /HTTP Error 4\d\d/i.test(reason);
+
+    if (!permanent && used < MAX_PRINT_ATTEMPTS) {
       patch.status = 'print_requested';
       patch.print_claimed_at = null;
       patch.print_started_at = null;
@@ -202,7 +227,10 @@ async function reportPrint(event) {
     await deleteJobFile(id);
   }
 
-  if (outcome === 'failed') {
+  // Only a failure that is being parked needs to wake a human. A failure with
+  // retries left used to raise an alert too, so one flaky job left three
+  // "failed" alerts behind and then printed.
+  if (outcome === 'failed' && patch.status !== 'print_requested') {
     await supabaseRequest('POST', '/alerts', {
       type: 'print_failed',
       message: 'Print job ' + body.public_id + ' failed: ' + String(body.error || 'unknown').slice(0, 200),
@@ -363,6 +391,33 @@ async function reportSupplies(event) {
       if (!write.error) row.status = 'offline';
     }
   }
+
+  // Fallback 4: a column added by a later migration may not exist yet.
+  // printer_error / printer_target / printer_model / printer_uri arrived with
+  // 20261015_printer_diagnostics.sql. PostgREST rejects the WHOLE row with
+  // 42703 - or PGRST204, "Could not find the 'x' column ... in the schema
+  // cache" - and that took every supply reading down with it. The printer then
+  // looked like it had never reported at all, and the kiosk refuses to send a
+  // paid job in exactly that state. Drop whatever PostgREST names and retry, so
+  // deploying before the SQL costs those fields and nothing else.
+  const dropped = new Set();
+  for (let guard = 0; write.error && guard < 6; guard++) {
+    const msg = String(write.message || '') + ' ' + JSON.stringify(write.data || '');
+    if (!/42703|PGRST204/.test(msg)) break;
+
+    const named = /column "([a-z0-9_]+)"/i.exec(msg) || /'([a-z0-9_]+)' column/i.exec(msg);
+    const strip = named ? [named[1]] : OPTIONAL_SUPPLY_COLUMNS;
+    strip.forEach((c) => dropped.add(c));
+
+    const slim = { ...row };
+    dropped.forEach((c) => { delete slim[c]; });
+    if (Object.keys(slim).length === Object.keys(row).length) break;
+
+    write = (cur.data && cur.data.length)
+      ? await supabaseRequest('PATCH', '/printer_status?id=eq.' + cur.data[0].id, slim)
+      : await supabaseRequest('POST', '/printer_status', slim);
+  }
+
   if (write.error) return err('Failed to store supplies', 500);
 
   if (lowest !== null && lowest <= 15) {

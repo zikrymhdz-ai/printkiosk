@@ -906,25 +906,58 @@ async function manualConfirmPayment(event, session) {
 /* ===== REMOTE KIOSK CONTROL ===== */
 // Latest heartbeat from the shop screen: is it alive, did it load face-api,
 // did the camera open? Answers "why is the kiosk screen black" remotely.
-async function getKioskStatus() {
-  const since = new Date(Date.now() - 5 * 60 * 1000).toISOString();
-  const result = await supabaseRequest('GET', '/kiosk_heartbeats', null, {
-    'order': 'seen_at.desc',
-    'limit': '1'
-  });
+//
+// THREE writers share kiosk_heartbeats, and only one of them is the screen's
+// actual status:
+//
+//   kiosk-1     the real report, every 20 s, from the main inline script
+//   kiosk-error the diagnostic probe, every 20 s, from its own script block
+//   canary      one row per page load, proves the page itself rendered
+//
+// This used to take the newest row of ANY id, so the probe - posting on its own
+// 20 s clock, out of phase - won roughly half the time. Admin then announced
+// "the screen is alive but has not sent a status update yet" while kiosk-1 was
+// reporting perfectly, and the badge flickered between Online and No Status Yet.
+// Ask for the real report first; the probe is evidence, not status.
+const KIOSK_ID = 'kiosk-1';
+const PROBE_IDS = ['kiosk-error', 'canary'];
 
-  if (result.error || !result.data || result.data.length === 0) {
+async function getKioskStatus() {
+  const [real, probe] = await Promise.all([
+    supabaseRequest('GET', '/kiosk_heartbeats', null, {
+      'kiosk_id': 'eq.' + KIOSK_ID, 'order': 'seen_at.desc', 'limit': '1'
+    }),
+    supabaseRequest('GET', '/kiosk_heartbeats', null, {
+      'kiosk_id': 'in.(' + PROBE_IDS.join(',') + ')',
+      'order': 'seen_at.desc', 'limit': '1'
+    })
+  ]);
+
+  const realRow = (!real.error && real.data && real.data[0]) || null;
+  const probeRow = (!probe.error && probe.data && probe.data[0]) || null;
+  const hb = realRow || probeRow;
+
+  if (!hb) {
     return json({ success: true, online: false, unavailable: true, message: 'No heartbeat received' });
   }
 
-  const hb = result.data[0];
   const ageMs = Date.now() - new Date(hb.seen_at).getTime();
   const online = ageMs < 90 * 1000;
+  // probe_only means the browser reached the backend but the main script never
+  // reported - the case the diagnostic line exists for.
+  const probeOnly = !realRow;
 
   return json({
     success: true,
     online: online,
     unavailable: false,
+    probe_only: probeOnly,
+    probe: probeRow ? {
+      kiosk_id: probeRow.kiosk_id,
+      state: probeRow.state,
+      detail: probeRow.detail,
+      age_seconds: Math.round((Date.now() - new Date(probeRow.seen_at).getTime()) / 1000)
+    } : null,
     status: {
       kiosk_id: hb.kiosk_id,
       app_version: hb.app_version,

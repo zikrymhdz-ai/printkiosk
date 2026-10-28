@@ -120,7 +120,7 @@ ssh user@10.100.131.35
 On the Pi:
 
 ```bash
-sudo apt install -y cups-client poppler-utils python3-pil python3-pypdf
+sudo apt install -y cups-client poppler-utils python3-pil python3-pypdf libnss-mdns avahi-utils
 
 # the secret must match Netlify exactly
 mkdir -p ~/printkiosk/pi
@@ -128,7 +128,14 @@ cat > ~/printkiosk/pi/print-worker.env <<'EOF'
 PRINT_WORKER_SECRET=<paste-your-secret-here>
 PRINTKIOSK_API=https://printkioskfyp.netlify.app
 PRINTER_NAME=Brother
-PRINTER_URI=ipp://Brother.local/ipp/print
+# Use the printer's mDNS NAME, never a bare IP. This printer gets its address
+# from DHCP, and on 2026-10-27 it had moved from 10.100.131.48 to 10.100.138.65:
+# CUPS and this file were both still pointing at the old address, the toner read
+# failed with "Host is down", and the kiosk told every customer the printer could
+# not be reached - while the queue itself was fine. A .local name follows the
+# printer; libnss-mdns above is what lets ipptool and lp resolve it.
+# Find yours with:  ippfind -T 5     (then match the serial on the printer)
+PRINTER_URI=ipp://BRW145A41F176AD.local:631/ipp/print
 EOF
 chmod 600 ~/printkiosk/pi/print-worker.env
 
@@ -198,3 +205,90 @@ claimed, and Failed Print Jobs stays empty.
   remaining count), so `paper_level` keeps its last manual value.
 - Colour and duplex are the most likely causes of an unattended jam; the
   watchdog and the kiosk's "see a staff member" screen are the safety net.
+- A job is only reported `completed` when CUPS itself reports the job
+  completed. "The queue is empty now" is not proof of printing (a cancelled or
+  aborted job also leaves the queue), and neither is `lp`'s
+  `request id is Brother-NN`, which only means the file reached the spooler.
+  A job that cannot be found is reported as a failure with the reason, never
+  as a success.
+
+## If a paid job prints nothing
+
+The kiosk now refuses to call it printed, so `print_jobs.print_error` (admin ->
+Printing -> failed jobs, or the `alerts` table) carries the reason. Read it
+before touching anything:
+
+```bash
+lpstat -W all -o            # every job CUPS knows about
+lpstat -p Brother -l        # queue enabled? stop reason? driver?
+lpoptions -p Brother -l     # which options this queue accepts
+sudo tail -80 /var/log/cups/error_log
+sudo journalctl -u printkiosk-worker --since "-10 min" --no-pager
+```
+
+**`lpstat` cannot tell you whether a job printed.** On this Pi it prints
+
+```
+Brother-41  user  36864  Tue 27 Oct 2026 17:33:03 +08
+```
+
+with no state column, so a printed job, a job the printer refused and a job
+someone cancelled are identical. That is why the worker asks the scheduler over
+IPP (`Get-Job-Attributes`) and only falls back to lpstat. To answer "did job N
+actually print" for a specific job:
+
+```bash
+ipptool -tv ipp://localhost:631/jobs/41 /usr/share/cups/ipptool/get-job-attributes.test \
+  | grep -iE "job-state|STATUS"
+```
+
+`job-state (enum) = completed` / `job-completed-successfully` is the scheduler
+saying the backend handed the whole document over. `aborted` with
+`document-format-error` means the printer refused the file itself.
+
+Common causes, in the order worth checking:
+
+| Symptom | Cause |
+|---|---|
+| `never appeared in the CUPS queue` | cupsd refused the file (filter or page-range error). `error_log` says which filter. |
+| `aborted` with `job-completed-with-errors` | the printer took the data and rejected it - usually an option it does not support. |
+| state `completed` but nothing on the tray | the printer's own PDF/PCL interpreter failed; check its panel. |
+| `document-format-error` | the queue is raw and the file is a format the printer cannot read directly. Install the queue with `lpadmin -m everywhere` (driverless) so CUPS converts. |
+
+## If the printer stops reporting
+
+The toner/status read is the only part of printing that needs the printer's
+**address**; `lp` uses the queue name. So these two can disagree, and on
+2026-10-27 they did: jobs printed fine while every poll logged
+
+```
+supplies unavailable (cannot reach ipp://10.100.131.48:631/ipp/print -
+ipptool: Unable to connect to "10.100.131.48" on port 631 - Host is down)
+```
+
+That is a stale DHCP address, not a broken printer. Find the real one and
+compare it with what CUPS thinks:
+
+```bash
+ippfind -T 5        # every live IPP printer, by mDNS serial name
+lpstat -v           # what the queue is actually pointed at
+getent hosts BRW145A41F176AD.local     # must resolve, or libnss-mdns is missing
+```
+
+Then re-point both at the same name (never a bare IP - see the note in Step 4):
+
+```bash
+sudo lpadmin -p Brother -E -v ipp://BRW145A41F176AD.local:631/ipp/print
+nano ~/printkiosk/pi/print-worker.env     # PRINTER_URI= same URI
+sudo systemctl restart printkiosk-worker
+lp -d Brother /usr/share/cups/data/testprint    # the only real test
+```
+
+Two things that look like failures and are not:
+
+- **A print request id proves nothing.** CUPS accepts the job and only fails
+  later at the device, so `request id is Brother-39` appears even when nothing
+  can print. Check `lpstat -o` and the paper tray.
+- **"Printer status unavailable" on the kiosk does not block printing.** Toner
+  is read over IPP, the job goes out over the queue; the panel is amber and
+  keeps the concrete reason. A red `Offline` or a jam is the blocking state.

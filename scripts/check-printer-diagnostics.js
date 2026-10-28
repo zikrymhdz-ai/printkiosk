@@ -50,7 +50,15 @@ ok(/d\.printer_error \|\| p\.printer_error/.test(walkin),
   'kiosk uses the concrete reason instead of a bare "Status unknown"');
 ok(!/'Status unknown - printer not reporting'/.test(walkin),
   'the old unhelpful string is gone');
-ok(/Cannot reach printer/.test(walkin), 'kiosk says the printer cannot be reached');
+// The wording had to change from "Cannot reach printer": toner is read over
+// IPP, but the job goes out through the CUPS queue, so the read can fail while
+// printing works. Seen live 2026-10-27 - the queue printed Brother-37 while
+// every poll reported "Host is down", and the kiosk told customers the printer
+// could not be reached.
+ok(/Printer status unavailable/.test(walkin),
+  'kiosk says the STATUS is unavailable rather than that the printer is gone');
+ok(!/Cannot reach printer/.test(walkin),
+  'it no longer claims a reachable-but-unreadable printer cannot be reached');
 ok(/data\.printer_error/.test(admin), 'admin reads the reason');
 ok(/function updatePrinterDiag/.test(admin), 'admin renders a diagnostics note');
 // Identity moved to its own persistent line, because the queue name alone cannot
@@ -69,6 +77,19 @@ ok(/printer_target:\s*String\(body\.printer_name/.test(backend),
 ok(/for \(const f of \['printer_target', 'printer_model', 'printer_uri'\]\)/.test(backend)
    && /if \(!row\[f\]\) delete row\[f\]/.test(backend),
   'empty identity fields are dropped rather than blanking what we already know');
+
+// --- a column from a newer migration must not cost the whole reading ------
+// PostgREST rejects the ENTIRE row with 42703 (or PGRST204) when one column is
+// missing. printer_error/target/model/uri arrived with
+// 20261015_printer_diagnostics.sql, so deploying the function before running
+// that SQL made every supply report fail - the printer then looked like it had
+// never reported, which is the state in which the kiosk refuses to send a paid
+// job. The three older fallbacks cover codes 23502/23503/23514 and did nothing
+// for this.
+ok(/42703/.test(backend) && /PGRST204/.test(backend),
+  'reportSupplies retries when a column is missing from the schema cache');
+ok(/OPTIONAL_SUPPLY_COLUMNS/.test(backend),
+  'and names the newer columns it can drop as a last resort');
 
 if (failed) process.exit(1);
 console.log('  ok      an unreadable printer can explain itself');

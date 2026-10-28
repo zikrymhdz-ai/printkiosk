@@ -129,6 +129,9 @@ def load_worker(system_exists, ipptool):
               # Both are called by the functions above, so they have to survive
               # the filter or the extracted read_supplies raises NameError.
               "_looks_unauthorized", "_ipptool_supports_k",
+              # Transport classification moved out of read_supplies so the log
+              # line, the retry decision and the report all use one list.
+              "_transport_failure", "_cups_uri_hint",
               # The IPP marker-* supply parser and its list helper.
               "_marker_levels", "_split_set")
     for line in code.splitlines():
@@ -263,6 +266,43 @@ def main():
     rs, calls, mod_reported_model = load_worker("/usr/share/cups/ipptool/get-printer-attributes.test", refused)
     levels, online, why, model = rs()
     ok(levels is None and online is False, "a refused connection is offline")
+
+    # 4b. THE LIVE CASE, 2026-10-27. ipptool's wording on this network is
+    #     "Unable to connect ... Host is down", not "cannot connect". The old
+    #     marker list missed it, so the error transcript fell through to the
+    #     attribute parser and was reported as "reachable, but no toner
+    #     attributes in the response. Got: ipptool: Unable to connect ..." -
+    #     a sentence that contradicts itself and blames parsing for a dead
+    #     address.
+    HOST_DOWN = ('ipptool: Unable to connect to "10.100.131.48" on port 631'
+                 ' - Host is down')
+
+    def host_down(p):
+        return (1, "", HOST_DOWN)
+
+    rs, calls, mod_reported_model = load_worker(
+        "/usr/share/cups/ipptool/get-printer-attributes.test", host_down)
+    levels, online, why, model = rs()
+    ok(levels is None and online is False, "'Host is down' is an unreachable printer")
+    ok("reachable, but no toner" not in (why or ""),
+       "it is not reported as a reachable printer with a parsing problem: %s" % why)
+    ok("cannot reach" in (why or ""), "the reason names the failure: %s" % why)
+    ok("Host is down" in (why or ""), "and quotes ipptool's own words")
+    ok("10.100.131.48" in (why or ""), "and the address it failed to reach")
+
+    # 4c. Any other non-zero exit is still not a response. Its transcript must
+    #     never be parsed as an attribute dump.
+    def odd_exit(p):
+        return (1, "", "ipptool: something nobody has seen before")
+
+    rs, calls, mod_reported_model = load_worker(
+        "/usr/share/cups/ipptool/get-printer-attributes.test", odd_exit)
+    levels, online, why, model = rs()
+    ok(levels is None and online is False, "an unclassified non-zero exit is offline")
+    ok("reachable, but no toner" not in (why or ""),
+       "and is never called a reachable printer: %s" % why)
+    ok("no request completed" in (why or ""),
+       "it says the request never completed: %s" % why)
 
     # 5. THE REAL CASE: Brother reports the SERIAL as printer-name.
     #    The correct printer must not be rejected as "wrong printer".

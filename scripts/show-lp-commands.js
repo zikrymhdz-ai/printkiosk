@@ -63,36 +63,56 @@ const start = src.indexOf('def _color_runs(');
 const end = src.indexOf('def read_supplies');
 if (start < 0 || end < 0) throw new Error('could not locate the print functions in the worker');
 
-// The real functions, lifted verbatim, with the two things they touch replaced.
-const script = [
-  'import json, sys, re',
-  '',
-  'calls = []',
-  '',
-  'class _P:',
-  '    returncode = 0',
-  '    stdout = "request id is Brother-99 (1 file(s))"',
-  '    stderr = ""',
-  '',
-  'def run_lp(args, timeout=None):',
-  '    calls.append(args)',
-  '    return _P()',
-  '',
-  'def log(msg):',
-  '    pass',
-  '',
-  'CONFIG = {',
-  '    "printer": "Brother",',
-  '    "printer_uri": "ipp://10.100.131.48:631/ipp/print",',
-  '    "queue_timeout": 180,',
-  '}',
-  '',
-  src.slice(start, end),
-  '',
-  'ok, res = send_to_printer("/tmp/job.pdf", json.loads(sys.argv[1]))',
-  'print(json.dumps({"ok": ok, "result": res, "calls": calls}))',
-  '',
-].join('\n');
+// The real functions, lifted verbatim, with the three things they touch
+// replaced. printer_option_names() decides whether colour is sent as the
+// Brother PPD option (ColorModel) or the IPP Everywhere one
+// (print-color-mode); both queue kinds are exercised below.
+function makeScript(queueOptions) {
+  return [
+    'import json, sys, re',
+    '',
+    'calls = []',
+    '',
+    'class _P:',
+    '    returncode = 0',
+    '    stdout = "request id is Brother-99 (1 file(s))"',
+    '    stderr = ""',
+    '',
+    'def run_lp(args, timeout=None):',
+    '    calls.append(args)',
+    '    return _P()',
+    '',
+    'def printer_option_names(printer):',
+    '    return set(' + JSON.stringify(queueOptions) + ')',
+    '',
+    'def log(msg):',
+    '    pass',
+    '',
+    'CONFIG = {',
+    '    "printer": "Brother",',
+    '    "printer_uri": "ipp://10.100.138.65:631/ipp/print",',
+    '    "queue_timeout": 180,',
+    '}',
+    '',
+    src.slice(start, end),
+    '',
+    'ok, res = send_to_printer("/tmp/job.pdf", json.loads(sys.argv[1]))',
+    'print(json.dumps({"ok": ok, "result": res, "calls": calls}))',
+    '',
+  ].join('\n');
+}
+
+// A driverless IPP Everywhere queue (what `lpadmin -v ipp://...` creates) and a
+// Brother-driver PPD queue do not accept the same colour option name.
+const QUEUES = {
+  ppd: ['colormodel', 'pagesize'],
+  ipp: ['print-color-mode', 'media', 'sides'],
+};
+
+const COLOR = {
+  ppd: { bw: 'ColorModel=Gray', color: 'ColorModel=RGB' },
+  ipp: { bw: 'print-color-mode=monochrome', color: 'print-color-mode=color' },
+};
 
 const argsOf = (c) => {
   const opts = [];
@@ -103,10 +123,10 @@ const argsOf = (c) => {
   return opts;
 };
 
-function runOne(name) {
+function runOne(name, queue) {
   const sc = SCENARIOS[name];
-  const tmp = path.join(os.tmpdir(), 'pk-lp-probe-' + process.pid + '-' + name + '.py');
-  fs.writeFileSync(tmp, script, 'utf8');
+  const tmp = path.join(os.tmpdir(), 'pk-lp-probe-' + process.pid + '-' + name + '-' + queue + '.py');
+  fs.writeFileSync(tmp, makeScript(QUEUES[queue]), 'utf8');
   try {
     const out = execFileSync('python', [tmp, JSON.stringify(sc.job)], { encoding: 'utf8' });
     return { label: sc.label, result: JSON.parse(out.trim().split('\n').pop()) };
@@ -115,58 +135,62 @@ function runOne(name) {
   }
 }
 
-const key = process.argv[2] || 'merged';
-
-// --check asserts every scenario, so this doubles as the test that the printer
-// receives what the merge promised. Expected values are the lp arguments that
-// must appear, in order.
+// --check asserts every scenario on BOTH queue kinds, so this doubles as the
+// test that the printer receives what the merge promised AND that colour is
+// spelled the way that queue accepts it. @bw / @color are replaced per queue.
 const EXPECTED = {
   merged: [
-    ['media=A4', 'ColorModel=Gray', 'page-ranges=1-3', 'sides=one-sided'],
-    ['media=A4', 'ColorModel=RGB', 'page-ranges=4-5', 'sides=one-sided'],
+    ['media=A4', '@bw', 'page-ranges=1-3', 'sides=one-sided'],
+    ['media=A4', '@color', 'page-ranges=4-5', 'sides=one-sided'],
   ],
   colourfirst: [
-    ['media=A4', 'ColorModel=RGB', 'page-ranges=1-2', 'sides=one-sided'],
-    ['media=A4', 'ColorModel=Gray', 'page-ranges=3-4', 'sides=one-sided'],
+    ['media=A4', '@color', 'page-ranges=1-2', 'sides=one-sided'],
+    ['media=A4', '@bw', 'page-ranges=3-4', 'sides=one-sided'],
   ],
   threeruns: [
-    ['media=A4', 'ColorModel=RGB', 'page-ranges=1-2', 'sides=one-sided'],
-    ['media=A4', 'ColorModel=Gray', 'page-ranges=3-4', 'sides=one-sided'],
-    ['media=A4', 'ColorModel=RGB', 'page-ranges=5-6', 'sides=one-sided'],
+    ['media=A4', '@color', 'page-ranges=1-2', 'sides=one-sided'],
+    ['media=A4', '@bw', 'page-ranges=3-4', 'sides=one-sided'],
+    ['media=A4', '@color', 'page-ranges=5-6', 'sides=one-sided'],
   ],
-  plain: [['copies=2', 'media=A4', 'ColorModel=RGB', 'sides=one-sided']],
-  bw: [['media=A4', 'ColorModel=Gray', 'sides=two-sided-long-edge']],
+  plain: [['copies=2', 'media=A4', '@color', 'sides=one-sided']],
+  bw: [['media=A4', '@bw', 'sides=two-sided-long-edge']],
   // The point of the validator: a bad layout must never reach an lp command line.
-  broken: [['media=A4', 'ColorModel=RGB', 'sides=one-sided']],
-  onemode: [['media=A4', 'ColorModel=Gray', 'sides=one-sided']],
+  broken: [['media=A4', '@color', 'sides=one-sided']],
+  onemode: [['media=A4', '@bw', 'sides=one-sided']],
 };
 
 if (process.argv.includes('--check')) {
   let failed = 0;
-  for (const name of Object.keys(SCENARIOS)) {
-    let r;
-    try {
-      r = runOne(name).result;
-    } catch (e) {
-      console.log('  FAILED  ' + name + ' - the worker raised while printing');
-      failed++;
-      continue;
-    }
-    const got = r.calls.map(argsOf);
-    const want = EXPECTED[name];
-    const same = got.length === want.length
-      && got.every((opts, i) => opts.join(' ') === want[i].join(' '));
-    console.log((same ? '  ok      ' : '  FAILED  ') + name + ' -> ' + r.calls.length + ' lp call(s)');
-    if (!same) {
-      console.log('      want ' + JSON.stringify(want));
-      console.log('      got  ' + JSON.stringify(got));
-      failed++;
+  for (const queue of Object.keys(QUEUES)) {
+    for (const name of Object.keys(SCENARIOS)) {
+      let r;
+      try {
+        r = runOne(name, queue).result;
+      } catch (e) {
+        console.log('  FAILED  ' + name + ' [' + queue + '] - the worker raised while printing');
+        failed++;
+        continue;
+      }
+      const got = r.calls.map(argsOf);
+      const want = EXPECTED[name].map(opts => opts.map(o =>
+        o === '@bw' ? COLOR[queue].bw : o === '@color' ? COLOR[queue].color : o));
+      const same = got.length === want.length
+        && got.every((opts, i) => opts.join(' ') === want[i].join(' '));
+      console.log((same ? '  ok      ' : '  FAILED  ') + name + ' [' + queue + '] -> ' + r.calls.length + ' lp call(s)');
+      if (!same) {
+        console.log('      want ' + JSON.stringify(want));
+        console.log('      got  ' + JSON.stringify(got));
+        failed++;
+      }
     }
   }
   if (failed) { console.log('  -> ' + failed + ' failed'); process.exit(1); }
-  console.log('  ok      the printer receives one colour mode per colour run');
+  console.log('  ok      the printer receives one colour mode per colour run, spelled for its queue');
   process.exit(0);
 }
+
+const key = process.argv[2] || 'merged';
+const queue = process.argv[3] || 'ipp';
 
 if (!SCENARIOS[key]) {
   console.error('  unknown scenario: ' + key);
@@ -174,7 +198,7 @@ if (!SCENARIOS[key]) {
   process.exit(1);
 }
 
-const r = runOne(key).result;
+const r = runOne(key, queue).result;
 console.log('  ' + SCENARIOS[key].label);
 console.log('  ok=' + r.ok + (r.ok ? '' : '   error=' + r.result));
 console.log('  lp invocations: ' + r.calls.length);

@@ -1352,17 +1352,20 @@ function loadKioskStatus() {
       const yn = (v) => v ? '<span style="color:#16a34a;font-weight:600;">Yes</span>'
                           : '<span style="color:#dc2626;font-weight:600;">No</span>';
 
-      // Ignore the diagnostic probe rows (kiosk-error / canary). They are liveness
-// checks, not the kiosk's own status report.
-if (s.kiosk_id === 'kiosk-error' || s.kiosk_id === 'canary') {
-  const badgeProbe = document.getElementById('kioskOnlineBadge');
-  if (badgeProbe) { badgeProbe.textContent = 'No Status Yet'; badgeProbe.className = 'badge badge-warning'; }
-  body.innerHTML = '<p class="text-sm text-muted">The screen is alive but has not sent a status update yet.'
-    + ' Diagnostic probe: <code>' + (s.state || '') + '</code><br>'
-    + (s.detail ? ('<span class="text-xs">' + String(s.detail).slice(0, 300) + '</span>') : '')
-    + '</p>';
-  return;
-}
+      // The probe (kiosk-error / canary) is a liveness check, not the kiosk's
+      // own report. It only becomes the headline when the real kiosk-1 report is
+      // missing entirely - probe_only is decided server-side, because the two
+      // writers post on independent 20 s clocks and whoever happened to land
+      // last used to win.
+      if (d.probe_only || s.kiosk_id === 'kiosk-error' || s.kiosk_id === 'canary') {
+        const badgeProbe = document.getElementById('kioskOnlineBadge');
+        if (badgeProbe) { badgeProbe.textContent = 'No Status Yet'; badgeProbe.className = 'badge badge-warning'; }
+        body.innerHTML = '<p class="text-sm text-muted">The screen is alive but has not sent a status update yet.'
+          + ' Diagnostic probe: <code>' + escHtml(String(s.state || '').slice(0, 200)) + '</code><br>'
+          + (s.detail ? ('<span class="text-xs">' + escHtml(String(s.detail).slice(0, 300)) + '</span>') : '')
+          + '</p>';
+        return;
+      }
 
 const problems = [];
       if (s.detail && /ERR:|JS ERROR|PROMISE ERROR/.test(s.detail)) {
@@ -1412,6 +1415,12 @@ const problems = [];
       if (s.last_log) {
         html += '<p class="text-xs text-muted" style="margin-top:12px;"><strong>Latest log:</strong><br>'
           + String(s.last_log).replace(/&/g, '&amp;').replace(/</g, '&lt;') + '</p>';
+      }
+      // Always keep the probe visible as evidence, even when the real status is
+      // healthy: it is the only thing that proves the page itself still renders.
+      if (d.probe && d.probe.state) {
+        html += '<p class="text-xs text-muted" style="margin-top:10px;"><strong>Probe</strong> ('
+          + d.probe.age_seconds + 's ago): <code>' + escHtml(String(d.probe.state).slice(0, 200)) + '</code></p>';
       }
       body.innerHTML = html;
     })

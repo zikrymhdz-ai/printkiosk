@@ -83,8 +83,10 @@ ok(/will be KEPT/.test(cust) && /reason/.test(cust),
 
 // The existing clear-all must keep working: it sends no job_ids, which the
 // server treats as "no narrowing".
-ok(/body: JSON\.stringify\(\{ confirm: false \}\)/.test(cust),
+const clearAllSrc = cust.slice(cust.indexOf('function clearAllJobs'), cust.indexOf('function returnToPayment'));
+ok(/\{ confirm: false \}/.test(clearAllSrc),
   'clear-all still sends no selection, so it still means everything clearable');
+ok(!/job_ids/.test(clearAllSrc), 'and it must never send a selection it does not have');
 
 // ---- the helpers, run for real --------------------------------------------
 const names = ['currentSelectableJobIds', 'onJobSelectChange', 'toggleSelectAllJobs', 'updateSelectionUI'];
