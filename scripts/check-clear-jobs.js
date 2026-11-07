@@ -68,6 +68,14 @@ for (const j of [
 ok(canClear({ status: 'pending', paid: false, print_pin: '4821' }),
    'clear a not-paid job even though it has a PIN');
 ok(canClear({ status: 'pending', paid: false, print_pin: null }), 'clear a not-paid job');
+ok(canClear({ status: 'ready_to_print', paid: false, print_pin: '4821' }),
+   'clear an unpaid ready_to_print job');
+ok(canClear({ status: 'failed', paid: false, print_pin: null }),
+   'clear an unpaid failed job');
+ok(!canClear({ status: 'print_requested', paid: false, print_pin: '4821' }),
+   'keep an unpaid job already sent to the printer');
+ok(!canClear({ status: 'printing', paid: false, print_pin: null }),
+   'keep an unpaid job that is printing');
 
 // --- the PIN must still protect work that has not printed ------------------
 for (const j of [
@@ -91,7 +99,7 @@ for (const j of [
 // This is the whole point of executing both: a drift here is a button that is
 // offered and then refused (or the reverse).
 const MATRIX = [];
-for (const status of ['completed', 'cancelled', 'pending', 'printing', 'ready_to_print', 'failed', 'refund_issued', 'partial']) {
+for (const status of ['completed', 'cancelled', 'pending', 'printing', 'print_requested', 'ready_to_print', 'failed', 'refund_issued', 'partial']) {
   for (const paid of [true, false]) {
     for (const print_pin of ['4821', null]) MATRIX.push({ status, paid, print_pin });
   }

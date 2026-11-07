@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const { json, err, supabaseRequest, NOTIFICATION_SECRET, validateSession, safeEqual } = require('./_shared');
+const { sendCoinPush } = require('./_push');
 
 // How long after upload a payment can still settle the job. Generous on
 // purpose: this is the difference between "customer paid" and "customer paid
@@ -56,7 +57,7 @@ exports.handler = async (event) => {
 // customer makes a single payment. That was wrong: the reward is for having
 // something printed, so five files earn five coins even when they arrive
 // together in one order and one transfer. Reverted to per file.
-async function awardFileCoin(job) {
+async function awardFileCoin(job, opts) {
   if (!job || !job.user_id) return 0;
 
   const userResult = await supabaseRequest('GET', '/users', null, {
@@ -70,7 +71,9 @@ async function awardFileCoin(job) {
 
   const newBalance = (parseInt(userResult.data[0].coins, 10) || 0) + 1;
 
-  await supabaseRequest('PATCH', '/users?id=eq.' + job.user_id, { coins: newBalance });
+  const credit = await supabaseRequest('PATCH', '/users?id=eq.' + job.user_id, { coins: newBalance });
+  if (credit.error) return 0;
+
   await supabaseRequest('POST', '/coin_transactions', {
     user_id: job.user_id,
     print_job_id: job.id,
@@ -80,10 +83,17 @@ async function awardFileCoin(job) {
     balance_after: newBalance
   });
 
+  // After the award is committed. A multi-file order passes notify:false and
+  // sends one message for the total, so a five-file print does not buzz the
+  // customer five times. sendCoinPush never throws.
+  if (!opts || opts.notify !== false) {
+    await sendCoinPush(job.user_id, 1);
+  }
+
   return 1;
 }
 
-async function confirmJobPaid(job, method, reference) {
+async function confirmJobPaid(job, method, reference, opts) {
 
   const paymentResult = await supabaseRequest('POST', '/payments', {
     print_job_id: job.id,
@@ -109,7 +119,7 @@ async function confirmJobPaid(job, method, reference) {
   let coinsEarned = 0;
   // One coin per file. In a multi-file order confirmJobPaid runs once per file,
   // so each one is credited separately - which is the intended behaviour.
-  coinsEarned = await awardFileCoin(job);
+  coinsEarned = await awardFileCoin(job, opts);
 
   await supabaseRequest('POST', '/alerts', {
     type: 'payment_received',
@@ -281,7 +291,7 @@ async function handleNlsReceived(event) {
     // so a five-file order earns five coins even though the customer paid once.
     let coins = 0;
     for (let i = 0; i < orderJobs.length; i++) {
-      const r = await confirmJobPaid(orderJobs[i], 'DuitNow (order)', ref);
+      const r = await confirmJobPaid(orderJobs[i], 'DuitNow (order)', ref, { notify: false });
       if (!r.ok) {
         await supabaseRequest('POST', '/alerts', {
           type: 'payment_received',
@@ -294,6 +304,9 @@ async function handleNlsReceived(event) {
       }
       coins += r.coinsEarned || 0;
     }
+
+    // One notification for the whole order, after every coin is committed.
+    if (coins > 0) await sendCoinPush(orderJobs[0].user_id, coins);
 
     await supabaseRequest('POST', '/alerts', {
       type: 'payment_received',

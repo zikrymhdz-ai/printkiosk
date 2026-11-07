@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <link rel="manifest" href="/manifest.webmanifest">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -11,22 +11,22 @@
 <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
 <link rel="icon" type="image/png" sizes="192x192" href="/assets/icon-192.png">
 <link rel="icon" type="image/png" sizes="512x512" href="/assets/icon-512.png">
-<title>PrintKiosk — Intro</title>
+<title>PrintKiosk â€” Intro</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700;900&display=swap" rel="stylesheet">
 <style>
   :root{
-    --bg-top:#eaf1ff;
-    --bg-bottom:#f8faff;
-    --printer-body:#2e3444;
-    --printer-body-light:#3d445a;
-    --printer-slot:#181c26;
+    --bg-top:#f7faff;
+    --bg-bottom:#ffffff;
+    --printer-body:#2e3a52;
+    --printer-body-light:#46536b;
+    --printer-slot:#131a2b;
     --paper:#ffffff;
-    --paper-line:#cfd8e6;
-    --accent:#3b6ef6;
-    --accent-2:#22c7b8;
-    --ink:#1b2033;
-    --muted:#7580a0;
+    --paper-line:#d8e1ef;
+    --accent:#2563eb;
+    --accent-2:#0d9488;
+    --ink:#172033;
+    --muted:#8a97ad;
   }
 
   *{ box-sizing:border-box; }
@@ -94,14 +94,14 @@
     width:8px; height:8px;
     border-radius:50%;
     background:var(--accent-2);
-    box-shadow:0 0 8px 2px rgba(34,199,184,0.7);
+    box-shadow:none;
     animation:blink 1.1s ease-in-out infinite;
   }
   .printer-base{
     position:absolute;
     left:-8px; right:-8px; bottom:-10px;
     height:14px;
-    background:#242938;
+    background:#242f45;
     border-radius:8px;
   }
 
@@ -115,7 +115,7 @@
     margin-left:-48px;
     background:var(--paper);
     border-radius:3px;
-    box-shadow:0 8px 20px rgba(20,30,60,0.18);
+    box-shadow:0 8px 20px rgba(2,32,71,0.18);
     opacity:0;
     padding:16px 14px;
     animation:
@@ -216,6 +216,39 @@
     0%{ opacity:1; transform:translate(0,0) scale(1); }
     100%{ opacity:0; transform:translate(var(--dx),var(--dy)) scale(0.4); }
   }
+
+  /* ===== shared identity pass - mirrors styles.css =====
+     These pages carry their own <style> instead of linking styles.css,
+     so the shared identity is repeated here. Keep in step with the
+     tokens in styles.css when either changes. */
+  html, body { font-family:'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale; }
+  .auth-title { font-family:'Iowan Old Style','Palatino Linotype',Palatino,'Source Serif 4',Georgia,'Times New Roman',serif;
+    font-weight:600; letter-spacing:-0.015em; }
+  .auth-subtitle { color:#5b6b83; }
+  :focus-visible { outline:2px solid #2563eb; outline-offset:2px; }
+  ::selection { background:#e8efff; color:#0f172a; }
+  .field input, .modal-card input, input[type=text], input[type=email], input[type=password], input[type=tel] {
+    border-radius:10px; border-color:#cbd5e1; box-shadow:inset 0 1px 2px rgba(15,23,42,0.05);
+    transition:border-color .2s ease, box-shadow .2s ease, background .2s ease; color:#0f172a; }
+  .field input:focus, .modal-card input:focus { border-color:#2563eb; box-shadow:0 0 0 3px #e8efff; background:#ffffff; }
+  /* Rubber-stamp button: thickness that collapses when pressed. */
+  .submit-btn, .chip-btn, .link-btn {
+    border-radius:10px; background:#2563eb; border:1px solid #1e40af; color:#ffffff;
+    box-shadow:0 2px 0 #1e40af, 0 10px 20px -10px rgba(29,78,216,0.55);
+    transition:transform .12s ease, box-shadow .16s ease, background .2s ease; }
+  .submit-btn:hover:not(:disabled), .chip-btn:hover:not(:disabled) { background:#1d4ed8; transform:translateY(-1px);
+    box-shadow:0 3px 0 #1e40af, 0 14px 24px -12px rgba(29,78,216,0.6); }
+  .submit-btn:active:not(:disabled), .chip-btn:active:not(:disabled) { transform:translateY(1px); box-shadow:0 1px 0 #1e40af; }
+  .guest-btn { border-radius:10px; border-color:#cbd5e1; transition:background .2s ease, border-color .2s ease; }
+  .guest-btn:hover { background:#e8efff; border-color:#2563eb; }
+  .row-between a, .switch-line a, .terms-row a { text-decoration:none; border-bottom:1px solid transparent; transition:border-color .2s ease; }
+  .row-between a:hover, .switch-line a:hover, .terms-row a:hover { border-bottom-color:currentColor; }
+  .modal-card { border-radius:14px; border:1px solid #e2e8f0; }
+  .modal-overlay { background:rgba(15,23,42,0.42); backdrop-filter:blur(3px); -webkit-backdrop-filter:blur(3px); }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration:0.01ms !important; animation-iteration-count:1 !important; transition-duration:0.01ms !important; }
+  }
 </style>
 </head>
 <body>
@@ -287,6 +320,7 @@
       if (!token) { decide('login.html'); return; }
 
       return fetch(API('auth', 'verify-session'), {
+        method: 'POST',
         headers: { 'X-Session-Token': token }
       }).then(function (r) {
         return r.json().then(function (d) { return { ok: r.ok && d && d.success, data: d }; });

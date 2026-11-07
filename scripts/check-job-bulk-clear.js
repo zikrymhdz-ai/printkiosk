@@ -186,6 +186,10 @@ if (cr) {
   const clearCases = [
     ['a pending UNPAID job that has a PIN', { status: 'pending', paid: false, print_pin: '827191' }],
     ['a pending unpaid job with no PIN', { status: 'pending', paid: false, print_pin: null }],
+    // Unpaid means nothing is owed and nothing can be collected, whatever the
+    // status says. ready_to_print here is an anomalous row, not a live print.
+    ['an UNPAID ready_to_print job', { status: 'ready_to_print', paid: false, print_pin: '555' }],
+    ['an UNPAID failed job', { status: 'failed', paid: false, print_pin: null }],
     // 28 of 65 printed jobs in the live table still carried their PIN. A PIN on
     // something already printed is meaningless, so it must not block deletion.
     ['a PRINTED job that still carries its PIN', { status: 'completed', paid: true, print_pin: '553311' }],
@@ -200,11 +204,10 @@ if (cr) {
     ['a pending PAID job with a PIN', { status: 'pending', paid: true, print_pin: '827191' }],
     ['a job that is printing', { status: 'printing', paid: true, print_pin: '1' }],
     ['a failed PAID job needing a refund', { status: 'failed', paid: true, print_pin: null }],
-    // Deliberate: ready_to_print normally follows payment, so an unpaid one is
-    // an anomalous state rather than an ordinary unpaid order. Left blocked
-    // rather than assumed safe.
-    ['an unpaid ready_to_print job (anomalous, left blocked)',
-      { status: 'ready_to_print', paid: false, print_pin: '555' }],
+    // The one unpaid exception: the kiosk already owns this job, so deleting the
+    // row would pull it out from under the worker.
+    ['an unpaid job already sent to the printer',
+      { status: 'print_requested', paid: false, print_pin: '555' }],
   ];
   for (const [name, job] of keptCases) {
     ok(reason(job) !== null, name + ' is kept');
@@ -241,6 +244,8 @@ if (clientSrc) {
     { status: 'completed', paid: false, print_pin: '7' },
     { status: 'cancelled', paid: true, print_pin: '553311' },
     { status: 'ready_to_print', paid: true, print_pin: '91' },
+    { status: 'ready_to_print', paid: false, print_pin: '91' },
+    { status: 'print_requested', paid: false, print_pin: '91' },
     { status: 'printing', paid: true, print_pin: '12' },
     { status: 'failed', paid: true, print_pin: null },
     { status: 'refund_issued', paid: true, print_pin: null },
@@ -258,6 +263,48 @@ if (clientSrc) {
   }
   ok(drift === 0, 'the page and the server agree on all ' + STATES.length + ' job states');
 }
+
+// --- a multi-file local entry must not duplicate its server order ----------
+// A local uploadedJobs entry stores "PRN-A,PRN-B", while the server returns
+// two rows with individual job ids. Comparing the joined string directly never
+// matched, so the header-only local card was kept beside the real order card.
+const dedupeSrc = (html.match(/function localEntryHasServerJob[\s\S]*?\n\}/) || [])[0];
+ok(!!dedupeSrc, 'the jobs list can match a multi-file local entry to its server rows');
+if (dedupeSrc) {
+  const has = new Function(dedupeSrc + '\nreturn localEntryHasServerJob;')();
+  const db = [{ job_id: 'PRN-A' }, { job_id: 'PRN-B' }];
+  ok(has({ job_id: 'PRN-A,PRN-B' }, db), 'a comma-joined local id matches the server rows');
+  ok(has({ job_id: 'PRN-X', server_jobs: [{ job_id: 'PRN-B' }] }, db),
+    'a local entry with server_jobs also matches');
+  ok(!has({ job_id: 'PRN-X,PRN-Y' }, db), 'an unrelated local entry is kept');
+}
+ok(/localEntryHasServerJob\(lj, dbJobs\)/.test(html),
+  'both the render and prune paths use the multi-file matcher');
+
+// --- render-level safety net ----------------------------------------------
+// Even if an older local cache survives the prune, two groups covering the same
+// job ids must not both render.
+const orderKeySrc = (html.match(/function orderJobKey[\s\S]*?\n\}/) || [])[0];
+const orderDedupeSrc = (html.match(/function dedupeOrders[\s\S]*?\n\}/) || [])[0];
+ok(!!orderKeySrc && !!orderDedupeSrc, 'the renderer has a final order dedupe');
+if (orderKeySrc && orderDedupeSrc) {
+  const dedupe = new Function(orderKeySrc + '\n' + orderDedupeSrc + '\nreturn dedupeOrders;')();
+  const local = { files: [{ job_id: 'PRN-A,PRN-B' }] };
+  const server = { files: [{ job_id: 'PRN-A' }, { job_id: 'PRN-B' }] };
+  const other = { files: [{ job_id: 'PRN-C' }] };
+  const one = dedupe([local, server]);
+  ok(one.length === 1 && one[0].files.length === 2,
+    'a local header card collapses into the server order');
+  const two = dedupe([server, local]);
+  ok(two.length === 1 && two[0] === server, 'the server card wins either way round');
+  ok(dedupe([local, server, other]).length === 2, 'unrelated orders are kept');
+}
+
+// A single-file order already names its file in the per-file row; the order
+// header would repeat the same filename, job id and status.
+ok(/var headerBlock = '';/.test(html) &&
+   /if \(many\) \{[\s\S]{0,500}files in one order/.test(html),
+  'single-file cards omit the duplicate order header');
 
 if (failed) { console.log('  -> ' + failed + ' failed'); process.exit(1); }
 console.log('  ok      bulk clearing is scoped to the owner and pruned to what is on screen');

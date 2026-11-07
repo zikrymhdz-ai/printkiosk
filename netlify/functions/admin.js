@@ -1,4 +1,4 @@
-const { json, err, supabaseRequest, validateSession, supabaseStorageDelete, JOB_PAYABLE_WINDOW_MIN, freshnessOf, computePaper } = require('./_shared');
+const { json, err, supabaseRequest, validateSession, supabaseStorageDelete, JOB_PAYABLE_WINDOW_MIN, LIVE_FRAME_WINDOW_MIN, freshnessOf, computePaper } = require('./_shared');
 
 exports.handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') return json({});
@@ -27,6 +27,9 @@ exports.handler = async (event) => {
       case 'payment-log': return getPaymentLog(url);
       case 'payment-review': return getPaymentReview(url);
       case 'pending-payable': return getPendingPayableJobs();
+      case 'kiosk-frame-latest': return getKioskFrameLatest();
+      case 'kiosk-frames': return getKioskFrames(url);
+      case 'kiosk-frame': return getKioskFrame(url);
       default: return err('Invalid action');
     }
   } else if (event.httpMethod === 'POST') {
@@ -76,15 +79,26 @@ async function getStats() {
   }
 
   const allJobsResult = await supabaseRequest('GET', '/print_jobs', null, {
-    'select': 'id,total_price,status,paid'
+    'select': 'id,total_price,status,paid,created_at'
   });
+
+  // Unpaid uploads stop being matchable once the payable window closes, so after
+  // that an abandoned checkout can never be paid and can never reach a printer.
+  // Counting them anyway is what made this card read 32 pending jobs while the
+  // queue held none - every one of them a row from weeks earlier that no one
+  // could act on. Paid rows keep counting at any age: that money changed hands
+  // and the document really is still waiting for paper.
+  const pendingCutoff = new Date(Date.now() - JOB_PAYABLE_WINDOW_MIN * 60 * 1000).toISOString();
 
   let allTimeJobs = 0, allTimeRevenue = 0, pendingJobs = 0, printingJobs = 0;
   if (!allJobsResult.error && allJobsResult.data) {
     for (const job of allJobsResult.data) {
       allTimeJobs++;
       if (job.paid) allTimeRevenue += parseFloat(job.total_price);
-      if (job.status === 'pending') pendingJobs++;
+      if (job.status === 'pending') {
+        const paid = job.paid === true || job.paid === 'true';
+        if (paid || (job.created_at && job.created_at >= pendingCutoff)) pendingJobs++;
+      }
       if (job.status === 'printing') printingJobs++;
     }
   }
@@ -977,6 +991,83 @@ async function getKioskStatus() {
   });
 }
 
+// ---- Live camera frames ----------------------------------------------------
+// The Pi cannot accept an inbound connection, so "live" here means the kiosk
+// publishes a still frame every ~1.5s and this serves the newest one. The
+// dashboard swaps its <img> source on a timer, which reads as a live view and
+// leaves every frame as a file the admin can download.
+//
+// Images are returned as real image responses (not JSON base64) so the browser
+// can cache/decode them natively and the admin page never holds the bytes.
+function imageResponse(row) {
+  const m = /^data:(image\/(?:png|jpeg|jpg));base64,([A-Za-z0-9+/=]+)$/.exec(String(row.data || ''));
+  if (!m) return json({ success: false, error: 'Bad image' }, 404);
+  return {
+    statusCode: 200,
+    headers: {
+      'Content-Type': m[1],
+      // No caching anywhere: a cached frame is a stale frame.
+      'Cache-Control': 'no-store, max-age=0'
+    },
+    body: m[2],
+    isBase64Encoded: true
+  };
+}
+
+// Retention must survive the publisher stopping. Pruning only on write meant
+// that switching the feed off left the last pictures of the shop sitting in the
+// table indefinitely, because nothing was being written to trigger the cleanup.
+let lastFrameReadPrune = 0;
+function pruneLiveFrames() {
+  const now = Date.now();
+  if (now - lastFrameReadPrune < 60000) return;
+  lastFrameReadPrune = now;
+  const cutoff = new Date(now - LIVE_FRAME_WINDOW_MIN * 60 * 1000).toISOString();
+  supabaseRequest('DELETE', '/kiosk_frames', null, { 'created_at': 'lt.' + cutoff })
+    .catch(function () {});
+}
+
+async function getKioskFrameLatest() {
+  pruneLiveFrames();
+  const result = await supabaseRequest('GET', '/kiosk_frames', null, {
+    'select': 'id,mime,data,created_at',
+    'order': 'created_at.desc',
+    'limit': '1'
+  });
+  if (result.error) return json({ success: false, error: 'Live frames unavailable' }, 404);
+  const row = result.data && result.data[0];
+  if (!row) return json({ success: false, error: 'No frames yet' }, 404);
+  return imageResponse(row);
+}
+
+async function getKioskFrame(url) {
+  const id = String(url.searchParams.get('id') || '');
+  if (!/^[0-9a-fA-F-]{36}$/.test(id)) return json({ success: false, error: 'Invalid id' }, 400);
+
+  const result = await supabaseRequest('GET', '/kiosk_frames', null, {
+    'select': 'id,mime,data,created_at', 'id': 'eq.' + id, 'limit': '1'
+  });
+  if (result.error || !result.data || !result.data.length) {
+    return json({ success: false, error: 'No frame' }, 404);
+  }
+  return imageResponse(result.data[0]);
+}
+
+// The recent-frame strip: ids and times only. Shipping the images here would
+// multiply the payload by the frame count for thumbnails the page fetches
+// individually anyway.
+async function getKioskFrames(url) {
+  pruneLiveFrames();
+  const limit = Math.min(60, Math.max(1, parseInt(url.searchParams.get('limit') || '24', 10)));
+  const result = await supabaseRequest('GET', '/kiosk_frames', null, {
+    'select': 'id,created_at',
+    'order': 'created_at.desc',
+    'limit': String(limit)
+  });
+  if (result.error) return json({ success: true, frames: [], unavailable: true });
+  return json({ success: true, frames: result.data || [] });
+}
+
 async function getKioskSettingsAdmin() {
   const result = await supabaseRequest('GET', '/kiosk_settings', null, {
     'id': 'eq.default', 'select': '*', 'limit': '1'
@@ -989,6 +1080,7 @@ async function getKioskSettingsAdmin() {
       settings: {
         face_login_enabled: true,
         maintenance_mode: false,
+        camera_stream_enabled: false,
         maintenance_message: 'Kiosk temporarily unavailable for maintenance. Please see staff.'
       }
     });
@@ -1001,6 +1093,7 @@ async function getKioskSettingsAdmin() {
     settings: {
       face_login_enabled: row ? row.face_login_enabled !== false : true,
       maintenance_mode: row ? !!row.maintenance_mode : false,
+      camera_stream_enabled: row ? !!row.camera_stream_enabled : false,
       maintenance_message: row && row.maintenance_message
         ? row.maintenance_message
         : 'Kiosk temporarily unavailable for maintenance. Please see staff.',
@@ -1019,6 +1112,9 @@ async function setKioskSettingsAdmin(event, session) {
   if (body.face_login_enabled !== undefined) {
     update.face_login_enabled = !!body.face_login_enabled;
   }
+  if (body.camera_stream_enabled !== undefined) {
+    update.camera_stream_enabled = !!body.camera_stream_enabled;
+  }
   if (body.maintenance_mode !== undefined) {
     update.maintenance_mode = !!body.maintenance_mode;
   }
@@ -1030,13 +1126,29 @@ async function setKioskSettingsAdmin(event, session) {
   if (Object.keys(update).length <= 3) return err('No settings supplied');
 
   let result = await supabaseRequest('PATCH', '/kiosk_settings?id=eq.default', update);
+
+  // The camera column arrives with 20261104_kiosk_live_frames.sql. Until that is
+  // run, a save that merely carries the new flag must not take maintenance mode
+  // and face login down with it: retry without it and say why.
+  let streamColumnMissing = false;
+  if (result.error && update.camera_stream_enabled !== undefined &&
+      /camera_stream_enabled/i.test(String(result.message || ''))) {
+    streamColumnMissing = true;
+    const withoutStream = Object.assign({}, update);
+    delete withoutStream.camera_stream_enabled;
+    result = await supabaseRequest('PATCH', '/kiosk_settings?id=eq.default', withoutStream);
+  }
+
   if (result.error) {
     // Default row may not exist yet.
-    result = await supabaseRequest('POST', '/kiosk_settings', Object.assign({
+    const insert = Object.assign({
       face_login_enabled: true,
       maintenance_mode: false,
+      camera_stream_enabled: false,
       maintenance_message: 'Kiosk temporarily unavailable for maintenance. Please see staff.'
-    }, update));
+    }, update);
+    if (streamColumnMissing) delete insert.camera_stream_enabled;
+    result = await supabaseRequest('POST', '/kiosk_settings', insert);
     if (result.error) return err('Failed to save kiosk settings: ' + (result.message || ''), 500);
   }
 
@@ -1049,6 +1161,14 @@ async function setKioskSettingsAdmin(event, session) {
         (update.face_login_enabled !== undefined ? ' - face login ' + (update.face_login_enabled ? 'ON' : 'OFF') : ''),
       severity: update.maintenance_mode ? 'warning' : 'info',
       is_read: false
+    });
+  }
+
+  if (streamColumnMissing) {
+    return json({
+      success: true,
+      message: 'Kiosk settings saved, but the live camera switch needs the database migration.',
+      missing_migration: 'migrations/20261104_kiosk_live_frames.sql'
     });
   }
 

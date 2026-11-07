@@ -1,6 +1,8 @@
 [build]
   publish = "."
   functions = "netlify/functions"
+  command = "npm ci && echo 'build v131'"
+  # Force rebuild cache bust: 2026-11-04
 
 [functions]
   node_bundler = "esbuild"

@@ -50,7 +50,7 @@ function rewrite(file, re, name, value) {
 // Also rewrites an EXISTING stamp, because the placeholder is consumed on the
 // first run - matching only the token meant every later bump silently left the
 // pages pointing at the previous build.
-const ASSET_STAMP_RE = /(pagerange\.js|pstore\.js)\?v=[^"']*/g;
+const ASSET_STAMP_RE = /(pagerange\.js|pstore\.js|push\.js)\?v=[^"']*/g;
 
 function stampBuild(file) {
   const rel = path.relative(ROOT, file);

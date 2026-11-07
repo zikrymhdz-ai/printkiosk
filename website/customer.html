@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <link rel="manifest" href="/manifest.webmanifest">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -16,11 +16,12 @@
 <link rel="stylesheet" href="../styles.css">
 <link href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.css" rel="stylesheet">
 <script src="../frontend_config.js"></script>
-<script src="pstore.js?v=2026.10.27-104"></script>
+<script src="pstore.js?v=2026.11.04-138"></script>
+<script src="push.js?v=2026.11.04-138"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script>pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
 <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
-<script src="pagerange.js?v=2026.10.27-104"></script>
+<script src="pagerange.js?v=2026.11.04-138"></script>
 <script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/dist/face-api.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.js"></script>
 <style>
@@ -72,7 +73,7 @@
     border: 1px solid rgba(37,99,235,0.14);
     backdrop-filter: blur(22px) saturate(160%);
     -webkit-backdrop-filter: blur(22px) saturate(160%);
-    box-shadow: 0 18px 40px rgba(2,32,71,0.22), inset 0 1px 0 rgba(255,255,255,0.9);
+    box-shadow: 0 18px 40px rgba(15,23,42,0.12), inset 0 1px 0 rgba(255,255,255,0.9);
     overflow: hidden;
   }
   /* Soft ripple that spreads from the exact spot you tapped. */
@@ -92,10 +93,12 @@
      smoothly like liquid instead of sliding stiffly. */
   .rsx-blob, .rsx-blob-trail {
     position: absolute; top: 7px; left: 0; width: 56px; height: 56px; border-radius: 50%;
-    background: linear-gradient(135deg, #2563eb, #60a5fa);
+    background: linear-gradient(135deg, #2563eb, #93c5fd);
     transform: translateX(8px);
     will-change: transform;
     backface-visibility: hidden;
+    /* Fades out when the open page is not one of the bar's destinations. */
+    transition: opacity .25s ease;
   }
   .rsx-blob-trail {
     opacity: .85; width: 50px; height: 50px; top: 10px;
@@ -109,18 +112,18 @@
     -webkit-tap-highlight-color: transparent; touch-action: manipulation;
   }
   .rsx-item svg {
-    width: 22px; height: 22px; stroke: #64748b; stroke-width: 1.8; fill: none;
+    width: 22px; height: 22px; stroke: #5b6b83; stroke-width: 1.8; fill: none;
     stroke-linecap: round; stroke-linejoin: round;
     transition: stroke .35s ease, transform .6s cubic-bezier(.34,1.56,.64,1);
   }
   .rsx-item .label {
-    font-size: 10.5px; font-weight: 600; color: #1e293b;
+    font-size: 11px; font-weight: 600; color: #172033;
     opacity: 0; transform: translateY(8px) scale(.9);
     transition: opacity .25s ease, transform .5s cubic-bezier(.34,1.56,.64,1); letter-spacing: .01em;
   }
   /* The icon turns white a beat after it lifts, right as the blob arrives under it. */
   .rsx-item.active svg {
-    stroke: #fff; transform: translateY(-11px) scale(1.05);
+    stroke: #ffffff; transform: translateY(-11px) scale(1.05);
     transition: stroke .3s ease .14s, transform .6s cubic-bezier(.34,1.56,.64,1) .04s;
   }
   .rsx-item.active .label {
@@ -132,15 +135,15 @@
   /* center = Upload FAB */
   .rsx-item.rsx-fab .fab-btn {
     width: 56px; height: 56px; border-radius: 50%; margin: -20px 0 0;
-    background: linear-gradient(135deg, #2563eb, #60a5fa);
-    border: 4px solid #fff;
-    box-shadow: 0 12px 24px rgba(37,99,235,.45);
+    background: linear-gradient(135deg, #2563eb, #93c5fd);
+    border: 4px solid #ffffff;
+    box-shadow: 0 12px 24px rgba(15,23,42,.18);
     display: flex; align-items: center; justify-content: center;
     transition: transform .45s cubic-bezier(.34,1.56,.64,1), box-shadow .35s ease;
   }
   .rsx-item.rsx-fab:active .fab-btn { transform: scale(.88); transition-duration: .15s; }
   .rsx-item.rsx-fab.active .fab-btn {
-    box-shadow: 0 14px 28px rgba(37,99,235,.55);
+    box-shadow: 0 14px 28px rgba(15,23,42,.22);
     animation: rsxFabPop .6s cubic-bezier(.34,1.56,.64,1);
   }
   @keyframes rsxFabPop {
@@ -148,7 +151,7 @@
     55%  { transform: scale(1.1); }
     100% { transform: scale(1); }
   }
-  .rsx-item.rsx-fab svg { stroke: #fff; width: 24px; height: 24px; }
+  .rsx-item.rsx-fab svg { stroke: #ffffff; width: 24px; height: 24px; }
   .rsx-item.rsx-fab.active svg { transform: none; }
   .rsx-item.rsx-fab .label { display: none; }
   @keyframes spin { to { transform: rotate(360deg); } }
@@ -163,7 +166,7 @@
   /* ---- Full-screen upload / processing loader ---- */
   .pk-overlay { position: fixed; inset: 0; z-index: 900; display: flex; align-items: center; justify-content: center;
     background: rgba(15,23,42,0.72); backdrop-filter: blur(3px); padding: 24px; }
-  .pk-overlay-card { background: #fff; border-radius: 20px; padding: 36px 32px; text-align: center;
+  .pk-overlay-card { background: #ffffff; border-radius: 20px; padding: 36px 32px; text-align: center;
     max-width: 380px; width: 100%; box-shadow: 0 24px 60px rgba(15,23,42,0.35); }
   .pk-spinner { width: 52px; height: 52px; margin: 0 auto 20px; border-radius: 50%;
     border: 5px solid var(--primary-light); border-top-color: var(--primary);
@@ -189,6 +192,53 @@
   .job-del.busy .job-spin { display: inline-block; }
   /* A bulk delete disables the toolbar; keep it obviously inert. */
   .jobs-busy #deleteSelectedBtn, .jobs-busy #clearAllBtn, .jobs-busy #selectAllJobsBtn { opacity: 0.55; }
+
+  /* Transactions: a compact list. The job id is the headline, the date is
+     small underneath, and the amount sits on the right - payments red and
+     negative, coins green and positive. */
+  #transactionsCard { padding: 18px; }
+  #transactionsCard .card-header { margin-bottom: 10px; }
+  #transactionsCard .tx-list { display: flex; flex-direction: column; }
+  #transactionsCard .tx-row {
+    display: flex; justify-content: space-between; align-items: flex-start;
+    gap: 12px; padding: 11px 2px; border-bottom: 1px solid var(--rule);
+  }
+  #transactionsCard .tx-row:last-child { border-bottom: none; }
+  #transactionsCard .tx-left { min-width: 0; }
+  #transactionsCard .tx-title {
+    font-size: 14px; font-weight: 700; color: var(--ink);
+    line-height: 1.3; overflow-wrap: anywhere;
+  }
+  #transactionsCard .tx-meta { font-size: 10.5px; color: var(--ink-4); margin-top: 2px; }
+  #transactionsCard .tx-amount {
+    font-size: 14px; font-weight: 700; white-space: nowrap; flex: 0 0 auto;
+  }
+  #transactionsCard .tx-amount.neg { color: #dc2626; }
+  #transactionsCard .tx-amount.pos { color: #15803d; }
+  #transactionsCard .tx-amount.zero { color: var(--ink-3); }
+  #transactionsCard .tx-empty {
+    text-align: center; color: var(--gray-400); padding: 20px 8px; font-size: 12px;
+  }
+  #txFilter { width: fit-content; }
+  #txFilter .tab { padding: 7px 12px; font-size: 12.5px; }
+
+  @media (max-width: 640px) {
+    #transactionsCard { padding: 12px; }
+    #transactionsCard .tx-title { font-size: 13px; }
+    #transactionsCard .tx-amount { font-size: 13px; }
+    #txFilter { width: 100%; }
+    #txFilter .tab { flex: 1; text-align: center; padding: 6px 8px; font-size: 12px; }
+  }
+
+  /* Replays each time the customer switches All / Coins / Payments. */
+  @keyframes txSwap {
+    from { opacity: 0; transform: translateY(5px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  #transactionsCard .tx-list.tx-swap { animation: txSwap 0.26s ease; }
+  @media (prefers-reduced-motion: reduce) {
+    #transactionsCard .tx-list.tx-swap { animation: none; }
+  }
 </style>
 </head>
 <body>
@@ -200,6 +250,9 @@
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
       </button>
       <span class="logo"><span class="logo-mark"><svg viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="mbg" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#4C7CFF"/><stop offset="100%" stop-color="#1C2740"/></linearGradient><linearGradient id="mfold" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#E4EBFA"/><stop offset="100%" stop-color="#C7D4EE"/></linearGradient></defs><rect width="512" height="512" rx="112" fill="url(#mbg)"/><g transform="rotate(-7 256 256)"><rect x="149" y="352" width="214" height="32" rx="16" fill="#22C7B8"/><path d="M179 136L305 136L351 182L351 358Q351 376 333 376L179 376Q161 376 161 358L161 154Q161 136 179 136Z" fill="#FFF"/><path d="M305 136L351 182L305 182Z" fill="url(#mfold)"/></g></svg></span>PrintKiosk</span>
+      <button class="btn-icon btn-secondary" type="button" onclick="switchPage('report')" title="Report an issue" aria-label="Report an issue">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+      </button>
     </div>
     <div class="nav-right">
       <span class="badge badge-info" id="navCoins">0 coins</span>
@@ -208,6 +261,43 @@
     </div>
   </div>
 </div>
+
+<script>
+// Liquid-glass nav. The bar only reacts once the page has actually moved: it
+// thins out and picks up a shadow, so it keeps reading as a sheet of glass
+// lying on the page rather than a second toolbar.
+//
+// The listener is on the document in the CAPTURE phase because the content pane
+// (.main-content) is its own scroll container. A plain
+// window.addEventListener('scroll') never fires while the customer scrolls
+// their job list, which is exactly when the bar needs to settle.
+(function () {
+  var nav = document.querySelector('.nav');
+  if (!nav) return;
+  var pane = document.querySelector('.main-content');
+  var queued = false;
+
+  function apply() {
+    queued = false;
+    var y = window.pageYOffset || document.documentElement.scrollTop || 0;
+    if (pane && pane.scrollTop > y) y = pane.scrollTop;
+    var on = y > 6;
+    if (nav.classList.contains('scrolled') !== on) nav.classList.toggle('scrolled', on);
+  }
+
+  function onScroll() {
+    // One update per frame: scroll fires far more often than the screen
+    // repaints, and toggling a class on every event is wasted work on a phone.
+    if (queued) return;
+    queued = true;
+    requestAnimationFrame(apply);
+  }
+
+  document.addEventListener('scroll', onScroll, { passive: true, capture: true });
+  window.addEventListener('resize', onScroll, { passive: true });
+  apply();
+})();
+</script>
 
 <div class="sidebar-overlay" id="sidebarOverlay" onclick="toggleSidebar()"></div>
 
@@ -222,12 +312,16 @@
       My Jobs
     </div>
     <div class="sidebar-item" data-page="coins" onclick="switchPage('coins')">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
-      Coin History
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2h16v20l-3-2-3 2-3-2-3 2-3-2V2z"/><line x1="8" y1="7" x2="16" y2="7"/><line x1="8" y1="11" x2="16" y2="11"/><line x1="8" y1="15" x2="13" y2="15"/></svg>
+      Transactions
     </div>
     <div class="sidebar-item" data-page="account" onclick="switchPage('account')">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
       Account Settings
+    </div>
+    <div class="sidebar-item" data-page="location" onclick="switchPage('location')">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+      Kiosk Location
     </div>
     <div style="margin-top:auto; padding-top:16px; border-top:1px solid var(--gray-100);">
       <div class="sidebar-item" data-page="report" onclick="switchPage('report')">
@@ -305,7 +399,7 @@
             </div>
             <div class="form-group">
               <label>Duplex</label>
-              <select id="sidesMode" class="input" onchange="onOrderSettingChange()">
+              <select id="sidesMode" class="input" onchange="markSettingsDirty()">
                 <option value="single">Single-sided</option>
                 <option value="double">Double-sided (30% cheaper)</option>
               </select>
@@ -316,7 +410,7 @@
            Selecting each file sets its own. The Apply button below deliberately
            does not touch them: it copies colour and page settings only. -->
       <label>Copies <span class="text-xs text-muted" style="font-weight:400;">(this file)</span></label>
-  <input type="number" id="copies" class="input" value="1" min="1" max="99" onchange="onOrderSettingChange()">
+  <input type="number" id="copies" class="input" value="1" min="1" max="99" onchange="markSettingsDirty()">
             </div>
             <div class="form-group">
               <label>Pages</label>
@@ -383,7 +477,7 @@
               <button class="btn btn-primary" style="font-size:12px; padding:5px 14px;" onclick="applyManualCrop()">Apply Crop</button>
             </div>
             <div id="cropAppliedBar" style="display:none; margin-top:10px; flex-wrap:wrap; justify-content:center; gap:8px; align-items:center;">
-              <span class="text-sm" style="color:#16a34a; font-weight:600;">&#10003; Crop applied</span>
+              <span class="text-sm" style="color:#15803d; font-weight:600;">&#10003; Crop applied</span>
               <button class="btn btn-secondary" style="font-size:12px; padding:5px 10px;" onclick="redoCrop()">Redo Crop</button>
             </div>
             <div id="livePreviewInfo" style="margin-top:12px; display:grid; grid-template-columns:1fr 1fr; gap:8px;">
@@ -572,13 +666,24 @@
           <p class="text-sm text-muted" style="margin-top:4px;">= <strong id="coinsPageValue">RM 0.00</strong> discount value</p>
         </div>
       </div>
-      <div class="card">
-        <div class="card-header"><span class="card-title">Coin History</span></div>
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>Type</th><th>Amount</th><th>Description</th><th>Balance</th><th>Date</th></tr></thead>
-            <tbody id="coinTableBody"><tr><td colspan="5" style="text-align:center; color:var(--gray-400); padding:24px;">No transactions yet</td></tr></tbody>
-          </table>
+      <div class="card" id="pushCard" style="margin-bottom:16px; display:none;">
+        <div class="card-header">
+          <span class="card-title">Coin notifications</span>
+        </div>
+        <p class="text-sm text-muted" style="margin:0 0 12px 0;">Get a notification when you earn coins, even when this page is closed.</p>
+        <button class="btn btn-primary btn-sm" type="button" id="pushEnableBtn">Enable notifications</button>
+        <p class="text-xs text-muted" id="pushStatusText" style="margin:8px 0 0 0;"></p>
+      </div>
+      <div class="card" id="transactionsCard">
+        <div class="card-header"><span class="card-title">Transactions</span></div>
+        <p class="text-sm text-muted" style="margin:0 0 12px 0;">Coins earned, coins spent, and payments for prints.</p>
+        <div class="tabs" id="txFilter" style="margin:0 0 12px 0;">
+          <button class="tab active" type="button" data-filter="all" onclick="setTransactionFilter('all')">All</button>
+          <button class="tab" type="button" data-filter="coin" onclick="setTransactionFilter('coin')">Coins</button>
+          <button class="tab" type="button" data-filter="money" onclick="setTransactionFilter('money')">Payments</button>
+        </div>
+        <div class="tx-list" id="coinTableBody">
+          <div class="tx-empty">No transactions yet</div>
         </div>
       </div>
     </div>
@@ -664,6 +769,18 @@
       </div>
     </div>
 
+    <!-- ===== KIOSK LOCATION PAGE ===== -->
+    <div id="pageLocation" class="slide-section">
+      <div class="card">
+        <div class="card-header"><span class="card-title">Kiosk Location</span></div>
+        <p class="text-sm text-muted" id="kioskLocationLabel" style="margin-bottom:12px;">German Malaysian Institute KT5</p>
+        <div style="border-radius:var(--radius); overflow:hidden; border:1px solid var(--gray-200);">
+          <iframe id="kioskMap" src="https://www.google.com/maps?q=2.9311164,101.798479&amp;z=17&amp;output=embed" width="100%" height="400" style="border:0; width:100%; height:clamp(280px,55vh,400px); display:block;" loading="lazy" allowfullscreen referrerpolicy="no-referrer-when-downgrade" title="Kiosk location map"></iframe>
+        </div>
+        <a id="kioskDirections" class="btn btn-primary" style="margin-top:16px; text-decoration:none;" href="https://www.google.com/maps/dir/?api=1&amp;destination=2.9311164,101.798479" target="_blank" rel="noopener">Get Directions</a>
+      </div>
+    </div>
+
     <!-- ===== REPORT PAGE ===== -->
     <div id="pageReport" class="slide-section">
       <div class="card">
@@ -713,6 +830,14 @@
 const SUPABASE_URL = CONFIG.SUPABASE_URL;
 const SUPABASE_KEY = CONFIG.SUPABASE_KEY;
 
+// Kiosk location. Change these three values to move the pin; the map and the
+// directions link are both built from them.
+const KIOSK_LOCATION = {
+  lat: '2.9311164',
+  lng: '101.798479',
+  label: 'German Malaysian Institute KT5'
+};
+
 let currentJobId = null;
 let currentPrice = 0;
 let redeemOriginalTotal = 0;
@@ -739,17 +864,27 @@ async function init() {
     loadJobs();
     loadCoinHistory();
     switchPage('upload');
+    renderKioskLocation();
   } catch(e) { window.location.href = 'login.html'; }
 }
 
 function logout() {
-  fetch(API('auth', 'logout'), {
-    method: 'POST', headers: { 'X-Session-Token': token }
-  }).finally(() => {
-    PKS.remove('session_token');
-    PKS.remove('user');
-    window.location.href = 'login.html';
-  });
+  var finishLogout = function () {
+    fetch(API('auth', 'logout'), {
+      method: 'POST', headers: { 'X-Session-Token': token }
+    }).finally(() => {
+      PKS.remove('session_token');
+      PKS.remove('user');
+      window.location.href = 'login.html';
+    });
+  };
+  // Drop this device's push subscription while the token is still valid: after
+  // logout the backend can no longer prove the row belongs to this user.
+  if (window.PKPush && typeof PKPush.disable === 'function') {
+    PKPush.disable().finally(finishLogout);
+  } else {
+    finishLogout();
+  }
 }
 
 /* ===== SIDEBAR ===== */
@@ -772,7 +907,25 @@ function switchPage(page) {
   if (page === 'coins') loadCoinHistory();
   if (page === 'jobs') loadJobs();
   if (page === 'account') loadAccountSettings();
+  if (page === 'location') renderKioskLocation();
   if (window.syncMobileNav) window.syncMobileNav(page);
+}
+
+// Build the map and directions link from the one config object above, so the
+// coordinates only ever have to be edited in one place.
+function renderKioskLocation() {
+  var loc = KIOSK_LOCATION;
+  var pair = encodeURIComponent(loc.lat) + ',' + encodeURIComponent(loc.lng);
+  var label = document.getElementById('kioskLocationLabel');
+  var map = document.getElementById('kioskMap');
+  var dir = document.getElementById('kioskDirections');
+  if (label) label.textContent = loc.label;
+  if (map) {
+    var src = 'https://www.google.com/maps?q=' + pair + '&z=17&output=embed';
+    // Re-assigning the same src reloads the map and resets the customer's pan.
+    if (map.getAttribute('src') !== src) map.src = src;
+  }
+  if (dir) dir.href = 'https://www.google.com/maps/dir/?api=1&destination=' + pair;
 }
 
 /* ===== STEPPER ===== */
@@ -1125,6 +1278,7 @@ function settingsPending() {
 function confirmImageAdjustments() {
   onSettingChange();
   clearAdjustPending();
+  renderFileList();
   toastMsg('Settings confirmed');
 }
 
@@ -1905,12 +2059,12 @@ job_id: signD.job_id,
         return;
       }
       renderFileList();
-      // Files that price differently must stay in separate jobs, otherwise a
-      // black-and-white photo gets printed in colour AND charged at the colour
-      // rate. Say so, rather than letting the job count quietly surprise them.
+      // Files that cannot share a printer submission stay separate. Copies and
+      // colour now combine (copies are baked into the page sequence); only a
+      // different duplex setting or an unmergeable file type still splits.
       if (bulkFiles.length > 1) {
-        toastMsg('Kept as ' + bulkFiles.length + ' separate jobs: files with a different colour, '
-          + 'sides or copies are priced differently, so they are printed separately.');
+        toastMsg('Kept as ' + bulkFiles.length + ' separate jobs: different duplex settings '
+          + 'or file types are printed separately.');
       }
     }
 
@@ -2000,34 +2154,23 @@ var d;
   showUploadOverlay(true, { sub: 'Finalising your order...', progress: 100, note: 'Almost done...' });
   if (!pendingUploadJobs.length) { showUploadOverlay(false); alert('No files uploaded successfully'); btn.disabled = false; btn.textContent = 'Upload & Get PIN'; return; }
 
-  // Multi-file batches are merged into ONE document, ONE job, ONE payment.
-  // Single-file orders keep using seal-order unchanged.
+  // Multi-file groups were already combined client-side, including per-file
+  // copies. Anything still in separate jobs is genuinely separate (different
+  // duplex, file type, or a DOC/DOCX) and must NOT be merged here - the old
+  // merge-order call silently merged those and printed them with one side/copy
+  // setting, which is what broke uploads with different copies.
   var mergedJob = null;
   var sealedOrderTotal = null;
   try {
-    if (pendingUploadJobs.length > 1) {
-      var mergeRes = await fetch(API('upload', 'merge-order'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Session-Token': token || '' },
-        body: JSON.stringify({ order_id: currentOrderId() })
-      });
-      var mergeData = await mergeRes.json();
-      if (!mergeData.success) throw new Error(mergeData.error || 'Could not merge this order');
-      mergedJob = mergeData.job;
-      sealedOrderTotal = mergeData.total_price;
-      // The old individual rows were deleted server-side; next upload is a new order.
-      resetOrderId();
-    } else {
-      var sealRes = await fetch(API('upload', 'seal-order'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Session-Token': token || '' },
-        body: JSON.stringify({ order_id: currentOrderId() })
-      });
-      var sealData = await sealRes.json();
-      if (!sealData.success) throw new Error(sealData.error || 'Could not price this order');
-      sealedOrderTotal = sealData.order_total;
-      resetOrderId();
-    }
+    var sealRes = await fetch(API('upload', 'seal-order'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Session-Token': token || '' },
+      body: JSON.stringify({ order_id: currentOrderId() })
+    });
+    var sealData = await sealRes.json();
+    if (!sealData.success) throw new Error(sealData.error || 'Could not price this order');
+    sealedOrderTotal = sealData.order_total;
+    resetOrderId();
   } catch (finaliseErr) {
     showUploadOverlay(false);
     alert(finaliseErr.message || 'Could not finalise this order. Nothing has been charged.');
@@ -2183,28 +2326,38 @@ function startBackgroundPaymentWatch(jobIds) {
         if (!allPaid) return;
 
         clearInterval(tick);
-        // Refresh the entry so the receipt shows the settled state.
-        var entry = uploadedJobs.find(function (j) { return j.job_id === ids.join(','); });
-        if (entry) {
-          entry.paid = true;
-          entry.status = 'ready_to_print';
-          ids.forEach(function (id) {
-            var dj = rows.find(function (x) { return x.job_id === id; });
-            var sj = entry.server_jobs && entry.server_jobs.find(function (x) { return x.job_id === id; });
-            if (dj && sj) {
-              sj.paid = true;
-              sj.status = dj.status;
-              sj.print_pin = dj.print_pin || sj.print_pin;
-            }
-          });
-          localStorage.setItem('uploadedJobs', JSON.stringify(uploadedJobs));
-        }
+        // Fresh server rows are the source of truth. The local joined entry may
+        // have been pruned by loadJobs() while payment was in flight, so build
+        // the receipt from the rows themselves instead of trusting the cache.
+        var watched = rows.filter(function (x) { return ids.indexOf(x.job_id) !== -1; });
+        var old = uploadedJobs.find(function (j) { return j.job_id === ids.join(','); });
+        var orderTotal = watched.length ? parseFloat(watched[0].order_total) : NaN;
+        var receipt = {
+          job_id: ids.join(','),
+          print_pin: (watched[0] && watched[0].print_pin) || (old && old.print_pin) || '',
+          total_price: Number.isFinite(orderTotal) ? orderTotal
+            : (watched.reduce(function (a, j) { return a + (parseFloat(j.total_price) || 0); }, 0)
+              || (old && old.total_price) || 0),
+          pages: watched.reduce(function (a, j) { return a + (parseInt(j.pages, 10) || 0); }, 0)
+            || (old && old.pages) || 0,
+          copies: watched.reduce(function (a, j) { return a + (parseInt(j.copies, 10) || 1); }, 0)
+            || (old && old.copies) || 1,
+          file_name: watched.length === 1 ? watched[0].file_name : (old && old.file_name) || '',
+          color_mode: (watched[0] && watched[0].color_mode) || (old && old.color_mode) || 'bw',
+          file_count: watched.length || (old && old.file_count) || 0,
+          paid: true,
+          status: 'ready_to_print',
+          server_jobs: watched.length ? watched : ((old && old.server_jobs) || [])
+        };
+        var at = uploadedJobs.findIndex(function (j) { return j.job_id === receipt.job_id; });
+        if (at === -1) uploadedJobs.push(receipt); else uploadedJobs[at] = receipt;
+        localStorage.setItem('uploadedJobs', JSON.stringify(uploadedJobs));
         document.getElementById('step3Pre').style.display = 'none';
         document.getElementById('step3Pay').style.display = 'none';
         document.getElementById('step3Post').style.display = 'block';
         var cbx = document.getElementById('confirmingBox');
         if (cbx) cbx.style.display = 'none';
-        showReceipt(entry.server_jobs, entry);
+        showReceipt(receipt.server_jobs, receipt);
         loadJobs();
       })
       .catch(function () { /* transient; the next tick tries again */ });
@@ -2236,27 +2389,36 @@ function resetUpload() {
 }
 
 function showReceipt(serverJobs, job) {
+  serverJobs = Array.isArray(serverJobs) ? serverJobs : [];
+  var fallback = job || {};
   document.getElementById('step3Pay').style.display = 'none';
   document.getElementById('step3Post').style.display = 'block';
 
   var pinDisplay = [...new Set(serverJobs.map(function(sj) { return sj.print_pin; }).filter(Boolean))].join(', ');
-  if (!pinDisplay && job) pinDisplay = job.print_pin || '';
+  if (!pinDisplay) pinDisplay = fallback.print_pin || '';
   var totalPrice = serverJobs.reduce(function(a, sj) { return a + (parseFloat(sj.total_price) || 0); }, 0);
+  if (!serverJobs.length) totalPrice = parseFloat(fallback.total_price) || 0;
   var totalPages = serverJobs.reduce(function(a, sj) { return a + (parseInt(sj.pages) || 0); }, 0);
+  if (!serverJobs.length) totalPages = parseInt(fallback.pages, 10) || 0;
   var totalCopies = serverJobs.reduce(function(a, sj) { return a + (parseInt(sj.copies) || 1); }, 0);
-  var fileName = serverJobs.length === 1 ? serverJobs[0].file_name : serverJobs.length + ' files';
+  if (!serverJobs.length) totalCopies = parseInt(fallback.copies, 10) || 1;
+  var fileName = serverJobs.length === 1 ? serverJobs[0].file_name
+    : serverJobs.length > 1 ? serverJobs.length + ' files'
+    : (fallback.file_name || '-');
 
   document.getElementById('customerPrintPin').textContent = pinDisplay || '------';
-  document.getElementById('receiptJobId').textContent = serverJobs.length ? serverJobs.map(function(sj) { return sj.job_id; }).join(', ') : (job ? job.job_id : '-');
+  document.getElementById('receiptJobId').textContent = serverJobs.length ? serverJobs.map(function(sj) { return sj.job_id; }).join(', ') : (fallback.job_id || '-');
   document.getElementById('receiptFile').textContent = fileName;
   document.getElementById('receiptPages').textContent = totalPages + ' pages';
 // Label the colour from the page split, not from color_mode. A merged job that
   // is half colour prints in colour mode and carries color_mode 'color', so
   // reading color_mode here called a half-colour job "Color".
-  document.getElementById('receiptColor').textContent = colorLabelForBatch(serverJobs);
+  document.getElementById('receiptColor').textContent = serverJobs.length
+    ? colorLabelForBatch(serverJobs)
+    : (fallback.color_mode ? jobColourLabel(fallback.color_mode) : '-');
   document.getElementById('receiptCopies').textContent = 'x' + totalCopies;
   document.getElementById('receiptTotal').textContent = 'RM ' + totalPrice.toFixed(2);
-  document.getElementById('receiptCoins').textContent = serverJobs.length;
+  document.getElementById('receiptCoins').textContent = serverJobs.length || fallback.file_count || 0;
   document.getElementById('paymentMsg').textContent = 'Your print job is ready! Use the PIN at the kiosk.';
 }
 
@@ -2289,8 +2451,18 @@ function stopPayPolling() {
   setConfirming(false);
 }
 
+function findActiveOrderEntry() {
+  var want = String(currentJobId || '').split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+  if (!want.length) return null;
+  return uploadedJobs.find(function (j) {
+    if (j.job_id === currentJobId) return true;
+    if (j.server_jobs && j.server_jobs.some(function (sj) { return want.indexOf(sj.job_id) !== -1; })) return true;
+    return want.indexOf(j.job_id) !== -1;
+  });
+}
+
 function getPayTargetIds() {
-  var job = uploadedJobs.find(function(j) { return j.job_id === currentJobId; });
+  var job = findActiveOrderEntry();
   if (!job) return [];
   // A merged order stores its single merged job in server_jobs; individual
   // uploads keep every file in pendingUploadJobs.
@@ -2364,7 +2536,7 @@ function checkPaymentStatus() {
     clearInterval(payPollTimer);
     payPollTimer = null;
     setConfirming(false);
-    var job = uploadedJobs.find(function(j) { return j.job_id === currentJobId; });
+    var job = findActiveOrderEntry();
     if (job) {
       job.paid = true;
       job.status = 'ready_to_print';
@@ -2427,6 +2599,22 @@ function cancelPayment() {
 }
 
 /* ===== LOAD DATA ===== */
+
+// A local uploadedJobs entry can cover several server rows: a multi-file order
+// stores "PRN-A,PRN-B" in one entry. Comparing that joined string to a single
+// server job_id never matched, so the local header-only card survived next to
+// the real server order card and the same pending order appeared twice.
+function localEntryHasServerJob(lj, dbJobs) {
+  if (!lj) return false;
+  var ids = (lj.server_jobs && lj.server_jobs.length)
+    ? lj.server_jobs.map(function (sj) { return sj.job_id; })
+    : String(lj.job_id || '').split(',');
+  return ids.some(function (id) {
+    id = String(id || '').trim();
+    return !!id && dbJobs.some(function (dj) { return dj.job_id === id; });
+  });
+}
+
 function loadJobs() {
   const list = document.getElementById('jobsList');
 
@@ -2453,14 +2641,14 @@ function loadJobs() {
         }
       });
       var localOnly = uploadedJobs.filter(function(lj) {
-        return lj.user_id === user.id && !dbJobs.some(function(dj) { return dj.job_id === lj.job_id; });
+        return lj.user_id === user.id && !localEntryHasServerJob(lj, dbJobs);
       });
       var allJobs = dbJobs.concat(localOnly);
       renderJobsList(allJobs, list);
 
       uploadedJobs = uploadedJobs.filter(function(lj) {
         if (lj.user_id !== user.id) return true;
-        return !dbJobs.some(function(dj) { return dj.job_id === lj.job_id; });
+        return !localEntryHasServerJob(lj, dbJobs);
       });
       dbJobs.forEach(function(dj) {
         var existing = uploadedJobs.find(function(l) { return l.job_id === dj.job_id; });
@@ -2547,7 +2735,7 @@ function renderJobsList(jobs, list) {
     updateSelectionUI();
     return;
   }
-var orders = groupIntoOrders(jobs);
+  var orders = dedupeOrders(groupIntoOrders(jobs));
   list.innerHTML = orders.map(renderOrderCard).join('');
 }
 
@@ -2575,6 +2763,50 @@ function groupIntoOrders(jobs) {
     byKey[key].files.push(j);
   });
   return order;
+}
+
+// Two cards can cover the same underlying jobs: the server returns one row per
+// file, while an older local cache entry may hold "PRN-A,PRN-B" in a single
+// row. localEntryHasServerJob() prunes those before rendering, but stale entries
+// and half-migrated orders can still reach here. Collapse any two groups whose
+// job ids are the same set, keeping the fuller card (the server's per-file rows).
+function orderJobKey(order) {
+  var ids = [];
+  (order.files || []).forEach(function (f) {
+    var values = [f.job_id];
+    if (f.server_jobs && f.server_jobs.length) {
+      f.server_jobs.forEach(function (s) { values.push(s.job_id); });
+    }
+    values.forEach(function (v) {
+      String(v || '').split(',').forEach(function (id) {
+        id = id.trim();
+        if (id) ids.push(id);
+      });
+    });
+  });
+  ids.sort();
+  return ids.join('|');
+}
+
+function dedupeOrders(orders) {
+  var byKey = {};
+  var out = [];
+  (orders || []).forEach(function (o) {
+    var key = orderJobKey(o);
+    if (!key) { out.push(o); return; }
+    var existing = byKey[key];
+    if (!existing) {
+      byKey[key] = o;
+      out.push(o);
+      return;
+    }
+    if ((o.files || []).length > (existing.files || []).length) {
+      var at = out.indexOf(existing);
+      if (at !== -1) out[at] = o;
+      byKey[key] = o;
+    }
+  });
+  return out;
 }
 
 // The status that matters for the order as a whole.
@@ -2721,10 +2953,16 @@ function renderOrderCard(order) {
     }
   }
 
-  var title = many ? (files.length + ' files') : (files[0].file_name || '-');
-  var sub = many
-    ? (files.length + ' file' + (files.length > 1 ? 's' : '') + ' in one order')
-    : ('Job: ' + files[0].job_id);
+  var headerBlock = '';
+  if (many) {
+    headerBlock = '<div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:8px;">' +
+      '<div style="min-width:0;">' +
+        '<p style="font-size:14px; font-weight:700; color:var(--gray-900); word-break:break-word;">' + files.length + ' files</p>' +
+        '<p class="text-xs text-muted" style="margin-top:2px;">' + files.length + ' files in one order</p>' +
+      '</div>' +
+      '<span class="badge ' + statusClass + '">' + jobStatusLabel(status) + '</span>' +
+    '</div>';
+  }
 
   var completedBlock = '';
   if (many && isCompleted) {
@@ -2733,13 +2971,7 @@ function renderOrderCard(order) {
   }
 
   return '<div class="job-card" style="padding:16px; border:1px solid var(--gray-200); border-radius:var(--radius); margin-bottom:12px;">' +
-    '<div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:8px;">' +
-      '<div style="min-width:0;">' +
-        '<p style="font-size:14px; font-weight:700; color:var(--gray-900); word-break:break-word;">' + title + '</p>' +
-        '<p class="text-xs text-muted" style="margin-top:2px;">' + sub + '</p>' +
-      '</div>' +
-      '<span class="badge ' + statusClass + '">' + jobStatusLabel(status) + '</span>' +
-    '</div>' +
+    headerBlock +
     pinBlock + completedBlock +
     files.map(renderOrderFile).join('') +
     (many
@@ -2779,10 +3011,13 @@ function jobCanBeCleared(j) {
   var paid = j.paid === true || j.paid === 'true';
   // Printed or cancelled: the PIN is dead weight, there is nothing to collect.
   if (status === 'completed' || status === 'cancelled') return true;
-  // Unpaid: a PIN was never protection, because collecting means paying.
-  if (!paid && status === 'pending') return true;
-  // Still to print: protected by the PIN. This is what keeps ready_to_print and
-  // printing rows safe, and paid jobs awaiting the kiosk.
+  // Any unpaid job can be removed, PIN or not. The only exception is a job the
+  // printer already has: pulling that row would break the worker mid-print.
+  if (!paid) {
+    if (status === 'printing' || status === 'print_requested') return false;
+    return true;
+  }
+  // Paid jobs still waiting for collection are protected by the PIN.
   if (j.print_pin) return false;
   return false;
 }
@@ -3100,17 +3335,76 @@ function returnToPayment(jobId, price) {
   goStep(3);
 }
 
+let transactionRows = [];
+let transactionFilter = 'all';
+
 function loadCoinHistory() {
-  fetch(API('coins', 'history'), { headers: { 'X-Session-Token': token } })
+  fetch(API('coins', 'transactions'), { headers: { 'X-Session-Token': token } })
   .then(r => r.json()).then(data => {
     if (!data.success) return;
-    const tbody = document.getElementById('coinTableBody');
-    if (!data.transactions.length) {
-      tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--gray-400);padding:24px;">No transactions yet</td></tr>';
-      return;
-    }
-    tbody.innerHTML = data.transactions.map(t => '<tr><td><span class="badge ' + (t.type === 'earned' ? 'badge-success' : t.type === 'spent' ? 'badge-warning' : 'badge-info') + '">' + t.type + '</span></td><td>' + t.amount + '</td><td>' + (t.description || '-') + '</td><td>' + t.balance_after + '</td><td>' + fmtDateTime(t.created_at) + '</td></tr>').join('');
+    transactionRows = data.transactions || [];
+    renderTransactions();
   }).catch(() => {});
+}
+
+function setTransactionFilter(kind) {
+  transactionFilter = (kind === 'coin' || kind === 'money') ? kind : 'all';
+  document.querySelectorAll('#txFilter .tab').forEach(function (b) {
+    b.classList.toggle('active', b.getAttribute('data-filter') === transactionFilter);
+  });
+  renderTransactions();
+}
+
+function animateTransactions() {
+  const list = document.querySelector('#transactionsCard .tx-list');
+  if (!list) return;
+  list.classList.remove('tx-swap');
+  void list.offsetWidth; // restart the animation even if the class is already there
+  list.classList.add('tx-swap');
+}
+
+function renderTransactions() {
+  const list = document.getElementById('coinTableBody');
+  const rows = transactionRows.filter(function (t) {
+    return transactionFilter === 'all' || t.kind === transactionFilter;
+  });
+
+  if (!rows.length) {
+    const msg = transactionFilter === 'coin' ? 'No coin transactions yet'
+      : transactionFilter === 'money' ? 'No payments yet' : 'No transactions yet';
+    list.innerHTML = '<div class="tx-empty">' + msg + '</div>';
+    animateTransactions();
+    return;
+  }
+
+  list.innerHTML = rows.map(t => {
+    const title = t.job_id || t.description || (t.kind === 'money' ? 'Payment' : 'Coins');
+    const meta = fmtDateTime(t.created_at);
+
+    if (t.kind === 'money') {
+      const zero = !(t.amount > 0);
+      const amount = zero ? 'RM 0.00' : '-RM ' + Number(t.amount || 0).toFixed(2);
+      return '<div class="tx-row">'
+        + '<div class="tx-left">'
+        +   '<div class="tx-title">' + title + '</div>'
+        +   '<div class="tx-meta">' + meta + '</div>'
+        + '</div>'
+        + '<div class="tx-amount ' + (zero ? 'zero' : 'neg') + '">' + amount + '</div>'
+        + '</div>';
+    }
+
+    const n = Math.abs(parseInt(t.amount, 10) || 0);
+    const spent = t.type === 'spent';
+    return '<div class="tx-row">'
+      + '<div class="tx-left">'
+      +   '<div class="tx-title">' + title + '</div>'
+      +   '<div class="tx-meta">' + meta + '</div>'
+      + '</div>'
+      + '<div class="tx-amount ' + (spent ? 'neg' : 'pos') + '">' + (spent ? '-' : '+') + n + '</div>'
+      + '</div>';
+  }).join('');
+
+  animateTransactions();
 }
 
 function statusBadge(s) {
@@ -3545,9 +3839,9 @@ init();
       <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
       <span class="label">Jobs</span>
     </button>
-    <button class="rsx-item" data-page="coins">
-      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
-      <span class="label">Coins</span>
+    <button class="rsx-item" data-page="coins" title="Transactions" aria-label="Transactions">
+      <svg viewBox="0 0 24 24"><path d="M4 2h16v20l-3-2-3 2-3-2-3 2-3-2V2z"/><line x1="8" y1="7" x2="16" y2="7"/><line x1="8" y1="11" x2="16" y2="11"/><line x1="8" y1="15" x2="13" y2="15"/></svg>
+      <span class="label">History</span>
     </button>
     <button class="rsx-item rsx-fab active" data-page="upload">
       <span class="fab-btn">
@@ -3559,10 +3853,12 @@ init();
       <svg viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
       <span class="label">Account</span>
     </button>
-    <button class="rsx-item" data-page="report">
-      <svg viewBox="0 0 24 24"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-      <span class="label">Support</span>
+    <button class="rsx-item" data-page="location" title="Kiosk Location" aria-label="Kiosk Location">
+      <svg viewBox="0 0 24 24"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+      <span class="label">Location</span>
     </button>
+    <!-- Support is deliberately NOT here. It lives in the top bar ("?" button)
+         so the bottom bar stays four destinations plus the upload FAB. -->
   </div>
 </div>
 
@@ -3640,10 +3936,16 @@ init();
   }
 
   function sync(page) {
+    var match = document.querySelector('.rsx-item[data-page="' + page + '"]');
     items.forEach(function(i) {
-      i.classList.toggle('active', i.getAttribute('data-page') === page);
+      i.classList.toggle('active', i === match);
     });
-    positionBlob(document.querySelector('.rsx-item[data-page="' + page + '"]'));
+    // Support is opened from the top bar, so it has no item down here. Leaving
+    // the blob parked under Upload would claim "you are here" about a page the
+    // customer is not on, so it clears instead of guessing.
+    if (blob) blob.style.opacity = match ? '' : '0';
+    if (blobTrail) blobTrail.style.opacity = match ? '' : '0';
+    positionBlob(match);
   }
   window.syncMobileNav = sync;
 

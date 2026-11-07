@@ -197,6 +197,24 @@ function get(url) {
     ok(r.pages === 1, 'the cropped file is merged instead of the original (1 page, got ' + r.pages + ')');
   }
 
+  // 11b. Copies are baked into the page sequence so different copy counts can
+  //      still become one job. v129
+  {
+    const mk = (name, pages, copies) => ({
+      file: null,
+      settings: { color: 'bw', copies, sides: 'single', pages, page_spec: 'all',
+        brightness: 0, contrast: 0, crop_mode: 'none' },
+      _name: name,
+    });
+    const a = Object.assign(mk('a.pdf', 2, 2), { file: await pdfOf(2, 'a.pdf') });
+    const b = Object.assign(mk('b.pdf', 3, 1), { file: await pdfOf(3, 'b.pdf') });
+    const r = await PK.combineByType([a, b]);
+    ok(r.length === 1, 'different copy counts still become one job, got ' + r.length);
+    ok(r[0] && r[0].pdfPages === 7,
+      '2 pages x2 + 3 pages = 7, got ' + (r[0] && r[0].pdfPages));
+    ok(r[0] && r[0].settings.copies === 1, 'the combined job itself is one copy');
+  }
+
   // 12. Documents and images are kept apart.
   {
     ok(typeof PK.combineByType === 'function', 'combineByType is exposed');

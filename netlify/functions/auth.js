@@ -1,6 +1,7 @@
 const { json, err, supabaseRequest, validateSession, generateSessionToken, SESSION_DURATION,
   VERIFICATION_CODE_LENGTH, VERIFICATION_CODE_TTL, SMTP_FROM_NAME, SMTP_USER,
   generateVerificationCode, isValidGmail, isValidMalaysianPhone, normalizePhone, sendVerificationEmail, smtpSend } = require('./_shared');
+const { sendCoinPush } = require('./_push');
 
 exports.handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') return json({});
@@ -162,7 +163,11 @@ async function handleVerifyEmail(event) {
     user_id: user.id, type: 'bonus', amount: 10,
     description: 'Welcome bonus - first registration', balance_after: 10
   });
-  await supabaseRequest('PATCH', '/users?id=eq.' + user.id, { coins: 10 });
+  const bonus = await supabaseRequest('PATCH', '/users?id=eq.' + user.id, { coins: 10 });
+
+  // No subscription exists yet at registration, so this is normally a no-op;
+  // it keeps every coin-award path sending the same way, after the write.
+  if (!bonus.error) await sendCoinPush(user.id, 10);
 
   const token = generateSessionToken();
   const sessionExpiresAt = new Date(Date.now() + SESSION_DURATION * 1000).toISOString();

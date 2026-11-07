@@ -27,6 +27,12 @@ const SESSION_DURATION = 86400 * 7;
 // amount impossible for any payment the matcher could ever be asked about.
 const JOB_PAYABLE_WINDOW_MIN = 60;
 
+// How long the live camera frames are kept. These are photographs of customers,
+// so the window is minutes, not hours - and it is enforced by BOTH the writer
+// (data.js prunes on publish) and any reader (admin.js prunes on read), because
+// switching the feed off must not leave the last pictures sitting in the table.
+const LIVE_FRAME_WINDOW_MIN = 5;
+
 // Shared secret between the PrintKiosk Payment Watcher APK and this backend,
 // used to sign server-side "payment detected" events (HMAC-SHA256).
 const NOTIFICATION_SECRET = process.env.NOTIFICATION_SECRET || 'pk_notif_v3_fd3877b903677547e567f1d1f0cc68770df89598a5c7d09fe229d81d8dc4d37c';
@@ -44,7 +50,7 @@ const PRICE_DOUBLE_SIDED_MULTIPLIER = 0.7;
 // Bumped whenever the kiosk front-end changes. The kiosk compares this against
 // the version it was loaded with and reloads itself, so an unattended screen
 // never keeps running a stale copy of walkin.html.
-const APP_VERSION = '2026.10.27-104';
+const APP_VERSION = '2026.11.04-138';
 
 const ALLOWED_EXTENSIONS = ['pdf', 'doc', 'docx', 'jpg', 'jpeg', 'png'];
 
@@ -553,6 +559,8 @@ async function mergeFilesToPDF(items) {
 
   for (const item of items) {
     const ext = (item.file_name || '').split('.').pop().toLowerCase();
+    // Copies are baked into the merged document: the job itself is one copy.
+    const copies = Math.max(1, parseInt(item.settings && item.settings.copies, 10) || 1);
     const res = await fetch(item.url);
     if (!res.ok) throw new Error('Failed to download ' + item.file_name + ': HTTP ' + res.status);
     const bytes = new Uint8Array(await res.arrayBuffer());
@@ -560,16 +568,18 @@ async function mergeFilesToPDF(items) {
     if (ext === 'pdf') {
       const srcPdf = await PDFDocument.load(bytes);
       const pageCount = srcPdf.getPageCount();
-      const copied = await pdfDoc.copyPages(srcPdf, srcPdf.getPageIndices());
-      for (const page of copied) pdfDoc.addPage(page);
-      totalPages += pageCount;
+      for (let r = 0; r < copies; r++) {
+        const copied = await pdfDoc.copyPages(srcPdf, srcPdf.getPageIndices());
+        for (const page of copied) pdfDoc.addPage(page);
+      }
+      totalPages += pageCount * copies;
       sources.push({
         file_name: item.file_name,
-        pages: pageCount,
+        pages: pageCount * copies,
         color_mode: item.settings && item.settings.color ? item.settings.color : 'bw',
         color_pages: item.settings && item.settings.color_pages !== undefined
-          ? Math.max(0, Math.min(parseInt(item.settings.color_pages, 10) || 0, pageCount))
-          : (item.settings && item.settings.color === 'color' ? pageCount : 0)
+          ? Math.max(0, Math.min(parseInt(item.settings.color_pages, 10) || 0, pageCount)) * copies
+          : (item.settings && item.settings.color === 'color' ? pageCount * copies : 0)
       });
     } else if (['jpg', 'jpeg', 'png'].includes(ext)) {
       // Embed image as a single page, scaled to fit within A4 bounds.
@@ -591,16 +601,18 @@ async function mergeFilesToPDF(items) {
       pageW = Math.max(1, pageW);
       pageH = Math.max(1, pageH);
 
-      const page = pdfDoc.addPage([pageW, pageH]);
-      page.drawImage(image, {
-        x: 0, y: 0, width: pageW, height: pageH
-      });
-      totalPages += 1;
+      for (let r = 0; r < copies; r++) {
+        const page = pdfDoc.addPage([pageW, pageH]);
+        page.drawImage(image, {
+          x: 0, y: 0, width: pageW, height: pageH
+        });
+      }
+      totalPages += copies;
       sources.push({
         file_name: item.file_name,
-        pages: 1,
+        pages: copies,
         color_mode: item.settings && item.settings.color ? item.settings.color : 'bw',
-        color_pages: item.settings && item.settings.color === 'color' ? 1 : 0
+        color_pages: item.settings && item.settings.color === 'color' ? copies : 0
       });
     } else {
       throw new Error('Cannot merge ' + ext + ' files');
@@ -765,7 +777,7 @@ module.exports = {
   SUPABASE_URL, SUPABASE_KEY, SUPABASE_REST_URL,
   SESSION_DURATION, PRICE_BW_PER_PAGE, PRICE_COLOR_PER_PAGE,
   PRICE_A3_MULTIPLIER, PRICE_DOUBLE_SIDED_MULTIPLIER, ALLOWED_EXTENSIONS,
-  NOTIFICATION_SECRET, PRINT_WORKER_SECRET, APP_VERSION, JOB_PAYABLE_WINDOW_MIN,
+  NOTIFICATION_SECRET, PRINT_WORKER_SECRET, APP_VERSION, JOB_PAYABLE_WINDOW_MIN, LIVE_FRAME_WINDOW_MIN,
   SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM_NAME,
   VERIFICATION_CODE_LENGTH, VERIFICATION_CODE_TTL,
   corsHeaders, json, err, supabaseRequest, generateJobId, safeEqual,

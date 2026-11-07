@@ -241,13 +241,10 @@ ok(mergedJob && mergedJob.settings.color === 'color',
   }
   ok(broke === 0, 'all ' + checked + ' same-setting combinations merge to one job at an identical price');
 
-  // Sides and copies are per-job, not per-page, so they must never merge.
-  // Colour is NOT in this list: a combined job prints in one colour mode, but
-  // the price is still split per page, so a B&W document belongs with a colour
-  // one. Splitting them gave the customer two documents instead of one.
+  // Sides are per-job, not per-page, so they must never merge. Copies are no
+  // longer a split reason: they are baked into the merged page sequence.
   const diffs = [
     ['sides', { sides: 'double' }, { sides: 'single' }],
-    ['copies', { copies: 3 }, { copies: 1 }],
   ];
   for (const [label, a, b] of diffs) {
     const pair = [
@@ -256,6 +253,26 @@ ok(mergedJob && mergedJob.settings.color === 'color',
     ];
     const g = PK.combineGroups(pair);
     ok(g.length === 2, 'files differing in ' + label + ' are kept apart (groups: ' + g.length + ')');
+  }
+
+  // Copies now combine by repeating pages.
+  {
+    const copiesPair = [
+      { file: await pdf(2, 'c1.pdf'), settings: settings({ copies: 2, pages: 2 }) },
+      { file: await pdf(1, 'c2.pdf'), settings: settings({ copies: 1, pages: 1 }) },
+    ];
+    ok(PK.combineGroups(copiesPair).length === 1,
+      'files differing only in copies are grouped into one job');
+    const mergedCopies = await PK.combineByType(copiesPair);
+    ok(mergedCopies.length === 1, 'and become one job, got ' + mergedCopies.length);
+    if (mergedCopies.length === 1) {
+      ok(mergedCopies[0].pdfPages === 5,
+        'the 2-page file with 2 copies contributes 4 pages, plus 1 (got ' + mergedCopies[0].pdfPages + ')');
+      ok(mergedCopies[0].settings.copies === 1, 'the combined job itself carries one copy');
+      const price = calculatePrice(mergedCopies[0].settings.pages, 'bw', 'a4', 'single', mergedCopies[0].settings.copies);
+      ok(Math.abs(price - 1.00) < 0.005,
+        'five resulting B&W pages cost RM1.00, got RM' + price.toFixed(2));
+    }
   }
 
   // Documents differing only in colour merge into one job, exactly as photos do.
@@ -304,14 +321,22 @@ ok(mergedJob && mergedJob.settings.color === 'color',
   ok(PK.combineGroups(photosMixedColour).length === 1,
     'photos differing only in colour are grouped into one job');
 
-  for (const [label, a, b] of [['sides', { sides: 'double' }, { sides: 'single' }],
-    ['copies', { copies: 3 }, { copies: 1 }]]) {
+  for (const [label, a, b] of [['sides', { sides: 'double' }, { sides: 'single' }]]) {
     const pair = [
       { file: png('p1.png'), settings: settings(a) },
       { file: png('p2.png'), settings: settings(b) },
     ];
     ok(PK.combineGroups(pair).length === 2,
       'photos differing in ' + label + ' stay in separate jobs');
+  }
+
+  {
+    const photoCopies = [
+      { file: png('p1.png'), settings: settings({ copies: 2, color: 'color' }) },
+      { file: png('p2.png'), settings: settings({ copies: 1, color: 'color' }) },
+    ];
+    ok(PK.combineGroups(photoCopies).length === 1,
+      'photos differing only in copies are grouped into one job');
   }
 
   // Unchanged: matching settings still merge, including several files.
@@ -404,11 +429,10 @@ ok(mergedJob && mergedJob.settings.color === 'color',
     });
     const g = (items) => PK.describeGroupSplit(items);
 
-    ok(g([gitem('a.pdf', { copies: 2 }), gitem('b.pdf', { copies: 1 })]).length === 1,
-      'differing copies are explained');
-    const copiesNote = g([gitem('a.pdf', { copies: 2 }), gitem('b.pdf', { copies: 1 })])[0] || '';
-    ok(/copies/.test(copiesNote) && /2/.test(copiesNote) && /1/.test(copiesNote),
-      'and the message names the setting and both values: ' + copiesNote);
+    // Copies are baked into the page sequence, so they are no longer a split
+    // reason and must not be reported as one.
+    ok(g([gitem('a.pdf', { copies: 2 }), gitem('b.pdf', { copies: 1 })]).length === 0,
+      'a copies difference alone is not a reason to split');
 
     const sidesNote = g([gitem('a.pdf', { sides: 'double' }), gitem('b.pdf', { sides: 'single' })])[0] || '';
     ok(/sides/.test(sidesNote), 'differing sides are explained: ' + sidesNote);
@@ -421,7 +445,7 @@ ok(mergedJob && mergedJob.settings.color === 'color',
       'identical settings are not reported as a split');
 
     // Never answer "nothing" for a split that happened - that is the bug.
-    ok(g([gitem('a.pdf', { copies: 4 }), gitem('b.pdf', { copies: 1 }), gitem('c.pdf', { copies: 1 })]).length >= 1,
+    ok(g([gitem('a.pdf', { sides: 'double' }), gitem('b.pdf', { sides: 'single' }), gitem('c.pdf', { sides: 'single' })]).length >= 1,
       'an outlier in a three-file batch is still explained');
   }
 

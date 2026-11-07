@@ -499,5 +499,25 @@ ok((guestPage.match(/refuseMixedFileTypes\(\)/g) || []).length >= 2,
     'the guest page still allows 5 files per order');
 }
 
+// --- a settled multi-file receipt must survive the local cache prune --------
+// loadJobs() replaces the joined local entry ("A,B") with per-file entries while
+// payment is in flight. The watcher used to look only for the joined id and
+// threw before showReceipt(), leaving the PIN screen at its default dashes.
+const activeFn = (memberPage.match(/function findActiveOrderEntry[\s\S]*?\n\}/) || [])[0];
+ok(!!activeFn, 'there is an active-order lookup for split ids');
+if (activeFn) {
+  const find = new Function('uploadedJobs', 'currentJobId', activeFn + '\nreturn findActiveOrderEntry;');
+  const perFile = [{ job_id: 'PRN-A' }, { job_id: 'PRN-B' }];
+  const got = find(perFile, 'PRN-A,PRN-B')();
+  ok(got && got.job_id === 'PRN-A', 'a split order finds its per-file entry');
+  const withServer = [{ job_id: 'PRN-X', server_jobs: [{ job_id: 'PRN-B' }] }];
+  ok(find(withServer, 'PRN-A,PRN-B')().job_id === 'PRN-X', 'a server_jobs entry also matches');
+}
+ok(/var watched = rows\.filter/.test(memberPage), 'the watcher rebuilds the receipt from server rows');
+ok(/showReceipt\(receipt\.server_jobs, receipt\)/.test(memberPage),
+  'the watcher passes the rebuilt receipt');
+ok(/serverJobs = Array\.isArray\(serverJobs\) \? serverJobs : \[\]/.test(memberPage),
+  'the receipt tolerates missing server rows');
+
 if (failed) { console.log('  -> ' + failed + ' failed'); process.exit(1); }
 console.log('  ok      orders settle as one payment and earn a coin per file');

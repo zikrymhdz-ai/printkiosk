@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <link rel="manifest" href="/manifest.webmanifest">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -16,10 +16,10 @@
 <link rel="stylesheet" href="../styles.css">
 <link href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.css" rel="stylesheet">
 <script src="../frontend_config.js"></script>
-<script src="pstore.js?v=2026.10.27-104"></script>
+<script src="pstore.js?v=2026.11.04-138"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
-<script src="pagerange.js?v=2026.10.27-104"></script>
+<script src="pagerange.js?v=2026.11.04-138"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.js"></script>
 <script>pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
 <style>
@@ -55,7 +55,7 @@
   .pk-overlay { position: fixed; inset: 0; z-index: 900; display: flex; align-items: center;
     justify-content: center; background: rgba(15,23,42,0.72); backdrop-filter: blur(3px); padding: 24px; }
   .pk-overlay.hidden { display: none; }
-  .pk-overlay-card { background: #fff; border-radius: 20px; padding: 32px 26px; text-align: center;
+  .pk-overlay-card { background: #ffffff; border-radius: 20px; padding: 32px 26px; text-align: center;
     max-width: 360px; width: 100%; box-shadow: 0 24px 60px rgba(15,23,42,0.35); }
   .pk-spinner { width: 52px; height: 52px; margin: 0 auto 18px; border-radius: 50%;
     border: 5px solid var(--primary-light); border-top-color: var(--primary);
@@ -88,6 +88,14 @@
   <div style="text-align:center; padding:16px 0; margin-bottom:8px;">
     <p class="text-sm text-muted">Scan this from the kiosk to upload from your phone</p>
     <span id="qModeBadge" class="badge" style="margin-top:6px; display:inline-block;"></span>
+    <!-- A guest can stop being a guest at any time. Without this the only way
+         out of guest mode was to know that register.html exists and type it in,
+         on a phone, at a kiosk. -->
+    <div id="qGuestUpsell" style="display:none; margin-top:14px;">
+      <p class="text-sm" style="margin-bottom:8px;">Printing often? Register and earn reward coins on every order.</p>
+      <button type="button" class="btn btn-primary" onclick="window.location.href='register.html'">Register</button>
+      <p class="text-xs text-muted" style="margin-top:8px;">Already have an account? <a href="login.html">Sign in</a> instead.</p>
+    </div>
   </div>
 
   <div class="card" style="border-radius:var(--radius-xl);">
@@ -335,6 +343,11 @@ badgeEl.textContent = 'Not signed in - no reward coins';
 badgeEl.className = 'badge badge-gray';
 }
 }
+
+// The way out of guest mode. Shown only to guests: a signed-in customer does
+// not need to be sold an account they already have.
+var upsellEl = document.getElementById('qGuestUpsell');
+if (upsellEl) upsellEl.style.display = qGuest ? 'block' : 'none';
 
 applyGuestFileLimit();
 });

@@ -226,6 +226,10 @@ window.PKPageRange = (function () {
         var file = item && item.file ? item.file : item;
         var name = file.name || 'document';
         var ext = extOf(name);
+        // Copies are baked into the page sequence: a 2-page file with 2 copies
+        // contributes 4 pages. v129
+        // contributes 4 pages and the combined job prints with copies=1.
+        var repeat = Math.max(1, parseInt(item && item.repeat, 10) || 1);
         sources.push({ name: name, pages: null });
 
         return file.arrayBuffer().then(function (buf) {
@@ -233,7 +237,7 @@ window.PKPageRange = (function () {
 
           if (real === 'pdf') {
             return PDFLib.PDFDocument.load(buf).then(function (src) {
-              var count = src.getPageCount();
+              var count = src.getPageCount() * repeat;
               sources[sources.length - 1].pages = count;
               pages += count;
               // PDFDocument.create() is ASYNC since pdf-lib 1.17.0 and returns
@@ -242,11 +246,17 @@ window.PKPageRange = (function () {
               var ready = out ? Promise.resolve(out) : PDFLib.PDFDocument.create();
               return ready.then(function (doc) {
                 out = doc;
-                // copyPages is also async on 1.17.x.
-                return Promise.resolve(out.copyPages(src, src.getPageIndices()))
-                  .then(function (copied) {
-                    copied.forEach(function (p) { out.addPage(p); });
-                  });
+                // copyPages is also async on 1.17.x. Copy once per requested
+                // copy so the pages genuinely repeat in the merged document.
+                function addRun(n) {
+                  if (n >= repeat) return Promise.resolve();
+                  return Promise.resolve(out.copyPages(src, src.getPageIndices()))
+                    .then(function (copied) {
+                      copied.forEach(function (p) { out.addPage(p); });
+                      return addRun(n + 1);
+                    });
+                }
+                return addRun(0);
               });
             });
           }
@@ -284,11 +294,13 @@ window.PKPageRange = (function () {
                   // Guard against a degenerate page even for a 1-pixel image.
                   pageW = Math.max(1, pageW);
                   pageH = Math.max(1, pageH);
-                  var page = out.addPage([pageW, pageH]);
-                  page.drawImage(img, { x: 0, y: 0, width: pageW, height: pageH });
+                  for (var r = 0; r < repeat; r++) {
+                    var page = out.addPage([pageW, pageH]);
+                    page.drawImage(img, { x: 0, y: 0, width: pageW, height: pageH });
+                  }
                   images++;
-                  pages += 1;
-                  sources[sources.length - 1].pages = 1;
+                  pages += repeat;
+                  sources[sources.length - 1].pages = repeat;
                 });
             });
           }
@@ -338,20 +350,21 @@ window.PKPageRange = (function () {
       return chain.then(function (acc) {
         var file = (item && item.file) ? item.file : item;
         var s = (item && item.settings) || {};
+        var copies = Math.max(1, parseInt(s.copies, 10) || 1);
         var src = (s.crop_mode === 'manual' && item.croppedFile) ? item.croppedFile : file;
         var spec = (s.page_spec && s.page_spec !== 'all') ? String(s.page_spec) : 'all';
 
         // Only a PDF can be trimmed; an image is a single page either way.
         if (spec === 'all' || extOf(src.name) !== 'pdf') {
-          acc.push(src);
+          acc.push({ file: src, repeat: copies });
           return acc;
         }
         var nums = spec.split(',').map(function (n) { return parseInt(n, 10); })
           .filter(function (n) { return n > 0; });
-        if (!nums.length) { acc.push(src); return acc; }
+        if (!nums.length) { acc.push({ file: src, repeat: copies }); return acc; }
 
         return extractPdfPages(src, nums).then(function (trimmed) {
-          acc.push(trimmed);
+          acc.push({ file: trimmed, repeat: copies });
           return acc;
         });
       });
@@ -482,9 +495,13 @@ window.PKPageRange = (function () {
         var b = _clamp(s.brightness);
         var c = _clamp(s.contrast);
         var gray = (s.color || 'bw') !== 'color';
+        var copies = Math.max(1, parseInt(s.copies, 10) || 1);
         var src = (s.crop_mode === 'manual' && it.croppedFile) ? it.croppedFile : it.file;
-        if (!b && !c && !gray) { acc.push(src); return acc; }
-        return adjustImageFile(src, b, c, gray).then(function (f) { acc.push(f); return acc; });
+        if (!b && !c && !gray) { acc.push({ file: src, repeat: copies }); return acc; }
+        return adjustImageFile(src, b, c, gray).then(function (f) {
+          acc.push({ file: f, repeat: copies });
+          return acc;
+        });
       });
     }, Promise.resolve([])).then(function (files) {
       return mergeIntoPdf(files);
@@ -539,9 +556,11 @@ window.PKPageRange = (function () {
     (items || []).forEach(function (it) {
       var s = it.settings || {};
       var photo = isImage(it.file.name);
-var key = photo
-        ? 'image|' + (s.sides || 'single') + '|' + (s.copies || 1)
-        : 'document|' + (s.sides || 'single') + '|' + (s.copies || 1);
+      // Copies do NOT split a group. Each file's copies are baked into the
+      // merged page sequence, so differing copy counts still belong to one job.
+      // Duplex stays in the key because the printer applies it to the whole
+      // submission.
+      var key = (photo ? 'image' : 'document') + '|' + (s.sides || 'single');
       if (!byKey[key]) {
         byKey[key] = [];
         groups.push(byKey[key]);
@@ -599,7 +618,6 @@ var key = photo
     if (groups.length < 2) return [];
 
     var FIELDS = [
-      { key: 'copies', label: 'copies' },
       { key: 'sides', label: 'sides' }
     ];
 
@@ -627,17 +645,17 @@ var key = photo
     // nothing: an unexplained split is what caused this in the first place.
     if (!notes.length) {
       notes.push('These files were kept as ' + groups.length
-        + ' separate jobs. Different file types are printed differently, so a document and a photo cannot share one job.');
+        + ' separate jobs. Different file types or duplex settings are printed differently, so they cannot share one job.');
     }
     return notes;
   }
 
   /* Settings for a combined group.
    *
-   * Every member shares sides and copies - the grouping guarantees it. Colour may
-   * differ, so the combined job is printed in colour mode whenever any page
-   * wanted colour, and colorPages records how MANY so the price is worked out per
-   * page instead of charging the colour rate for all of them.
+   * Duplex is shared - the grouping guarantees it. Copies may differ: each
+   * member's copies are baked into the merged page sequence, so the combined job
+   * itself is one copy of that expanded document. Colour may differ and is
+   * priced per page, so colorPages records how many pages are colour.
    */
   function mergedItem(members, merged) {
     var first = (members[0] && members[0].settings) || {};
@@ -655,10 +673,15 @@ var key = photo
       return (isFinite(n) && n > 0) ? n : 1;
     }
 
+    function copiesOf(it) {
+      var c = parseInt((it.settings || {}).copies, 10);
+      return (isFinite(c) && c > 0) ? c : 1;
+    }
+
     var colorPages = 0;
     members.forEach(function (it) {
       var s = it.settings || {};
-      if ((s.color || 'bw') === 'color') colorPages += pagesOf(it);
+      if ((s.color || 'bw') === 'color') colorPages += pagesOf(it) * copiesOf(it);
     });
 
     // Never claim more colour pages than the merged document has. An
@@ -674,21 +697,33 @@ var key = photo
     // A count cannot say WHICH pages are greyscale, so the page ranges are sent
     // in merge order and the worker prints each run in its own mode.
     //
-    // Only emitted when the runs genuinely differ. A job that is wholly one mode
-    // keeps the single-submission path, which is the overwhelmingly common case
-    // and needs no splitting.
-    var colorRuns = [];
+    // Copies repeat each member's run: a 2-page colour file with 2 copies
+    // contributes pages 1-4, then the next member starts at page 5.
+    var rawRuns = [];
     var page = 1;
     members.forEach(function (it) {
       var s = it.settings || {};
       var n = pagesOf(it);
-      colorRuns.push({
-        from: page,
-        to: page + n - 1,
-        color: (s.color || 'bw') === 'color' ? 'color' : 'bw'
-      });
-      page += n;
+      var c = copiesOf(it);
+      for (var r = 0; r < c; r++) {
+        rawRuns.push({
+          from: page,
+          to: page + n - 1,
+          color: (s.color || 'bw') === 'color' ? 'color' : 'bw'
+        });
+        page += n;
+      }
     });
+
+    // Collapse neighbouring runs of the same mode, so repeated copies do not
+    // become a long list of identical CUPS submissions.
+    var colorRuns = [];
+    rawRuns.forEach(function (run) {
+      var prev = colorRuns[colorRuns.length - 1];
+      if (prev && prev.color === run.color && prev.to + 1 === run.from) prev.to = run.to;
+      else colorRuns.push(run);
+    });
+
     // The last member's end must match the real page count, or the worker would
     // ask CUPS for pages that do not exist.
     if (colorRuns.length) {
@@ -710,7 +745,8 @@ return {
       _mergedColorRuns: (mixedModes ? { runs: colorRuns, pages: colorPages } : null),
       settings: {
         color: colorPages > 0 ? 'color' : 'bw',
-        copies: first.copies || 1,
+        // Copies are already repeated in the page sequence above.
+        copies: 1,
         sides: first.sides || 'single',
         pages: merged.pages,
         page_spec: 'all',

@@ -14,6 +14,7 @@ exports.handler = async (event) => {
     switch (action) {
       case 'balance': return getBalance(userId);
       case 'history': return getHistory(userId);
+      case 'transactions': return getTransactions(userId);
       case 'discount': return getDiscount(userId);
       default: return err('Invalid action');
     }
@@ -60,6 +61,73 @@ async function getHistory(userId) {
     success: true,
     transactions: result.error ? [] : result.data
   });
+}
+
+// One history for the customer: coins earned/spent/bonus AND the money they
+// paid for prints. These live in two tables, so the page used to show only half
+// the story - a customer could see "earned 1 coin" but not the RM1.30 payment
+// that earned it. The two lists are normalised here so the page renders one
+// table sorted by time.
+async function getTransactions(userId) {
+  const jobIdFrom = function (text) {
+    const m = String(text || '').match(/PRN-\d{8}-[A-F0-9]{4}/);
+    return m ? m[0] : null;
+  };
+
+  const [coinRes, payRes] = await Promise.all([
+    supabaseRequest('GET', '/coin_transactions', null, {
+      'user_id': 'eq.' + userId,
+      'select': 'id,type,amount,description,balance_after,created_at',
+      'order': 'created_at.desc',
+      'limit': '200'
+    }),
+    supabaseRequest('GET', '/payments', null, {
+      'user_id': 'eq.' + userId,
+      'select': 'id,amount,method,reference,status,created_at',
+      'order': 'created_at.desc',
+      'limit': '200'
+    })
+  ]);
+
+  const coins = (coinRes.error ? [] : (coinRes.data || [])).map(function (t) {
+    return {
+      id: 'coin-' + t.id,
+      kind: 'coin',
+      type: t.type,
+      amount: parseInt(t.amount, 10) || 0,
+      job_id: jobIdFrom(t.description),
+      description: t.description || '',
+      balance_after: t.balance_after,
+      reference: null,
+      status: null,
+      created_at: t.created_at
+    };
+  });
+
+  const payments = (payRes.error ? [] : (payRes.data || [])).map(function (p) {
+    const amount = Math.round((parseFloat(p.amount) || 0) * 100) / 100;
+    let label = 'Print payment';
+    if (p.method === 'coins_full' || amount === 0) label = 'Fully paid with coins';
+    else if (p.method === 'manual_admin') label = 'Payment (staff)';
+    return {
+      id: 'pay-' + p.id,
+      kind: 'money',
+      type: 'payment',
+      amount: amount,
+      job_id: jobIdFrom(p.reference),
+      description: label + (p.reference ? ' - ' + p.reference : ''),
+      balance_after: null,
+      reference: p.reference || null,
+      status: p.status || null,
+      created_at: p.created_at
+    };
+  });
+
+  const all = coins.concat(payments).sort(function (a, b) {
+    return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+  });
+
+  return json({ success: true, transactions: all });
 }
 
 async function getDiscount(userId) {

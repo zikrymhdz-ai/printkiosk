@@ -1,4 +1,4 @@
-const { json, err, supabaseRequest, supabaseStorageDelete, validateSession, APP_VERSION } = require('./_shared');
+const { json, err, supabaseRequest, supabaseStorageDelete, validateSession, APP_VERSION, LIVE_FRAME_WINDOW_MIN } = require('./_shared');
 
 // How many rows one clear-jobs PATCH may carry. The UI caps a selection at 300,
 // so this only splits a very large "Clear finished & unpaid" into a few writes
@@ -43,6 +43,9 @@ if (event.httpMethod === 'POST' && action === 'delete-job') {
   }
   if (event.httpMethod === 'POST' && action === 'kiosk-heartbeat') {
     return await handleKioskHeartbeat(event);
+  }
+  if (event.httpMethod === 'POST' && action === 'kiosk-frame') {
+    return await handleKioskFrame(event);
   }
   if (event.httpMethod === 'POST' && action === 'watcher-heartbeat') {
     return await handleWatcherHeartbeat(event);
@@ -125,6 +128,7 @@ if (event.httpMethod === 'POST' && action === 'delete-job') {
 const DEFAULT_KIOSK_SETTINGS = {
   face_login_enabled: true,
   maintenance_mode: false,
+  camera_stream_enabled: false,
   maintenance_message: 'Kiosk temporarily unavailable for maintenance. Please see staff.'
 };
 
@@ -137,6 +141,7 @@ async function getKioskSettings() {
     return {
       face_login_enabled: row.face_login_enabled !== false,
       maintenance_mode: !!row.maintenance_mode,
+      camera_stream_enabled: !!row.camera_stream_enabled,
       maintenance_message: row.maintenance_message || DEFAULT_KIOSK_SETTINGS.maintenance_message,
       updated_at: row.updated_at || null
     };
@@ -318,6 +323,54 @@ async function handleLogFaceDetection(event) {
   return json({ success: true, logged: true });
 }
 
+// ---- Live camera frames ----------------------------------------------------
+//
+// There is no socket between the Pi and the dashboard: the Pi sits behind the
+// shop's NAT and Netlify only runs functions. So the kiosk publishes a small
+// JPEG every ~1.5s and the dashboard reads the newest one. A still frame
+// repeated at that rate reads as live, and - unlike a video stream - every frame
+// is already a file the admin can download, which is the CCTV half of this.
+//
+// Retention is short on purpose. These are pictures of customers standing in a
+// shop, so the table only ever holds the last few minutes and the kiosk only
+// publishes while the shop has switched the feed on.
+const LIVE_FRAME_MAX_CHARS = 200000; // ~150KB of image, after base64 inflation
+
+let lastFramePruneAt = 0;
+
+async function handleKioskFrame(event) {
+  let body;
+  try { body = JSON.parse(event.body || '{}'); } catch (e) { return err('Bad JSON body'); }
+
+  const raw = String(body.frame || '');
+  const m = /^data:(image\/(?:png|jpeg|jpg));base64,[A-Za-z0-9+/=]+$/.exec(raw);
+  if (!m) return err('frame must be a data:image base64 URI');
+  if (raw.length > LIVE_FRAME_MAX_CHARS) return err('frame too large', 413);
+
+  const now = Date.now();
+  const result = await supabaseRequest('POST', '/kiosk_frames', {
+    kiosk_id: String(body.kiosk_id || 'kiosk-1').slice(0, 40),
+    mime: m[1],
+    data: raw
+  });
+
+  if (result.error) {
+    // Table not migrated yet - never break the kiosk over a live view.
+    return json({ success: false, live: false, error: 'Live frames table unavailable' });
+  }
+
+  // Prune on a cadence, not on every frame: a DELETE every 1.5s would double the
+  // request count for a table that only ever needs trimming.
+  if (now - lastFramePruneAt > 60000) {
+    lastFramePruneAt = now;
+    const cutoff = new Date(now - LIVE_FRAME_WINDOW_MIN * 60 * 1000).toISOString();
+    supabaseRequest('DELETE', '/kiosk_frames', null, { 'created_at': 'lt.' + cutoff })
+      .catch(function () {});
+  }
+
+  return json({ success: true, live: true });
+}
+
 async function handleCompleteJob(event) {
   const body = JSON.parse(event.body || '{}');
   const jobId = body.job_id || '';
@@ -383,23 +436,23 @@ function clearableReason(job) {
   // of them deletable, and no reason a customer could act on.
   if (status === 'completed' || status === 'cancelled') return null;
 
-  // Unpaid work is clearable, PIN or not.
-  //
-  // A PIN is assigned when the job is CREATED, so every pending job has one - but
-  // an unpaid document cannot be collected, because collecting it means paying for
-  // it. Testing the PIN first refused to clear every unpaid job, which is
-  // backwards: the jobs with the least at stake were the only ones a customer
-  // could not delete, and "has a print PIN and can still be collected" is advice
-  // about a document they never paid for.
-  if (!paid && status === 'pending') return null;
+  // Anything unpaid is the customer's to remove. A PIN is assigned when the job
+  // is CREATED, so testing it first refused every unpaid job - the jobs with the
+  // least at stake were the only ones a customer could not delete. The one
+  // exception is a job already handed to the printer: deleting that row now
+  // would pull it out from under the worker.
+  if (!paid) {
+    if (status === 'printing' || status === 'print_requested') {
+      return 'already sent to the printer';
+    }
+    return null;
+  }
 
-  // Checked before the remaining statuses: a PIN is the strongest signal on a job
-  // that has not printed. This is what protects ready_to_print, printing, and any
-  // paid job still awaiting the kiosk.
+  // Paid jobs still waiting at the kiosk are protected by their PIN.
   if (job.print_pin) return 'has a print PIN and can still be collected';
 
   if (status === 'failed' || status === 'refund_issued') return 'needs staff to arrange a refund or reprint';
-  if (status === 'pending' && paid) return 'paid and awaiting print';
+  if (status === 'pending') return 'paid and awaiting print';
   return 'status "' + status + '" is still active';
 }
 

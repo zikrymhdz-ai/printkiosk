@@ -1,4 +1,5 @@
 const { json, err, supabaseRequest, validateSession, generateJobId, calculatePrice, assignUniqueMatchAmount, createJobWithUniqueFee, assignUniqueOrderTotal, ALLOWED_EXTENSIONS, SUPABASE_URL, supabaseStorageSignedUrl, parseMultipartFormData, EXT_MIME_MAP, JOB_PAYABLE_WINDOW_MIN, supabaseStorageUpload, supabaseStorageDelete, mergeFilesToPDF } = require('./_shared');
+const { sendCoinPush } = require('./_push');
 
 // A guest uploading without an account gets one file only: they have no
 // identity, so a bundle of theirs could not be attributed to them when a
@@ -545,7 +546,7 @@ async function handleUpload(event) {
     // Allocate a unique total and insert atomically-ish: if another upload took
     // this exact total in the same instant, retry with the next free slot
     // instead of creating a second job with an identical price.
-    const { result, pricing: usedPricing } = await createJobWithUniqueFee(jobData, {
+    let { result, pricing: usedPricing } = await createJobWithUniqueFee(jobData, {
       page_spec: pageSpec,
       selection_mode: selectionMode
     });
@@ -670,7 +671,7 @@ if (colorPages !== null && (colorPages < 0 || colorPages > pages)) colorPages = 
       print_pin: printPin
     };
 
-    const { result, pricing: usedPricing } = await createJobWithUniqueFee(jobData, {
+    let { result, pricing: usedPricing } = await createJobWithUniqueFee(jobData, {
       page_spec: pageSpec,
       selection_mode: selectionMode
     });
@@ -788,24 +789,29 @@ async function autoConfirmFreeJob(job) {
 
   let coinsEarned = 0;
   if (job.user_id) {
-    coinsEarned = 1;
     const userResult = await supabaseRequest('GET', '/users', null, {
       'id': 'eq.' + job.user_id, 'select': 'coins'
     });
     if (!userResult.error && userResult.data && userResult.data.length > 0) {
       const currentCoins = userResult.data[0].coins;
-      const newBalance = currentCoins + coinsEarned;
-      await supabaseRequest('PATCH', '/users?id=eq.' + job.user_id, { coins: newBalance });
-      await supabaseRequest('POST', '/coin_transactions', {
-        user_id: job.user_id,
-        print_job_id: job.id,
-        type: 'earned',
-        amount: coinsEarned,
-        description: 'Print job ' + job.job_id,
-        balance_after: newBalance
-      });
+      const newBalance = currentCoins + 1;
+      const credit = await supabaseRequest('PATCH', '/users?id=eq.' + job.user_id, { coins: newBalance });
+      if (!credit.error) {
+        coinsEarned = 1;
+        await supabaseRequest('POST', '/coin_transactions', {
+          user_id: job.user_id,
+          print_job_id: job.id,
+          type: 'earned',
+          amount: coinsEarned,
+          description: 'Print job ' + job.job_id,
+          balance_after: newBalance
+        });
+      }
     }
   }
+
+  // After the award is committed; sendCoinPush never throws.
+  if (coinsEarned > 0) await sendCoinPush(job.user_id, coinsEarned);
 
   await supabaseRequest('POST', '/alerts', {
     type: 'payment_received',

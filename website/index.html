@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <link rel="manifest" href="/manifest.webmanifest">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -18,7 +18,7 @@
   body {
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0;
-    background: linear-gradient(135deg, #f0f4ff 0%, #e8edf5 50%, #f0f2f5 100%);
+    background: linear-gradient(135deg, #f5f8ff 0%, #eef2f8 50%, #f1f5f9 100%);
   }
   .loading { text-align: center; animation: fadeIn 0.5s ease-out; }
   .logo-mark {
@@ -29,15 +29,48 @@
   }
   .logo-mark svg { width: 56px; height: 56px; display: block; }
   h1 { font-size: 24px; font-weight: 700; color: #0f172a; margin-bottom: 4px; letter-spacing: -0.02em; }
-  p { color: #64748b; font-size: 14px; }
+  p { color: #5b6b83; font-size: 14px; }
   .links { margin-top: 24px; display: flex; gap: 8px; justify-content: center; }
   .links a {
     padding: 8px 16px; border-radius: 8px; font-size: 13px; font-weight: 500;
     color: #475569; background: white; border: 1px solid #e2e8f0;
     text-decoration: none; transition: all 0.2s;
   }
-  .links a:hover { border-color: #cbd5e1; box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
+  .links a:hover { border-color: #cbd5e1; box-shadow: 0 2px 8px rgba(15,23,42,0.06); }
   @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+  /* ===== shared identity pass - mirrors styles.css =====
+     These pages carry their own <style> instead of linking styles.css,
+     so the shared identity is repeated here. Keep in step with the
+     tokens in styles.css when either changes. */
+  html, body { font-family:'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale; }
+  .auth-title { font-family:'Iowan Old Style','Palatino Linotype',Palatino,'Source Serif 4',Georgia,'Times New Roman',serif;
+    font-weight:600; letter-spacing:-0.015em; }
+  .auth-subtitle { color:#5b6b83; }
+  :focus-visible { outline:2px solid #2563eb; outline-offset:2px; }
+  ::selection { background:#e8efff; color:#0f172a; }
+  .field input, .modal-card input, input[type=text], input[type=email], input[type=password], input[type=tel] {
+    border-radius:10px; border-color:#cbd5e1; box-shadow:inset 0 1px 2px rgba(15,23,42,0.05);
+    transition:border-color .2s ease, box-shadow .2s ease, background .2s ease; color:#0f172a; }
+  .field input:focus, .modal-card input:focus { border-color:#2563eb; box-shadow:0 0 0 3px #e8efff; background:#ffffff; }
+  /* Rubber-stamp button: thickness that collapses when pressed. */
+  .submit-btn, .chip-btn, .link-btn {
+    border-radius:10px; background:#2563eb; border:1px solid #1e40af; color:#ffffff;
+    box-shadow:0 2px 0 #1e40af, 0 10px 20px -10px rgba(29,78,216,0.55);
+    transition:transform .12s ease, box-shadow .16s ease, background .2s ease; }
+  .submit-btn:hover:not(:disabled), .chip-btn:hover:not(:disabled) { background:#1d4ed8; transform:translateY(-1px);
+    box-shadow:0 3px 0 #1e40af, 0 14px 24px -12px rgba(29,78,216,0.6); }
+  .submit-btn:active:not(:disabled), .chip-btn:active:not(:disabled) { transform:translateY(1px); box-shadow:0 1px 0 #1e40af; }
+  .guest-btn { border-radius:10px; border-color:#cbd5e1; transition:background .2s ease, border-color .2s ease; }
+  .guest-btn:hover { background:#e8efff; border-color:#2563eb; }
+  .row-between a, .switch-line a, .terms-row a { text-decoration:none; border-bottom:1px solid transparent; transition:border-color .2s ease; }
+  .row-between a:hover, .switch-line a:hover, .terms-row a:hover { border-bottom-color:currentColor; }
+  .modal-card { border-radius:14px; border:1px solid #e2e8f0; }
+  .modal-overlay { background:rgba(15,23,42,0.42); backdrop-filter:blur(3px); -webkit-backdrop-filter:blur(3px); }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration:0.01ms !important; animation-iteration-count:1 !important; transition-duration:0.01ms !important; }
+  }
 </style>
 </head>
 <body>

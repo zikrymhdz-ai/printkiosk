@@ -102,9 +102,47 @@
           </div>
         </div>
       </div>
+
+      <!-- Live camera. The kiosk publishes a still frame every ~1.5s; this
+           page swaps the image source on that cadence, which reads as live and
+           leaves every frame downloadable. -->
+      <div class="card animate-fade-in" style="margin-top:20px;">
+        <div class="card-header">
+          <span class="card-title">Kiosk Camera</span>
+          <span class="badge badge-gray" id="liveCamBadge">Off</span>
+          <span class="text-xs text-muted" id="liveCamMeta" style="margin-left:auto;"></span>
+          <button class="btn btn-secondary btn-sm" id="liveCamDownloadBtn" onclick="downloadLiveFrame()" disabled>Download frame</button>
+        </div>
+        <p class="text-sm text-muted" style="margin-bottom:12px;">
+          Live view from the shop screen. It appears whenever the kiosk camera is
+          running &mdash; a customer tapping <em>Turn on camera</em>, or the
+          <a href="#" onclick="showSection('security', document.querySelector('[onclick*=security]')); return false;">Security &amp; Kiosk</a>
+          switch that keeps it on. Only the newest few minutes are kept.
+        </p>
+        <p class="text-sm text-muted" id="liveCamMissingMigration" style="display:none; margin-bottom:12px; color:#92400e;">
+          Live frames table not migrated yet. Run
+          <code>migrations/20261104_kiosk_live_frames.sql</code> in the Supabase SQL editor.
+        </p>
+        <div class="grid-2" style="align-items:start; gap:18px;">
+          <div>
+            <div id="liveCamStage" style="position:relative; background:#0b1220; border-radius:12px; overflow:hidden; aspect-ratio:4/3; display:flex; align-items:center; justify-content:center;">
+              <img id="liveCamImg" alt="Kiosk camera" style="width:100%; height:100%; object-fit:cover; display:none;">
+              <p id="liveCamEmpty" class="text-sm" style="color:#94a3b8; margin:0; text-align:center; padding:16px;">
+                Waiting for frames&hellip;
+              </p>
+              <span id="liveCamLiveDot" style="display:none; position:absolute; top:10px; left:10px; background:rgba(15,23,42,.72); color:#fff; font-size:11px; font-weight:700; letter-spacing:.08em; padding:4px 10px; border-radius:999px;">LIVE</span>
+            </div>
+            <p class="text-xs text-muted" id="liveCamHint" style="margin-top:8px; min-height:16px;"></p>
+          </div>
+          <div>
+            <p class="text-xs text-muted" style="margin-bottom:8px; font-weight:600;">Recent captures</p>
+            <div id="liveCamStrip" style="display:grid; grid-template-columns:repeat(4, 1fr); gap:8px;"></div>
+            <p class="text-xs text-muted" id="liveCamStripEmpty" style="margin-top:8px;">Frames appear here as they arrive.</p>
+          </div>
+        </div>
+      </div>
     </div>
 
-    <!-- Transactions -->
     <div id="section-transactions" style="display:none;">
       <!-- Payment watcher liveness lives here, next to the money it protects. -->
       <div id="watcherAlertBanner" style="display:none; margin-bottom:20px; padding:16px 18px; border-radius:var(--radius); border:2px solid #dc2626; background:#fef2f2;">
@@ -335,6 +373,13 @@
               </div>
               <label class="toggle"><input type="checkbox" id="kioskFaceLogin" checked disabled onchange="saveKioskSettings()"><span class="toggle-slider"></span></label>
             </div>
+            <div class="flex-between" style="padding:12px 0; border-top:1px solid var(--gray-100);">
+              <div>
+                <p style="font-weight:600; font-size:14px;">Live Camera</p>
+                <p class="text-xs text-muted">The kiosk camera stays off until a customer taps Turn on camera. While it is on, the overview shows the feed.</p>
+              </div>
+              <span class="badge badge-gray" title="Always available while the camera is on">Automatic</span>
+            </div>
           </div>
           <div>
             <div class="form-group">
@@ -409,6 +454,14 @@ async function init() {
     document.getElementById('faceLogDate').value = todayStr();
     loadAll();
     setInterval(loadAll, 30000);
+    // Overview is the default section, so the camera poll starts here.
+    refreshLiveCam();
+    // A background tab must not keep pulling frames; the poll resumes when the
+    // page is visible again (tickLiveCam stops itself otherwise).
+    document.addEventListener('visibilitychange', function () {
+      if (!document.hidden && overviewOnScreen()) { startLiveCam(); loadLiveFrames(); }
+      else if (document.hidden) stopLiveCam();
+    });
   } catch(e) { window.location.href = '../website/login.html'; }
 }
 
@@ -444,6 +497,9 @@ function showSection(name, el) {
   if (name === 'users') loadUsers();
   if (name === 'printer') { loadReadyJobs(); loadFailedJobs(); }
   if (name === 'security') { loadKioskSettings(); loadFaceDetections(); loadKioskStatus(); }
+
+  // The live camera polls only while its own section is on screen.
+  if (name === 'overview') refreshLiveCam(); else stopLiveCam();
 }
 
 function loadAll() {
@@ -1446,6 +1502,11 @@ function loadKioskSettings() {
       document.getElementById('kioskFaceLogin').disabled = false;
       document.getElementById('kioskMessage').disabled = false;
 
+      // The overview polls whenever it is on screen. Whether there is a feed
+      // depends on the kiosk camera being on, which the customer decides with
+      // the button on the shop screen - not on any setting here.
+      liveCamEnabled = true;
+
       const badge = document.getElementById('kioskStateBadge');
       if (s.maintenance_mode) {
         badge.textContent = 'Maintenance';
@@ -1487,12 +1548,226 @@ function saveKioskSettings() {
     .then(d => {
       if (d.success) {
         loadKioskSettings();
-        alert('Kiosk settings saved. The screen updates within 15 seconds.');
+        alert(d.message || 'Kiosk settings saved. The screen updates within 15 seconds.');
+        if (d.missing_migration) {
+          console.warn('Run ' + d.missing_migration + ' in the Supabase SQL editor to enable the live camera.');
+        }
       } else {
         alert(d.error || 'Failed to save kiosk settings');
       }
     })
     .catch(() => alert('Failed to save kiosk settings'));
+}
+
+/* ===== LIVE CAMERA =====
+   The Pi cannot accept a connection, so it publishes a still frame every ~1.5s
+   and this swaps the image source on that cadence.
+
+   The kiosk publishes whenever its camera is actually running - including when a
+   customer taps "Turn on camera" to log in - so this polls whenever the overview
+   is on screen rather than only when the admin switch is on. Polling is still
+   tied to the section and to the tab being visible, and it backs off when there
+   is nothing to see, so an idle dashboard is not pulling 40 frames a minute. */
+let liveCamEnabled = false;
+let liveCamTimer = null;
+let liveCamTicks = 0;
+let liveCamObjectUrl = null;
+let liveCamLastFrameId = null;
+let liveCamMisses = 0;
+
+function overviewOnScreen() {
+  const s = document.getElementById('section-overview');
+  return !!s && s.style.display !== 'none';
+}
+
+function refreshLiveCam() {
+  // The settings call only decides the wording of the empty state; the camera
+  // feed itself is discovered by polling.
+  return loadKioskSettings().then(function () {
+    if (overviewOnScreen() && !document.hidden) startLiveCam();
+    else stopLiveCam();
+  });
+}
+
+function startLiveCam() {
+  if (liveCamTimer) return;
+  liveCamTicks = 0;
+  liveCamMisses = 0;
+  tickLiveCam();
+}
+
+function stopLiveCam() {
+  if (liveCamTimer) { clearTimeout(liveCamTimer); liveCamTimer = null; }
+}
+
+function tickLiveCam() {
+  liveCamTimer = null;
+  if (!overviewOnScreen() || document.hidden) return;
+
+  loadLiveFrame().then(function (gotFrame) {
+    // Missing frames mean the kiosk camera is simply off. Chasing it every 1.5s
+    // for hours would burn function invocations on an empty rectangle, so the
+    // gap widens to 15s and snaps back the moment a frame appears.
+    liveCamMisses = gotFrame ? 0 : Math.min(liveCamMisses + 1, 12);
+    const delay = gotFrame ? 1500 : Math.min(1500 * Math.pow(1.5, liveCamMisses), 15000);
+
+    // The strip is a slower list: it needs ids, not pixels.
+    if (liveCamTicks % 13 === 0) loadLiveFrames();
+    liveCamTicks++;
+
+    if (overviewOnScreen() && !document.hidden) {
+      liveCamTimer = setTimeout(tickLiveCam, delay);
+    }
+  });
+}
+
+function setLiveCamState(state, hint) {
+  const badge = document.getElementById('liveCamBadge');
+  const dot = document.getElementById('liveCamLiveDot');
+  const empty = document.getElementById('liveCamEmpty');
+  const btn = document.getElementById('liveCamDownloadBtn');
+  const hintEl = document.getElementById('liveCamHint');
+  if (!badge) return;
+
+  if (state === 'live') {
+    badge.textContent = 'Live';
+    badge.className = 'badge badge-success';
+    if (dot) dot.style.display = 'block';
+    if (empty) empty.style.display = 'none';
+    if (btn) btn.disabled = false;
+  } else if (state === 'waiting') {
+    badge.textContent = 'Standby';
+    badge.className = 'badge badge-gray';
+    if (dot) dot.style.display = 'none';
+    if (empty) empty.style.display = 'block';
+    if (empty) empty.textContent = 'The kiosk camera is off.';
+    if (btn) btn.disabled = true;
+  } else {
+    badge.textContent = 'Off';
+    badge.className = 'badge badge-gray';
+    if (dot) dot.style.display = 'none';
+    if (empty) empty.style.display = 'block';
+    if (empty) empty.textContent = 'Live camera is switched off.';
+    if (btn) btn.disabled = true;
+  }
+  if (hintEl) hintEl.textContent = hint || '';
+}
+
+// Resolves true when a frame was rendered, false when there is nothing yet.
+// The cadence of the poll depends on that answer.
+function loadLiveFrame() {
+  return fetch(API('admin', 'kiosk-frame-latest'), {
+    headers: { 'X-Session-Token': token },
+    cache: 'no-store'
+  })
+    .then(function (r) { return r.ok ? r.blob() : Promise.reject(); })
+    .then(function (b) {
+      // Only an actual image may be painted. A function error or a proxy page
+      // can still come back as a 200 body, and showing that as "LIVE" is worse
+      // than showing nothing.
+      if (!b || !/^image\//.test(b.type || '')) return Promise.reject();
+      const img = document.getElementById('liveCamImg');
+      if (!img) return false;
+      const url = URL.createObjectURL(b);
+      img.src = url;
+      // Release the previous frame only after the new one is in place, or the
+      // <img> would blank for a frame every 1.5 seconds.
+      if (liveCamObjectUrl) URL.revokeObjectURL(liveCamObjectUrl);
+      liveCamObjectUrl = url;
+      img.style.display = 'block';
+      setLiveCamState('live');
+      return true;
+    })
+    .catch(function () {
+      // No frame simply means the camera is not running right now. That is the
+      // normal state between customers, not an error worth shouting about.
+      setLiveCamState('waiting',
+        liveCamEnabled
+          ? 'Live camera is switched on but the kiosk has not published a frame yet.'
+          : 'The feed appears whenever the kiosk camera is on - a customer tapping Turn on camera, or the switch in Security & Kiosk.');
+      return false;
+    });
+}
+
+function loadLiveFrames() {
+  fetch(API('admin', 'kiosk-frames&limit=6'), { headers: { 'X-Session-Token': token } })
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      const strip = document.getElementById('liveCamStrip');
+      const emptyNote = document.getElementById('liveCamStripEmpty');
+      if (!strip || !d.success) return;
+      const frames = d.frames || [];
+      if (d.unavailable) {
+        const mig = document.getElementById('liveCamMissingMigration');
+        if (mig) mig.style.display = 'block';
+        if (emptyNote) emptyNote.style.display = 'none';
+        return;
+      }
+      if (emptyNote) emptyNote.style.display = frames.length ? 'none' : 'block';
+      const newest = frames[0] ? frames[0].id : null;
+      if (newest === liveCamLastFrameId) return;
+      liveCamLastFrameId = newest;
+
+      const meta = document.getElementById('liveCamMeta');
+      if (meta && frames[0]) {
+        const age = Math.round((Date.now() - new Date(frames[0].created_at).getTime()) / 1000);
+        meta.textContent = 'Last frame ' + ageFormat(age) + ' ago';
+      }
+
+      strip.innerHTML = frames.map(function (f) {
+        return '<button type="button" onclick="downloadFrameById(\'' + f.id + '\')" ' +
+          'title="Download this frame" ' +
+          'style="padding:0;border:1px solid var(--gray-200);border-radius:8px;overflow:hidden;background:#0b1220;cursor:pointer;aspect-ratio:4/3;">' +
+          '<img data-frame="' + f.id + '" alt="" style="width:100%;height:100%;object-fit:cover;display:block;">' +
+          '</button>';
+      }).join('');
+
+      loadFrameThumbnails();
+    })
+    .catch(function () {});
+}
+
+// Thumbnails need the session token, which an <img src> cannot send.
+function loadFrameThumbnails() {
+  document.querySelectorAll('#liveCamStrip img[data-frame]').forEach(function (img) {
+    const id = img.getAttribute('data-frame');
+    fetch(API('admin', 'kiosk-frame&id=' + encodeURIComponent(id)), {
+      headers: { 'X-Session-Token': token }
+    })
+      .then(function (r) { return r.ok ? r.blob() : Promise.reject(); })
+      .then(function (b) { img.src = URL.createObjectURL(b); })
+      .catch(function () {});
+  });
+}
+
+function saveFrameBlob(blob) {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'printkiosk-' + stamp + '.jpg';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(function () { URL.revokeObjectURL(a.href); }, 4000);
+}
+
+function downloadLiveFrame() {
+  fetch(API('admin', 'kiosk-frame-latest'), {
+    headers: { 'X-Session-Token': token },
+    cache: 'no-store'
+  })
+    .then(function (r) { return r.ok ? r.blob() : Promise.reject(); })
+    .then(saveFrameBlob)
+    .catch(function () { alert('No frame available to download yet.'); });
+}
+
+function downloadFrameById(id) {
+  fetch(API('admin', 'kiosk-frame&id=' + encodeURIComponent(id)), {
+    headers: { 'X-Session-Token': token }
+  })
+    .then(function (r) { return r.ok ? r.blob() : Promise.reject(); })
+    .then(saveFrameBlob)
+    .catch(function () { alert('That frame is no longer available.'); });
 }
 
 function loadFaceDetections() {
@@ -1531,7 +1806,7 @@ function loadFaceDetections() {
           : '<span class="badge badge-warning">Unknown</span>';
         const who = matched
           ? (r.user_name || (r.user_id ? r.user_id.slice(0, 8) + 'â€¦' : 'Unknown user'))
-          : '<span style="color:var(--gray-400);">Not registered</span>';
+          : '<span style="color:var(--gray-400);">Unknown face</span>';
         const when = fmtDateTime(r.created_at);
         const face = r.has_snapshot
           ? '<img data-snap="' + r.id + '" alt="" class="face-thumb" ' +

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <link rel="manifest" href="/manifest.webmanifest">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -12,7 +12,10 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/assets/icon-192.png">
 <link rel="icon" type="image/png" sizes="512x512" href="/assets/icon-512.png">
 <title>PrintKiosk - Kiosk</title>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<!-- No webfont on this page on purpose: the Pi is offline half the time, and a
+     request that never resolves just delays the first paint. The kiosk runs on
+     the system UI font (see the basic-font rule near the end of the styles
+     below), so what it looks like never depends on the shop's wifi. -->
 <link rel="stylesheet" href="../styles.css">
 <script>
 // Raspberry Pi kiosk bootstrap. Must run before frontend_config.js so API() can be
@@ -48,8 +51,24 @@ var ua = navigator.userAgent || '';
 
   // Turn detection on for the Pi. On a Pi the WebGL backend is unreliable and
   // SIMD is unsupported, so the WASM CPU path is the one that actually works.
-if (isPi) {
+  // The kiosk ALWAYS talks to the deployed backend.
+  //
+  // This used to be set only when isPi, which meant the page had no backend at
+  // all when it ran anywhere else - notably inside the Android app's WebView,
+  // where the UA is a normal phone and API() fell through to the dead PHP
+  // paths. Every symptom followed from that one line: no printer status (the
+  // toner panel sat on "Not reported"), no face list (nobody could sign in), and
+  // no frames published (the admin live view stayed empty).
+  //
+  // ABSOLUTE URL, scheme included: a base without "https://" resolves relative
+  // to the page and 404s against whatever serves it.
+  if (!window.PRINTKIOSK_API_BASE) {
     window.PRINTKIOSK_API_BASE = 'https://printkioskfyp.netlify.app';
+  }
+
+  // Turn detection on for the Pi. On a Pi the WebGL backend is unreliable and
+  // SIMD is unsupported, so the WASM CPU path is the one that actually works.
+if (isPi) {
     // Detection runs on the CPU (single-threaded WASM), so every pass stalls
     // the video preview. Detect less often and on a smaller frame: the picture
     // stays smooth and recognition is still fast enough to log someone in.
@@ -83,7 +102,7 @@ window.KIOSK_SETTINGS_POLL_MS = 30000;
 <script src="../vendor/pdf.min.js"></script>
 <script>if (window.pdfjsLib) { pdfjsLib.GlobalWorkerOptions.workerSrc = '../vendor/pdf.worker.min.js'; }</script>
 <style>
-  body { background: #eef4ff; color: #0f2a4a; margin:0; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+  body { background: #f7faff; color: #0f2a4a; margin:0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; }
   .kiosk-layout { max-width: 1420px; margin: 0 auto; display: flex; gap: 16px; padding: 16px; min-height: 100vh; align-items: stretch; }
   /* Three columns on the standing kiosk display:
        LEFT   camera + face recognition
@@ -99,19 +118,19 @@ window.KIOSK_SETTINGS_POLL_MS = 30000;
   /* The PIN column must never be able to widen itself: an intrinsically sized
      input here would push the printer panel off the right edge. */
   .kiosk-col-pin { min-width: 0; overflow: hidden; justify-content: center; }
-  .printer-panel { width: 330px; flex-shrink: 0; background: #ffffff; border: 1px solid #dbeafe; border-radius: 20px; padding: 20px; height: fit-content; box-shadow: 0 4px 16px rgba(37,99,235,0.08); }
+  .printer-panel { width: 330px; flex-shrink: 0; background: #ffffff; border: 1px solid #e8efff; border-radius: 20px; padding: 20px; height: fit-content; box-shadow: 0 4px 16px rgba(37,99,235,0.08); }
   .pp-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
   .pp-title { font-size: 17px; font-weight: 700; display: flex; align-items: center; gap: 8px; color: #1e3a8a; }
-  .pp-status-line { font-size: 13px; color: #64748b; margin-bottom: 16px; }
+  .pp-status-line { font-size: 13px; color: #5b6b83; margin-bottom: 16px; }
   .pp-section { margin-top: 14px; }
-  .pp-section-title { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: #334155; margin-bottom: 9px; }
+  .pp-section-title { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: #1e293b; margin-bottom: 9px; }
   .pp-row { margin-bottom: 11px; }
   .pp-row-top { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 5px; }
   .pp-row-label { color: #475569; font-weight: 500; }
   .pp-row-value { color: #1e40af; font-weight: 600; }
-  .pp-bar { height: 10px; background: #e8effb; border-radius: 6px; overflow: hidden; }
+  .pp-bar { height: 10px; background: #f0f4fb; border-radius: 6px; overflow: hidden; }
   .pp-bar-fill { height: 100%; border-radius: 6px; transition: width 0.6s ease, background-color 0.4s; min-width: 2px; }
-  .pp-foot { margin-top: 18px; font-size: 12px; color: #334155; border-top: 1px solid #e6eefb; padding-top: 12px; display: flex; justify-content: space-between; }
+  .pp-foot { margin-top: 18px; font-size: 12px; color: #1e293b; border-top: 1px solid #f0f4fb; padding-top: 12px; display: flex; justify-content: space-between; }
   /* Below ~1180px the three columns get too cramped to trust with a PIN entry,
      so fall back to camera on top and PIN beneath, panel last. */
   @media (max-width: 1180px) {
@@ -123,53 +142,53 @@ window.KIOSK_SETTINGS_POLL_MS = 30000;
   .cam-box { width: 100%; aspect-ratio: 4/3; border-radius: 20px; overflow: hidden; background: #0f172a; position: relative; border: 3px solid #2563eb; transition: border-color 0.3s; box-shadow: 0 6px 20px rgba(37,99,235,0.15); }
   .cam-box video { width: 100%; height: 100%; object-fit: cover; display: block; transform: scaleX(-1); }
   .cam-box canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; transform: scaleX(-1); }
-  .cam-box .overlay-text { position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.75); padding: 6px 16px; border-radius: 20px; font-size: 13px; white-space: nowrap; z-index: 2; }
+  .cam-box .overlay-text { position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%); background: rgba(15,23,42,0.75); padding: 6px 16px; border-radius: 20px; font-size: 13px; white-space: nowrap; z-index: 2; color: #f8fafc; }
   .pin-section { margin-top: 16px; display: flex; gap: 8px; }
-  .pin-section input { flex: 1 1 0; min-width: 0; background: #ffffff; border: 2px solid #bfdbfe; color: #0f2a4a; font-size: 22px; text-align: center; letter-spacing: 8px; padding: 10px; border-radius: 12px; outline: none; font-weight: 700; font-family: monospace; transition: border-color 0.2s, box-shadow 0.2s; }
+  .pin-section input { flex: 1 1 0; min-width: 0; background: #ffffff; border: 2px solid #dbeafe; color: #0f2a4a; font-size: 22px; text-align: center; letter-spacing: 8px; padding: 10px; border-radius: 12px; outline: none; font-weight: 700; font-family: monospace; transition: border-color 0.2s, box-shadow 0.2s; }
   .pin-section input:focus { border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37,99,235,0.18); }
-  .pin-section input::placeholder { color: #b6c6de; font-size: 18px; letter-spacing: 4px; }
+  .pin-section input::placeholder { color: #64748b; font-size: 18px; letter-spacing: 4px; }
   /* readonly so a stray tap can never summon the Pi's software keyboard */
   .pin-section input[readonly] { cursor: pointer; }
   .pin-keypad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 12px; }
-  .pk-key { padding: 16px 0; border-radius: 14px; border: 2px solid #bfdbfe; background: #ffffff;
+  .pk-key { padding: 16px 0; border-radius: 14px; border: 2px solid #dbeafe; background: #ffffff;
             color: #0f2a4a; font-size: 26px; font-weight: 700; cursor: pointer; font-family: inherit;
             transition: transform 0.08s, background 0.15s, border-color 0.15s; min-height: 56px; }
-  .pk-key:hover { background: #f2f7ff; border-color: #93b8f5; }
-  .pk-key:active { transform: scale(0.94); background: #dbeafe; border-color: #2563eb; }
-  .pk-key-alt { font-size: 16px; font-weight: 600; color: #5b7295; background: #f4f7fb; }
+  .pk-key:hover { background: #fafcff; border-color: #bfdbfe; }
+  .pk-key:active { transform: scale(0.94); background: #e8efff; border-color: #2563eb; }
+  .pk-key-alt { font-size: 16px; font-weight: 600; color: #64748b; background: #f6f9ff; }
   .btn-kiosk { padding: 12px 24px; border-radius: 12px; font-size: 16px; font-weight: 600; cursor: pointer; border: none; transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); }
   .btn-kiosk:active { transform: scale(0.97); }
   .btn-kiosk:disabled { opacity:0.4; cursor:default; transform:none; }
-  .btn-primary-kiosk { background: linear-gradient(135deg, #3b82f6, #2563eb); color: white; box-shadow: 0 4px 14px rgba(37,99,235,0.35); }
+  .btn-primary-kiosk { background: linear-gradient(135deg, #2563eb, #1d4ed8); color: #ffffff; box-shadow: 0 4px 14px rgba(15,23,42,0.18); }
   .btn-primary-kiosk:hover:not(:disabled) { background: linear-gradient(135deg, #2563eb, #1d4ed8); box-shadow: 0 6px 18px rgba(37,99,235,0.45); }
-  .btn-secondary-kiosk { background: #ffffff; color: #2563eb; border: 2px solid #bfdbfe; }
-  .btn-secondary-kiosk:hover:not(:disabled) { background: #eff6ff; color: #1d4ed8; }
-  .btn-green-kiosk { background: #16a34a; color: white; }
-  .btn-green-kiosk:hover:not(:disabled) { background: #15803d; box-shadow: 0 4px 12px rgba(22,163,74,0.3); }
+  .btn-secondary-kiosk { background: #ffffff; color: #2563eb; border: 2px solid #dbeafe; }
+  .btn-secondary-kiosk:hover:not(:disabled) { background: #eff5ff; color: #1d4ed8; }
+  .btn-green-kiosk { background: #15803d; color: white; }
+  .btn-green-kiosk:hover:not(:disabled) { background: #166534; box-shadow: 0 4px 12px rgba(21,128,61,0.3); }
   .status-bar { display: flex; align-items: center; gap: 8px; padding: 8px 0; font-size: 13px; color: #475569; }
   .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex-shrink:0; }
   /* Camera is opt-in. Default off, so an unattended kiosk is not identifying
      people who merely walk past it. White with a blue border and blue label,
      matching the other kiosk buttons exactly. */
   .cam-toggle { width: 100%; margin-top: 4px; }
-  .cam-toggle.cam-on { background: #eff6ff; color: #1d4ed8; border-color: #3b82f6; }
+  .cam-toggle.cam-on { background: #eff5ff; color: #1d4ed8; border-color: #3b82f6; }
   .cam-toggle:disabled { opacity: 0.55; cursor: default; }
-  .cam-hint { font-size: 12px; color: #64748b; text-align: center; margin: 8px 0 0; line-height: 1.5; }
+  .cam-hint { font-size: 12px; color: #5b6b83; text-align: center; margin: 8px 0 0; line-height: 1.5; }
   /* Camera off: deliberately inert rather than a black box that looks broken. */
-  .cam-box.cam-idle { background: #0b1220; border-color: #1e293b; box-shadow: none; }
+  .cam-box.cam-idle { background: #0b1220; border-color: #172033; box-shadow: none; }
   .cam-box.cam-idle::after { content: 'Camera is off'; position: absolute; inset: 0;
     display: flex; align-items: center; justify-content: center;
-    color: #475569; font-size: 15px; font-weight: 600; letter-spacing: 0.02em; }
+    color: #cbd5e1; font-size: 16px; font-weight: 600; letter-spacing: 0.02em; }
   .dot-green { background: #22c55e; }
-  .dot-yellow { background: #eab308; }
-  .dot-red { background: #ef4444; }
+  .dot-yellow { background: #0d9488; }
+  .dot-red { background: #2563eb; }
   /* Overlays use a soft light-blue backdrop so the screen feels bright, not dark. */
-  .confirm-overlay { position: fixed; inset: 0; background: rgba(238,244,255,0.97); display: flex; align-items: center; justify-content: center; z-index: 200; padding: 16px; }
+  .confirm-overlay { position: fixed; inset: 0; background: rgba(255,255,255,0.97); display: flex; align-items: center; justify-content: center; z-index: 200; padding: 16px; }
   /* Admin disabled face login at the kiosk. */
   .cam-box.face-login-off, #camBox.face-login-off { opacity: 0.4; filter: grayscale(1); }
   body.maintenance-active #camBox, body.maintenance-active .kiosk-actions { pointer-events: none; }
-  .confirm-card { background: #ffffff; border-radius: 24px; padding: 32px; text-align: center; max-width: 360px; width: 100%; border: 1px solid #dbeafe; box-shadow: 0 18px 48px rgba(37,99,235,0.20); color: #0f172a; }
-  .confirm-avatar { width: 72px; height: 72px; border-radius: 50%; background: linear-gradient(135deg, #3b82f6, #1d4ed8); display: flex; align-items: center; justify-content: center; font-size: 32px; font-weight: 700; margin: 0 auto 12px; color: white; box-shadow: 0 6px 18px rgba(37,99,235,0.35); }
+  .confirm-card { background: #ffffff; border-radius: 24px; padding: 32px; text-align: center; max-width: 360px; width: 100%; border: 1px solid #e8efff; box-shadow: 0 18px 48px rgba(37,99,235,0.20); color: #0f172a; }
+  .confirm-avatar { width: 72px; height: 72px; border-radius: 50%; background: linear-gradient(135deg, #3b82f6, #1d4ed8); display: flex; align-items: center; justify-content: center; font-size: 32px; font-weight: 700; margin: 0 auto 12px; color: white; box-shadow: 0 6px 18px rgba(15,23,42,0.18); }
   /* Job cards.
    *
    * These used to carry inline onmouseover/onmouseout handlers that set
@@ -188,7 +207,7 @@ window.KIOSK_SETTINGS_POLL_MS = 30000;
    * two effects cost real frame drops. Both are gone.
    */
 .job-card {
-      background: #f8fbff; border-radius: 16px; padding: 20px; margin-top: 12px;
+      background: #ffffff; border-radius: 16px; padding: 20px; margin-top: 12px;
       border: 1px solid #e2e8f0; text-align: left; cursor: pointer;
       transition: border-color 0.15s ease;
       -webkit-tap-highlight-color: transparent;
@@ -203,22 +222,22 @@ window.KIOSK_SETTINGS_POLL_MS = 30000;
     .job-card { transition: none; }
     .job-card:hover, .job-card:focus-visible { transform: none; }
   }
-  .job-card .label { color: #334155; font-size: 12px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em; }
+  .job-card .label { color: #1e293b; font-size: 12px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em; }
   .job-card .value { color: #0f2a4a; font-size: 16px; font-weight: 600; word-break:break-all; }
   .pin-display { font-size: 48px; font-weight: 900; letter-spacing: 16px; color: #2563eb; font-family: monospace; }
   .hidden { display: none !important; }
-  .bottom-links { margin-top: auto; padding: 16px 0; text-align: center; font-size: 13px; color: #334155; }
+  .bottom-links { margin-top: auto; padding: 16px 0; text-align: center; font-size: 13px; color: #1e293b; }
   .bottom-links a { color: #2563eb; text-decoration: none; transition: color 0.2s; }
   .bottom-links a:hover { color: #1d4ed8; }
-  .kiosk-divider { border: none; border-top: 1px solid #dbeafe; margin: 12px 0; }
+  .kiosk-divider { border: none; border-top: 1px solid #e8efff; margin: 12px 0; }
   .action-row { display:flex; gap:8px; margin-top:10px; }
   .action-row button { flex:1; }
   /* A static outline instead of a 1.5s box-shadow pulse. The animation made the
      camera box visibly throb every 1.5 seconds on the shop display, which read
      as screen flicker. Set window.KIOSK_ALLOW_PULSE = true to bring it back. */
-  .pulse-ring { box-shadow: 0 0 0 3px rgba(59,130,246,0.18); }
+  .pulse-ring { box-shadow: 0 0 0 3px rgba(15,23,42,0.12); }
   body.pulse-on .pulse-ring { animation: pulseRing 1.5s infinite; }
-  @keyframes pulseRing { 0% { box-shadow: 0 0 0 0 rgba(59,130,246,0.4); } 70% { box-shadow: 0 0 0 16px rgba(59,130,246,0); } 100% { box-shadow: 0 0 0 0 rgba(59,130,246,0); } }
+  @keyframes pulseRing { 0% { box-shadow: 0 0 0 0 rgba(15,23,42,0.2); } 70% { box-shadow: 0 0 0 16px rgba(59,130,246,0); } 100% { box-shadow: 0 0 0 0 rgba(59,130,246,0); } }
 
   /* ---- Raspberry Pi kiosk ---- */
   /* Touch-driven display: no hover, no text selection, no rubber-band scrolling,
@@ -246,8 +265,8 @@ window.KIOSK_SETTINGS_POLL_MS = 30000;
      inline styles on elements that also appear on other cards. */
   body.pi-kiosk #receiptOverlay .confirm-card span,
   body.pi-kiosk #receiptOverlay .confirm-card p { font-size: 15px; }
-  body.pi-kiosk #receiptOverlay .confirm-card p { color: #334155; }
-  body.pi-kiosk #printingOverlay .confirm-card p { font-size: 16px; color: #334155; }
+  body.pi-kiosk #receiptOverlay .confirm-card p { color: #1e293b; }
+  body.pi-kiosk #printingOverlay .confirm-card p { font-size: 16px; color: #1e293b; }
   body.pi-kiosk #qrCanvas { width: 190px; height: 190px; display: block; }
   body.pi-kiosk .confirm-avatar { width: 92px; height: 92px; font-size: 40px; }
   body.pi-kiosk .status-bar { font-size: 16px; }
@@ -318,8 +337,8 @@ window.KIOSK_SETTINGS_POLL_MS = 30000;
   /* Minimal-chrome diagnostics overlay, toggled by the Pi flag */
   #piDiag {
     position: fixed; left: 8px; bottom: 8px; z-index: 999;
-    font: 11px/1.5 monospace; color: #334155;
-    background: rgba(15,23,42,0.85); border: 1px solid #334155;
+    font: 11px/1.5 monospace; color: #1e293b;
+    background: rgba(15,23,42,0.85); border: 1px solid #1e293b;
     border-radius: 8px; padding: 6px 8px; max-width: 46vw;
     white-space: pre-wrap; pointer-events: none; display: none;
   }
@@ -329,15 +348,313 @@ window.KIOSK_SETTINGS_POLL_MS = 30000;
   body.pi-kiosk.show-diag #piDiag { display: block; }
   #pkError {
     position: fixed; left: 0; right: 0; top: 0; z-index: 1000;
-    background: #b91c1c; color: #fff; font: 12px/1.5 monospace;
+    background: #b91c1c; color: #ffffff; font: 12px/1.5 monospace;
     padding: 6px 10px; display: none; white-space: pre-wrap;
   }
   #pkError.show { display: block; }
 </style>
+
+
 </head>
 <body>
 
+
 <div id="pkError"></div>
+
+<!-- ===== START SCREEN =====
+     The kiosk rests here instead of showing a camera preview and a PIN pad to
+     an empty room. First touch anywhere dismisses it, and 30 idle minutes bring
+     it back (see the script below).
+
+     Kept in its own style/markup/script trio, ahead of the main script, for the
+     same reason the canary lives here: this page must still show the welcome
+     screen even if the big script block throws on load. -->
+<style>
+.start-screen {
+  position: fixed; inset: 0; z-index: 900;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 8px; padding: 48px 28px; text-align: center;
+  background: radial-gradient(120% 90% at 50% 0%, #ffffff 0%, #f5f7fb 55%, #e2ecff 100%);
+  color: #0f172a; cursor: pointer; overflow: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  -webkit-tap-highlight-color: transparent;
+}
+.start-screen.hidden { display: none; }
+body.start-active { overflow: hidden; }
+
+/* Animated ring sits behind all text. */
+.ss-fx {
+  position: absolute; left: 50%; top: 50%;
+  width: min(96vmin, 1100px); height: min(96vmin, 1100px);
+  transform: translate(-50%, -50%);
+  pointer-events: none; z-index: 0;
+}
+.ss-logo, .ss-eyebrow, .ss-title, .ss-sub, .ss-hint { position: relative; z-index: 1; }
+
+.ss-logo {
+  width: 112px; height: 112px; border-radius: 26px; display: block;
+  margin-bottom: 18px; box-shadow: 0 14px 36px rgba(15,23,42,0.18);
+}
+.ss-eyebrow {
+  margin: 0; font-size: 16px; font-weight: 700;
+  letter-spacing: 0.18em; text-transform: uppercase; color: #2563eb;
+}
+.ss-title {
+  margin: 6px 0 0; max-width: 20ch; line-height: 1.12;
+  font-size: clamp(32px, 5.4vw, 76px); font-weight: 800;
+  letter-spacing: -0.02em; color: #0f172a;
+}
+.ss-sub {
+  margin: 22px 0 0; padding: 14px 30px; border-radius: 999px;
+  background: #e8efff; border: 1px solid #c7dbff;
+  font-size: clamp(20px, 2.4vw, 32px); font-weight: 700; color: #1d4ed8;
+  animation: ssBreathe 3.6s ease-in-out infinite;
+}
+.ss-hint {
+  margin: 2px 0 0; max-width: 48ch;
+  font-size: clamp(14px, 1.2vw, 17px); color: #475569;
+}
+.ss-clock {
+  position: fixed; right: 26px; bottom: 20px; z-index: 1;
+  font-size: 16px; font-weight: 600; color: #64748b;
+  font-variant-numeric: tabular-nums;
+}
+@keyframes ssBreathe { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
+@media (prefers-reduced-motion: reduce) { .ss-sub { animation: none; } }
+</style>
+
+<div id="startScreen" class="start-screen" role="button" tabindex="0"
+     aria-label="Touch the screen to continue">
+  <canvas id="ssFx" class="ss-fx" aria-hidden="true"></canvas>
+  <img class="ss-logo" src="/assets/logo.svg" alt=""
+       onerror="if(!this.dataset.r){this.dataset.r=1;this.src='../assets/logo.svg';}else{this.style.display='none';}">
+  <p class="ss-eyebrow">PrintKiosk</p>
+  <h1 class="ss-title">Hi, Welcome to PrintKiosk</h1>
+  <p class="ss-sub">Touch screen to continue</p>
+  <p class="ss-hint">Upload from your phone first, then collect your printout here
+     with your PIN or your face.</p>
+  <p class="ss-clock" id="ssClock">--:--</p>
+</div>
+
+<script>
+// Start-screen background: glowing ring + particle mesh.
+// Pi-friendly: glow is pre-rendered ONCE into sprites, each frame only
+// rotates/composites them. 60fps on desktop, 30fps on the Pi, low backing
+// resolution on the Pi, and it stops completely when the start screen is hidden
+// so it never competes with face detection.
+(function () {
+  var cv = document.getElementById('ssFx');
+  var screenEl = document.getElementById('startScreen');
+  if (!cv || !screenEl) return;
+  var ctx = cv.getContext('2d');
+  if (!ctx) return;
+
+  var N = window.IS_RPI ? 480 : 800;          // backing resolution (square)
+  cv.width = N; cv.height = N;
+  var C = N / 2, R = N * 0.36;
+  var TAU = Math.PI * 2;
+  var reduce = !!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches);
+
+  // Blue palette on the light background (normal blending, not additive).
+  var STOPS = [
+    [0.00, 'rgba(37,99,235,0.95)'],
+    [0.16, 'rgba(96,165,250,1)'],
+    [0.30, 'rgba(147,197,253,0.9)'],
+    [0.46, 'rgba(99,102,241,0.75)'],
+    [0.66, 'rgba(59,130,246,0.15)'],
+    [0.84, 'rgba(29,78,216,0.55)'],
+    [1.00, 'rgba(37,99,235,0.95)']
+  ];
+
+  function makeRing(offX, offY, width, blur, startAngle) {
+    var s = document.createElement('canvas');
+    s.width = N; s.height = N;
+    var g = s.getContext('2d');
+    var stroke = 'rgba(59,130,246,0.9)';
+    if (g.createConicGradient) {
+      stroke = g.createConicGradient(startAngle, C + offX, C + offY);
+      STOPS.forEach(function (st) { stroke.addColorStop(st[0], st[1]); });
+    }
+    g.strokeStyle = stroke;
+    g.lineWidth = width;
+    g.shadowColor = 'rgba(37,99,235,0.8)';
+    g.shadowBlur = blur;
+    g.beginPath(); g.arc(C + offX, C + offY, R, 0, TAU); g.stroke();
+    return s;
+  }
+  // Three slightly offset rings = thick/thin crescents like the reference.
+  var ringA = makeRing(0, 0, N * 0.013, N * 0.035, 0);
+  var ringB = makeRing(N * 0.009, N * 0.013, N * 0.007, N * 0.022, 2.1);
+  var ringC = makeRing(-N * 0.007, -N * 0.011, N * 0.005, N * 0.016, 4.2);
+
+  // Particle mesh inside the ring.
+  var pts = [];
+  var G = window.IS_RPI ? 18 : 24;
+  for (var i = 0; i < G; i++) {
+    for (var j = 0; j < G; j++) {
+      var x = (i / (G - 1)) * 2 - 1, y = (j / (G - 1)) * 2 - 1;
+      if (x * x + y * y <= 0.92) pts.push([x, y]);
+    }
+  }
+  // Faint dotted halo just outside the ring.
+  var halo = [];
+  var H = window.IS_RPI ? 90 : 160;
+  for (var k = 0; k < H; k++) {
+    halo.push({ a: Math.random() * TAU, r: 1.05 + Math.random() * 0.07,
+                p: Math.random() * TAU, s: 0.0006 + Math.random() * 0.001 });
+  }
+
+  function sprite(s, ang, scale, alpha) {
+    ctx.globalAlpha = alpha;
+    ctx.save();
+    ctx.translate(C, C); ctx.rotate(ang); ctx.scale(scale, scale);
+    ctx.drawImage(s, -C, -C);
+    ctx.restore();
+  }
+
+  function draw(t) {
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = 1;
+    ctx.clearRect(0, 0, N, N);
+    ctx.globalCompositeOperation = 'source-over';
+
+    var pulse = 1 + 0.022 * Math.sin(t * 0.0013);
+    sprite(ringA, t * 0.00022, pulse, 0.95);
+    sprite(ringB, -t * 0.00031 + 1, pulse * 1.004, 0.80);
+    sprite(ringC, t * 0.00041 + 2, 1 / pulse, 0.70);
+
+    // Mesh: two passes (pink / green) so fillStyle changes only twice.
+    var d = Math.max(1.5, N * 0.004);
+    for (var pass = 0; pass < 2; pass++) {
+      ctx.fillStyle = pass ? 'rgb(99,102,241)' : 'rgb(37,99,235)';
+      for (var n = 0; n < pts.length; n++) {
+        var x = pts[n][0], y = pts[n][1];
+        var z = Math.sin(x * 3.2 + t * 0.0009) * Math.cos(y * 2.6 - t * 0.0007);
+        if ((z > 0.15) !== !!pass) continue;
+        ctx.globalAlpha = 0.15 + 0.35 * Math.abs(z);
+        var k2 = 1 + 0.05 * z;
+        ctx.fillRect(C + x * R * 0.94 * k2, C + y * R * 0.94 * k2, d, d);
+      }
+    }
+
+    ctx.fillStyle = 'rgb(59,130,246)';
+    for (var h = 0; h < halo.length; h++) {
+      var o = halo[h];
+      ctx.globalAlpha = 0.10 + 0.35 * (0.5 + 0.5 * Math.sin(t * o.s * 6 + o.p));
+      var ang = o.a + t * 0.00006;
+      ctx.fillRect(C + Math.cos(ang) * R * o.r * pulse, C + Math.sin(ang) * R * o.r * pulse, d, d);
+    }
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  var raf = 0, last = 0, running = false;
+  // The kiosk shares one CPU with face detection, so the Pi runs at 30fps.
+  // Desktop keeps 60.
+  var FRAME_MS = window.IS_RPI ? 33 : 16;
+  function loop(now) {
+    if (!running) return;
+    raf = requestAnimationFrame(loop);
+    if (now - last < FRAME_MS) return;
+    last = now;
+    draw(now);
+  }
+  function start() {
+    if (running) return;
+    if (reduce) { draw(4000); return; }   // one still frame
+    running = true; raf = requestAnimationFrame(loop);
+  }
+  function stop() {
+    running = false;
+    if (raf) cancelAnimationFrame(raf);
+    raf = 0;
+  }
+  function sync() {
+    if (screenEl.classList.contains('hidden') || document.hidden) stop(); else start();
+  }
+
+  // No edits to the controller needed: watch the screen's own class list.
+  new MutationObserver(sync).observe(screenEl, { attributes: true, attributeFilter: ['class'] });
+  document.addEventListener('visibilitychange', sync);
+  sync();
+})();
+</script>
+
+<script>
+// Start screen controller. Owns its own touch timestamp instead of borrowing
+// the main script's, so the 30-minute rule keeps working even if that block
+// died on load.
+(function () {
+  var IDLE_RESET_MS = 30 * 60 * 1000;
+  var screenEl = document.getElementById('startScreen');
+  if (!screenEl) return;
+
+  var lastTouch = Date.now();
+
+  // The welcome card is up from the moment the page loads, so lock the page
+  // behind it straight away rather than waiting for showStartScreen().
+  document.body.classList.add('start-active');
+
+  function isVisible() { return !screenEl.classList.contains('hidden'); }
+
+  function showStartScreen() {
+    // Maintenance mode already owns the glass; stacking the welcome card on top
+    // would hide the shop's own message.
+    if (document.body.classList.contains('maintenance-active')) return;
+    if (isVisible()) return;
+    screenEl.classList.remove('hidden');
+    document.body.classList.add('start-active');
+    lastTouch = Date.now();
+    // Ask the page to drop the abandoned flow underneath. Optional call: the
+    // welcome screen must appear even when nothing else on the page works.
+    try { if (typeof window.pkResetToStart === 'function') window.pkResetToStart(); } catch (e) {}
+  }
+
+  function hideStartScreen() {
+    if (!isVisible()) return;
+    screenEl.classList.add('hidden');
+    document.body.classList.remove('start-active');
+    lastTouch = Date.now();
+  }
+
+  // pointerdown, not click: the very first tap should feel immediate, and it
+  // must also count when the customer drags instead of tapping.
+  ['pointerdown', 'touchstart', 'mousedown', 'keydown'].forEach(function (ev) {
+    document.addEventListener(ev, function () {
+      lastTouch = Date.now();
+      hideStartScreen();
+    }, { passive: true });
+  });
+
+  // 15s granularity is plenty: someone finding a kiosk that has been alone for
+  // half an hour does not care whether it cleared at 30:00 or 30:14.
+  setInterval(function () {
+    if (isVisible()) return;
+    if (Date.now() - lastTouch >= IDLE_RESET_MS) showStartScreen();
+  }, 15000);
+
+  window.pkShowStartScreen = showStartScreen;
+  window.pkHideStartScreen = hideStartScreen;
+  window.pkIsStartScreenVisible = isVisible;
+
+  // Clock for the resting screen: the header clock sits underneath this overlay.
+  var clockEl = document.getElementById('ssClock');
+  function tickClock() {
+    if (!clockEl) return;
+    var now = new Date();
+    try {
+      clockEl.textContent = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        + '   ' + now.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
+    } catch (e) {
+      clockEl.textContent = ('0' + now.getHours()).slice(-2) + ':' + ('0' + now.getMinutes()).slice(-2);
+    }
+  }
+  tickClock();
+  setInterval(tickClock, 30000);
+})();
+</script>
 
 <!-- Canary: fires even if the main script block fails to parse. If the admin
      page ever shows this kiosk as offline, this tiny inline snippet is the
@@ -431,7 +748,7 @@ window.addEventListener('load', function () {
   background: #ffffff;
   border: 1px solid #e2e8f0;
   border-radius: 16px;
-  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.06);
+  box-shadow: 0 2px 8px rgba(15,23,42, 0.06);
 }
 .kh-brand { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
 .kh-logo { width: 42px; height: 42px; border-radius: 10px; display: block; }
@@ -452,15 +769,21 @@ window.addEventListener('load', function () {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* The site address is a label, not a link. Tapping it on the shop screen used to
+   open a browser tab on top of kiosk mode, which a customer could not get out of
+   and which puts the whole kiosk one swipe from the internet. Nothing on this
+   screen navigates anywhere. */
 .kh-site {
   display: inline-block;
   margin-top: 2px;
   font-size: 13px;
-  color: #64748b;
+  color: #475569;
   text-decoration: none;
-  border-bottom: 1px dotted #cbd5e1;
+  cursor: default;
+  pointer-events: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
-.kh-site:hover { color: #2563eb; border-bottom-color: #2563eb; }
 .kh-clock { flex: 0 0 auto; text-align: right; }
 .kh-time {
   display: block;
@@ -470,7 +793,7 @@ window.addEventListener('load', function () {
   font-variant-numeric: tabular-nums;
   line-height: 1.1;
 }
-.kh-date { display: block; font-size: 12px; color: #64748b; margin-top: 2px; }
+.kh-date { display: block; font-size: 12px; color: #5b6b83; margin-top: 2px; }
 
 /* The kiosk already collapses to a single column on narrow screens; the header
    has to follow, or the clock is pushed off the edge. */
@@ -490,17 +813,54 @@ window.addEventListener('load', function () {
   background: #ffffff;
   border: 1px solid #e2e8f0;
   border-radius: 50%;
-  color: #334155;
+  color: #1e293b;
   cursor: pointer;
   z-index: 2;
   transition: color 0.15s ease, border-color 0.15s ease;
 }
-.jobs-cancel:hover, .jobs-cancel:focus-visible { color: #b91c1c; border-color: #fca5a5; }
+.jobs-cancel:hover, .jobs-cancel:focus-visible { color: #b91c1c; border-color: #b91c1c; }
 body.pi-kiosk .jobs-cancel { width: 48px; height: 48px; }
+
+/* ---- Pi panel legibility ----
+   The operator stands at arm's length from a 1080px-wide panel, often in
+   poor light, and taps with a finger. These rules land last so they win
+   over the compact breakpoints above, which were tuned for small screens.
+   Sizes only - no copy or flow changes. */
+@media (min-width: 900px) {
+  body.pi-kiosk .kiosk-layout { gap: 20px; padding: 20px 18px 28px; }
+  body.pi-kiosk .pin-section { gap: 12px; }
+  body.pi-kiosk .pin-section input {
+    font-size: 34px; letter-spacing: 10px; min-height: 72px; padding: 14px;
+    border-color: #bfdbfe; color: #0f172a;
+  }
+  body.pi-kiosk .pin-section input::placeholder { color: #94a3b8; font-size: 26px; letter-spacing: 6px; }
+  body.pi-kiosk .pin-keypad { gap: 12px; margin-top: 14px; }
+  body.pi-kiosk .pk-key { font-size: 30px; min-height: 76px; border-radius: 14px; font-weight: 700; color: #0f172a; }
+  body.pi-kiosk .pk-key-alt { font-size: 18px; color: #475569; }
+  body.pi-kiosk .btn-kiosk { font-size: 20px; min-height: 64px; padding: 14px 26px; }
+  body.pi-kiosk #kioskPinHint { font-size: 17px !important; color: #475569 !important; }
+  body.pi-kiosk .pp-section-title { font-size: 14px; letter-spacing: 0.08em; }
+  body.pi-kiosk .pp-row-label, body.pi-kiosk .pp-row-value { font-size: 15px; }
+}
 
 @media (max-width: 640px) {
   .kiosk-header { flex-wrap: wrap; justify-content: space-between; }
   .kh-centre { order: 3; flex-basis: 100%; text-align: left; }
+}
+
+/* ---- Basic font ----
+   Every other page keeps the serif display face, but this screen is read from
+   about a metre away by someone holding a phone, and it is the page that must
+   never depend on a network font. Plain system UI sans for everything,
+   headings included, so the kiosk looks the same on any Pi image.
+
+   Placed last on purpose: styles.css sets headings (and .stat-value) to the
+   display serif with the same specificity, so this has to come after it. */
+body, button, input, select, textarea,
+h1, h2, h3, h4, h5, h6,
+.auth-title, .face-card .name, .stat-value {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
 }
 </style>
 
@@ -512,8 +872,7 @@ body.pi-kiosk .jobs-cancel { width: 48px; height: 48px; }
 
   <div class="kh-centre">
     <p class="kh-greeting">Hi, Welcome to PrintKiosk</p>
-    <a class="kh-site" href="https://printkioskfyp.netlify.app" target="_blank"
-       rel="noopener noreferrer">printkioskfyp.netlify.app</a>
+    <span class="kh-site">printkioskfyp.netlify.app</span>
   </div>
 
   <div class="kh-clock">
@@ -671,7 +1030,7 @@ body.pi-kiosk .jobs-cancel { width: 48px; height: 48px; }
 
 <div id="maintOverlay" class="confirm-overlay hidden" style="background:#eef4ff;">
   <div class="confirm-card" style="text-align:center; max-width:420px;">
-    <div style="width:64px; height:64px; border-radius:50%; background:linear-gradient(135deg,#3b82f6,#2563eb); display:flex; align-items:center; justify-content:center; margin:0 auto 18px; box-shadow:0 8px 20px rgba(37,99,235,0.35);">
+    <div style="width:64px; height:64px; border-radius:50%; background:linear-gradient(135deg,#3b82f6,#2563eb); display:flex; align-items:center; justify-content:center; margin:0 auto 18px; box-shadow:0 8px 20px rgba(15,23,42,0.18);">
       <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round"><path d="M12 9v4M12 17h.01"/><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg>
     </div>
     <h2 style="font-size:23px; font-weight:700; margin-bottom:10px; color:#0f2a4a;">Kiosk Under Maintenance</h2>
@@ -740,9 +1099,9 @@ body.pi-kiosk .jobs-cancel { width: 48px; height: 48px; }
     <p style="font-size:28px; font-weight:700; margin-bottom:8px;" id="payAmount">RM 0.00</p>
     <img src="../payment_qr.jpeg" alt="DuitNow QR - Touch &apos;n Go eWallet" style="width:180px; border-radius:12px; margin:12px 0; border:1px solid #374151;">
     <p style="font-size:14px; color:#334155; text-align:center; margin:0 0 6px;">Pay the exact amount above, then press the button.</p>
-    <p id="payWaitingTip" style="display:none; margin-top:12px; padding:12px; background:rgba(239,68,68,0.1); border:1px solid rgba(239,68,68,0.35); border-radius:10px; color:#fca5a5; font-size:13px; line-height:1.5; text-align:center;"></p>
+    <p id="payWaitingTip" style="display:none; margin-top:12px; padding:12px; background:rgba(239,68,68,0.1); border:1px solid rgba(239,68,68,0.35); border-radius:10px; color:#b91c1c; font-size:13px; line-height:1.5; text-align:center;"></p>
     <button class="btn-kiosk btn-primary-kiosk" style="width:100%;" onclick="confirmPayment()" id="payBtn">I have paid</button>
-    <p id="paySuccess" style="display:none; margin-top:12px; font-size:16px; color:#22c55e; font-weight:600;">Payment Successful</p>
+    <p id="paySuccess" style="display:none; margin-top:12px; font-size:16px; color:#15803d; font-weight:600;">Payment Successful</p>
     <button class="btn-kiosk btn-secondary-kiosk" style="width:100%; margin-top:8px;" onclick="closePayment()">Close</button>
   </div>
 </div>
@@ -760,7 +1119,7 @@ body.pi-kiosk .jobs-cancel { width: 48px; height: 48px; }
       <div style="display:flex; justify-content:space-between; padding:6px 0;"><span style="color:#334155; font-size:13px;">Pages</span><span style="font-size:13px; font-weight:600;" id="receiptPages">-</span></div>
       <div style="display:flex; justify-content:space-between; padding:6px 0;"><span style="color:#334155; font-size:13px;">Color</span><span style="font-size:13px; font-weight:600;" id="receiptColor">-</span></div>
       <div style="display:flex; justify-content:space-between; padding:6px 0;"><span style="color:#334155; font-size:13px;">Copies</span><span style="font-size:13px; font-weight:600;" id="receiptCopies">-</span></div>
-      <div style="display:flex; justify-content:space-between; padding:6px 0; border-top:1px solid #1e293b; margin-top:4px; padding-top:10px;"><span style="color:#334155; font-size:14px; font-weight:600;">Total Paid</span><span style="font-size:18px; font-weight:700; color:#22c55e;" id="receiptTotal">RM 0.00</span></div>
+      <div style="display:flex; justify-content:space-between; padding:6px 0; border-top:1px solid #1e293b; margin-top:4px; padding-top:10px;"><span style="color:#334155; font-size:14px; font-weight:600;">Total Paid</span><span style="font-size:18px; font-weight:700; color:#15803d;" id="receiptTotal">RM 0.00</span></div>
     </div>
     <div style="background:rgba(59,130,246,0.1); border-radius:10px; padding:10px 14px; text-align:center; margin-bottom:16px;" id="receiptCoinsRow">
       <span style="font-size:13px; color:#1d4ed8;">You earned <strong id="receiptCoins">0</strong> coins</span>
@@ -792,7 +1151,7 @@ body.pi-kiosk .jobs-cancel { width: 48px; height: 48px; }
         </circle>
       </svg>
       <svg id="printingDoneIcon" width="64" height="64" viewBox="0 0 24 24" fill="none"
-           stroke="#22c55e" stroke-width="2.5" style="display:none;">
+           stroke="#15803d" stroke-width="2.5" style="display:none;">
         <polyline points="20 6 9 17 4 12"/>
       </svg>
       <svg id="printingFailIcon" width="64" height="64" viewBox="0 0 24 24" fill="none"
@@ -809,7 +1168,7 @@ body.pi-kiosk .jobs-cancel { width: 48px; height: 48px; }
       <div style="display:flex; justify-content:space-between; padding:5px 0;"><span style="color:#334155; font-size:13px;">Status</span><span style="font-size:13px; font-weight:600;" id="printingState">-</span></div>
     </div>
 
-    <p id="printingHelp" style="display:none; background:rgba(239,68,68,0.1); border:1px solid rgba(239,68,68,0.35); border-radius:10px; padding:12px; color:#fca5a5; font-size:13px; line-height:1.5;">
+    <p id="printingHelp" style="display:none; background:rgba(239,68,68,0.1); border:1px solid rgba(239,68,68,0.35); border-radius:10px; padding:12px; color:#b91c1c; font-size:13px; line-height:1.5;">
       Your document could not be printed. Please see a staff member &mdash; you will not be charged again.
     </p>
 
@@ -996,30 +1355,43 @@ var lastUnknownLog = 0;
 var UNKNOWN_LOG_INTERVAL_MS = 15000;
 
 // Grab a small JPEG of the face so the admin can see who was recognised.
-function captureFaceSnapshot(box) {
+//
+// box arrives in the DETECTION frame (detectWidth, often 256px), not in video
+// pixels. The crop used to pass those coordinates straight to drawImage(video),
+// whose frame is much larger, so every snapshot showed a corner of the room
+// instead of the face - which is why the admin log looked empty of people.
+function captureFaceSnapshot(box, frameW, frameH) {
   try {
-    var v = document.getElementById('video');
-    if (!v || !v.videoWidth) return null;
+    // The kiosk camera is <video id="kioskCam">. This used to ask the DOM for an
+    // element with the id "video", which this page does not have, so every call
+    // returned null: no snapshot was ever taken and the admin log's picture
+    // column was always empty.
+    var v = document.getElementById('kioskCam');
+    if (!v || !v.videoWidth || !box) return null;
 
-    // Crop to the face box with a little padding, then square it up.
     var vw = v.videoWidth, vh = v.videoHeight;
-    var pad = box.width * 0.25;
-    var side = Math.max(box.width, box.height) * 1.5;
-    // Clamp the whole square inside the frame. Anchoring only the top-left and
-    // letting it run past the right/bottom edge would sample black bars and could
-    // throw on some drivers.
-    var x = Math.max(0, Math.min(box.x - pad, vw - side));
-    var y = Math.max(0, Math.min(box.y - pad, vh - side));
-    if (side < 8) return null;
-    if (x + side > vw) x = Math.max(0, vw - side);
-    if (y + side > vh) y = Math.max(0, vh - side);
+    var sx = frameW ? vw / frameW : 1;
+    var sy = frameH ? vh / frameH : 1;
 
-    var size = 128;
+    var bw = box.width * sx;
+    var bh = box.height * sy;
+    var bx = box.x * sx;
+    var by = box.y * sy;
+
+    // Square crop centred on the face, with headroom, clamped inside the frame.
+    var side = Math.max(bw, bh) * 1.6;
+    if (!(side >= 8)) return null;
+    side = Math.min(side, vw, vh);
+
+    var x = Math.max(0, Math.min(bx + bw / 2 - side / 2, vw - side));
+    var y = Math.max(0, Math.min(by + bh / 2 - side / 2, vh - side));
+
+    var size = 160;
     var c = document.createElement('canvas');
     c.width = size; c.height = size;
     var cx = c.getContext('2d');
     cx.drawImage(v, x, y, side, side, 0, 0, size, size);
-    return c.toDataURL('image/jpeg', 0.6);
+    return c.toDataURL('image/jpeg', 0.65);
   } catch (e) { return null; }
 }
 
@@ -1039,17 +1411,105 @@ function logFaceDetection(userId, distance, matched, snapshot) {
   } catch (e) { /* never let audit logging break the kiosk */ }
 }
 
-function throttledUnknownLog(distance) {
+function throttledUnknownLog(distance, box, frameW, frameH) {
   var now = Date.now();
   if (now - lastUnknownLog < UNKNOWN_LOG_INTERVAL_MS) return;
   lastUnknownLog = now;
-  logFaceDetection(null, distance, false);
+  // An unknown face is still a capture. Without the picture the admin log only
+  // said "Not registered" and there was no way to see who had stood there.
+  logFaceDetection(null, distance, false, captureFaceSnapshot(box, frameW, frameH));
+}
+
+/* ===== LIVE CAMERA (admin overview) =====
+   The dashboard cannot open a connection to a Pi sitting behind the shop's NAT,
+   so the kiosk publishes a small still frame on a timer and the overview shows
+   the newest one. Repeating it every 1.5s reads as a live view, and - unlike a
+   video stream - every frame is already a file the admin can download.
+
+   Publishes only while the shop has switched the feed on (kiosk settings). */
+var liveFrameTimer = null;
+var liveFrameSending = false;
+
+// Full frame, not the face crop: the admin is watching the shop, not logging an
+// identity. 480px wide keeps a frame around 20-30KB.
+//
+// ONE canvas, reused. This used to create a fresh canvas every 1.5s, which on a
+// Pi means a new GPU-backed surface every 90 seconds of streaming - it is the
+// kind of leak that ends with the kiosk renderer being killed and the page going
+// dead mid-shift.
+var liveFrameCanvas = null;
+function captureLiveFrame() {
+  try {
+    var v = document.getElementById('kioskCam');
+    if (!v || !v.videoWidth) return null;
+    var w = Math.min(480, v.videoWidth);
+    var h = Math.round(v.videoHeight * (w / v.videoWidth));
+    if (!liveFrameCanvas) liveFrameCanvas = document.createElement('canvas');
+    if (liveFrameCanvas.width !== w) liveFrameCanvas.width = w;
+    if (liveFrameCanvas.height !== h) liveFrameCanvas.height = h;
+    liveFrameCanvas.getContext('2d').drawImage(v, 0, 0, w, h);
+    return liveFrameCanvas.toDataURL('image/jpeg', 0.5);
+  } catch (e) { return null; }
+}
+
+function sendLiveFrame() {
+  // Never queue up behind a slow upload: on shop wifi a backlog would turn a
+  // live view into a recording that plays minutes late.
+  if (liveFrameSending) return;
+  var frame = captureLiveFrame();
+  if (!frame) return;
+  liveFrameSending = true;
+
+  // A request that never settles used to wedge this flag on forever, and the
+  // feed died silently until the page was reloaded. Shop wifi does drop
+  // half-open connections, so the flag is released by a watchdog as well as by
+  // the promise.
+  var released = false;
+  var done = function () {
+    if (released) return;
+    released = true;
+    liveFrameSending = false;
+  };
+  var watchdog = setTimeout(done, 8000);
+
+  try {
+    fetch(API('data', 'kiosk-frame'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kiosk_id: KIOSK_ID, frame: frame })
+    }).then(function () { clearTimeout(watchdog); done(); },
+            function () { clearTimeout(watchdog); done(); });
+  } catch (e) { clearTimeout(watchdog); done(); }
+}
+
+function startLiveStream() {
+  if (liveFrameTimer) return;
+  piLog('live camera: publishing frames for the dashboard');
+  sendLiveFrame();
+  liveFrameTimer = setInterval(sendLiveFrame, 1500);
+}
+
+function stopLiveStream() {
+  if (!liveFrameTimer) return;
+  clearInterval(liveFrameTimer);
+  liveFrameTimer = null;
+  piLog('live camera: stopped');
+}
+
+// Publish whenever the camera is actually running - not only when the admin
+// forced it on. A customer tapping "Turn on camera" to log in is exactly the
+// moment the shop wants to be able to see the kiosk, so the admin's switch only
+// decides whether the kiosk forces its camera on by itself.
+function syncLiveStream() {
+  var inMaintenance = document.body.classList.contains('maintenance-active');
+  if (cameraOn && !inMaintenance) startLiveStream();
+  else stopLiveStream();
 }
 
 /* ===== REMOTE KIOSK CONTROL (admin) ===== */
 // Must match APP_VERSION in netlify/functions/_shared.js. If the deployed
 // version differs, the kiosk reloads itself so it never runs a stale page.
-var KIOSK_APP_VERSION = '2026.10.27-104';
+var KIOSK_APP_VERSION = '2026.11.04-138';
 
 // Latest printer verdict from the backend: can we print, and if not why.
 // Refreshed by loadPrinterStatus() and consulted by printTapped() at the
@@ -1077,7 +1537,12 @@ function applyKioskSettings(s) {
     var nextMsg = kioskState.maintenance_message || 'Kiosk temporarily unavailable.';
     if (msg && nextMsg !== prevMsg) msg.textContent = nextMsg;
     window.__pkMaintMsg = nextMsg;
-    if (!wasMaint) overlay.classList.remove('hidden');
+    if (!wasMaint) {
+      overlay.classList.remove('hidden');
+      // The welcome card sits above every overlay, so leaving it up would bury
+      // the shop's own maintenance message.
+      try { if (window.pkHideStartScreen) window.pkHideStartScreen(); } catch (e) {}
+    }
     document.body.classList.add('maintenance-active');
     // Freeze the camera so nothing happens behind the maintenance screen.
     if (!cameraStoppedForMaint && typeof stopCamera === 'function') {
@@ -1088,6 +1553,10 @@ function applyKioskSettings(s) {
     if (wasMaint) overlay.classList.add('hidden');
     document.body.classList.remove('maintenance-active');
     window.__pkMaintMsg = '';
+    // Back to the resting screen once the shop is open again.
+    if (wasMaint) {
+      try { if (window.pkShowStartScreen) window.pkShowStartScreen(); } catch (e) {}
+    }
     // Critical: maintenance stopped the camera, so bring it back when it ends,
     // otherwise face recognition stays dead until a manual page reload.
     if (wasStopped) {
@@ -1110,6 +1579,14 @@ function applyKioskSettings(s) {
       status.textContent = 'Face login disabled by admin - use QR or PIN';
     }
   }
+
+  // The camera stays OFF until a customer taps "Turn on camera".
+  //
+  // It deliberately does NOT open itself here: an unattended kiosk that switches
+  // its own camera on is a privacy problem, and reopening underneath a customer
+  // mid-login stole the frame they were standing there for. The live view simply
+  // follows whatever the camera is doing.
+  if (typeof syncLiveStream === 'function') syncLiveStream();
 }
 
 function startKioskSettingsPolling() {
@@ -1234,6 +1711,35 @@ let lastInteraction = Date.now();
   document.addEventListener(ev, function() { lastInteraction = Date.now(); }, { passive: true });
 });
 function isIdleFor(ms) { return (Date.now() - lastInteraction) > ms; }
+
+// Called by the start-screen block when 30 idle minutes hand the glass back.
+// Whatever the last customer left half-finished has to go, or the next person
+// walks into a stranger's job list, PIN screen or payment QR.
+//
+// printingOverlay is deliberately NOT closed: a job may genuinely be on its way
+// through the printer, and the overlay is what tells the customer it finished.
+// It sits under the welcome card and is still there after the first tap.
+window.pkResetToStart = function () {
+  ['confirmOverlay', 'jobsOverlay', 'qrOverlay', 'pinJobOverlay', 'paymentOverlay', 'receiptOverlay']
+    .forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el) el.classList.add('hidden');
+    });
+
+  matchedUser = null;
+  currentPinJob = null;
+  currentPinJobId = null;
+  currentPinJobs = [];
+  resetFaceStreak();
+
+  var pin = document.getElementById('pinInput');
+  if (pin) pin.value = '';
+  var feedback = document.getElementById('pinFeedback');
+  if (feedback) { feedback.style.display = 'none'; feedback.textContent = ''; }
+
+  setFaceStatus('Ready when you are', 'dot');
+  piLog('idle 30 min - back to start screen');
+};
 
 // Every step gets its own try/catch. They used to sit in one sequence, so a
 // single throw (a missing vendor file, an unsupported API) silently killed
@@ -1774,20 +2280,50 @@ async function startFaceDetection() {
   // Detector input size: smaller is faster on a Pi's CPU.
   const inputSize = window.IS_RPI ? 256 : 416;
 
-  let labeledDescriptors = [];
-  try {
-    const r = await fetch(API('data', 'get-users-with-face'));
-    const d = await r.json();
-    const users = d.data || [];
-    for (const u of users) {
-      if (u.face_descriptor && Array.isArray(u.face_descriptor) && u.face_descriptor.length === 128) {
-        labeledDescriptors.push(new faceapi.LabeledFaceDescriptors(u.id, [new Float32Array(u.face_descriptor)]));
-      }
-    }
-    piLog('registered faces: ' + labeledDescriptors.length);
-  } catch(e) { piLog('face list failed: ' + e.message); }
+  // The enrolled faces. Fetched once when the camera opens - and retried, with
+  // backoff, while it comes back empty or fails.
+  //
+  // Without the retry a single bad answer (shop wifi dropping as the camera
+  // opens) left the kiosk with no matcher for the rest of its life: every face
+  // read as unknown, nobody could sign in, and the only cure was reloading the
+  // page. A stale-but-empty list must heal itself.
+  let matcher = null;
+  window.__pkFaceListFailed = false;
 
-  let matcher = labeledDescriptors.length > 0 ? new faceapi.FaceMatcher(labeledDescriptors, 0.6) : null;
+  async function loadFaceList() {
+    try {
+      const r = await fetch(API('data', 'get-users-with-face'));
+      const d = await r.json();
+      const users = (d && d.data) || [];
+      const labeled = [];
+      for (const u of users) {
+        if (u.face_descriptor && Array.isArray(u.face_descriptor) && u.face_descriptor.length === 128) {
+          labeled.push(new faceapi.LabeledFaceDescriptors(u.id, [new Float32Array(u.face_descriptor)]));
+        }
+      }
+      window.__pkFaceListFailed = false;
+      matcher = labeled.length > 0 ? new faceapi.FaceMatcher(labeled, 0.6) : null;
+      piLog('registered faces: ' + labeled.length);
+      return labeled.length;
+    } catch (e) {
+      window.__pkFaceListFailed = true;
+      piLog('face list failed: ' + e.message);
+      return -1;
+    }
+  }
+
+  let faceListRetries = 0;
+  async function ensureFaceList() {
+    const n = await loadFaceList();
+    // -1 is a failed fetch; 0 is a reachable backend with nobody enrolled. Only
+    // the failure is worth retrying, and only a few times.
+    if (n === -1 && faceListRetries < 3) {
+      faceListRetries++;
+      setTimeout(ensureFaceList, 15000);
+    }
+  }
+  await ensureFaceList();
+
   let matchCooldown = false;
   let lastDetect = 0;
   let detecting = false;
@@ -1826,6 +2362,10 @@ async function detect() {
 
     // Nothing to gain from detecting behind a full-screen card.
     if (document.body.classList.contains('maintenance-active')) return;
+    // The welcome screen is on the glass. Detecting here would sign in a
+    // passer-by behind an overlay that says "touch to continue", so hold off
+    // until the first tap dismisses it.
+    if (typeof window.pkIsStartScreenVisible === 'function' && window.pkIsStartScreenVisible()) return;
     if (overlayBlocking() && matchedUser) return;
 
     lastDetect = now;
@@ -1945,7 +2485,7 @@ faceStreak.count++;
                 // security log. The snapshot MUST be taken before stopCamera() below -
                 // stopping the track clears videoWidth, and captureFaceSnapshot() bails
                 // out when videoWidth is 0, so capturing afterwards silently saved null.
-                var snapshot = captureFaceSnapshot(faceStreak.box || box);
+                var snapshot = captureFaceSnapshot(faceStreak.box || box, srcW, srcH);
                 cameraOn = false;
                 applyCameraUi();
                 stopCamera();
@@ -1980,12 +2520,28 @@ faceStreak.count++;
                 streak: faceStreak.count,
               };
             }
-            // A face is present but nobody registered - record it (throttled).
-            throttledUnknownLog(match.distance);
+            // A face the kiosk refused is still a capture worth keeping.
+            //
+            // This used to fire only for the label 'unknown', which left two
+            // holes. A stranger who vaguely resembled an enrolled user was
+            // rejected by the distance gate and recorded nowhere; and a kiosk
+            // with nobody enrolled never reached this branch at all, because
+            // there was no matcher to ask. Someone could stand at the camera,
+            // get the green box, and leave no trace in the log.
+            throttledUnknownLog(match.distance, box, srcW, srcH);
           }
           document.getElementById('faceStatusText').textContent = 'Scanning for registered face...';
+        } else if (matcher) {
+          // A sign-in just happened. Whoever is in frame next is not that
+          // person, so hold the cooldown rather than logging them against it.
+          document.getElementById('faceStatusText').textContent = 'Scanning...';
         } else {
-          document.getElementById('faceStatusText').textContent = matcher ? 'Scanning...' : 'Face detected (no registered users)';
+          // No matcher: nobody is enrolled, or the face list failed to load.
+          // Those two need different advice, so say which one it is.
+          throttledUnknownLog(null, box, srcW, srcH);
+          document.getElementById('faceStatusText').textContent = window.__pkFaceListFailed
+            ? 'Face sign-in unavailable - use PIN or QR'
+            : 'Face detected (no registered users)';
         }
       } else {
         document.getElementById('faceDot').className = 'dot dot-yellow';
@@ -2051,6 +2607,11 @@ function acceptFace() {
 
 function startGuest() {
   stopCamera();
+  // The camera is stopped but the flag was left true, so the UI kept offering
+  // "Turn off camera" and the live publisher kept its timer running against a
+  // dead stream. Guest mode is a no-camera flow, so make the state say so.
+  cameraOn = false;
+  applyCameraUi();
   matchedUser = null;
   document.getElementById('camStatus').innerHTML = '<span class="dot dot-yellow"></span> Guest mode';
   document.getElementById('faceStatusText').textContent = 'Scan the QR to upload as guest';
@@ -2254,6 +2815,11 @@ function applyCameraUi() {
   if (box) box.classList.toggle('cam-idle', !cameraOn);
   if (cam && !cameraOn) cam.style.visibility = 'hidden';
   if (cam && cameraOn) cam.style.visibility = '';
+
+  // Every camera state change funnels through here, so this is the one place
+  // that decides whether the dashboard is being fed. A customer switching the
+  // camera on is a live view the shop asked to see.
+  try { syncLiveStream(); } catch (e) {}
 }
 
 async function toggleCamera() {
@@ -2714,5 +3280,7 @@ function closePayment() {
   location.reload();
 }
 </script>
+
+
 </body>
 </html>
