@@ -1084,23 +1084,27 @@ def _transport_failure(text):
 
 
 def _cups_uri_hint():
-    """Point at the address CUPS itself uses, when it differs from PRINTER_URI.
+    """What CUPS itself uses to reach this queue, for the error message.
 
-    Printing goes through `lp` and the queue NAME; PRINTER_URI only feeds this
-    supply probe. So the queue can print perfectly while the env file points at
-    an address the printer has since left (DHCP). Naming both turns "cannot
-    reach 10.100.131.48" into something staff can act on without guessing.
+    Previously this returned "" whenever CUPS agreed with the configured URI.
+    That left the "cannot reach X" message with no hint at all - which is
+    exactly when a hint is most needed, because agreeing and still being
+    unreachable means the name resolves but the device does not answer. Now it
+    always says what CUPS sees, so staff can tell "wrong address" apart from
+    "right address, dead printer".
     """
     try:
         uri = _queue_device_uri(CONFIG["printer"])
     except Exception:
         return ""
-    if not uri or uri == CONFIG["printer_uri"]:
-        return ""
+    if not uri:
+        return " (CUPS reports no device URI for this queue - the queue may be misconfigured)"
+    if uri == CONFIG["printer_uri"]:
+        return " (CUPS points at the same address, so this is the printer, not a stale address)"
     return " (CUPS queue %s prints via %s)" % (CONFIG["printer"], uri)
 
 
-def read_supplies():
+def read_supplies(_retried=False):
     """Ask the printer what it actually has. Returns (levels, online, why, model).
 
     `why` exists so a failure is diagnosable from the journal. The first
@@ -1110,6 +1114,19 @@ def read_supplies():
     """
     if not shutil_which("ipptool"):
         return None, True, "ipptool not installed (apt install cups-ipp-utils)", None
+
+    # Re-discover the printer's address from CUPS on every poll. A printer that
+    # moved IPs via DHCP (or whose .local name now points at a different host)
+    # would otherwise be probed at a stale address forever. CUPS is the source
+    # of truth for "which device does this queue print to".
+    try:
+        fresh = _queue_device_uri(CONFIG["printer"])
+        if fresh and fresh != CONFIG["printer_uri"]:
+            log("printer URI updated from %s to %s via CUPS"
+                % (CONFIG["printer_uri"], fresh))
+            CONFIG["printer_uri"] = fresh
+    except Exception as e:
+        log("printer URI discovery failed: %s" % e)
 
     # Test files, tried in order.
     #
@@ -1221,6 +1238,29 @@ def read_supplies():
         text = None
 
     if transport_error:
+        # A transport failure may mean the printer was asleep and is just waking
+        # up, or that its address changed via DHCP mid-poll. Retry once after a
+        # short pause, re-discovering the address from CUPS in between. One
+        # retry only, so a genuinely dead printer is still reported as
+        # unreachable instead of looping forever.
+        if not _retried:
+            try:
+                time.sleep(2)
+            except Exception:
+                pass
+            fresh = None
+            try:
+                fresh = _queue_device_uri(CONFIG["printer"])
+            except Exception as e:
+                log("printer URI discovery failed on retry: %s" % e)
+            if fresh and fresh != CONFIG["printer_uri"]:
+                log("configured URI %s unreachable; retrying against CUPS address %s"
+                    % (CONFIG["printer_uri"], fresh))
+                CONFIG["printer_uri"] = fresh
+            try:
+                return read_supplies(True)
+            except Exception as e:
+                log("supply retry failed: %s" % e)
         return None, False, transport_error + _cups_uri_hint(), None
 
     # ipptool refused our own arguments, so it never contacted the printer.
@@ -1578,6 +1618,28 @@ def main():
         if now - last_supply >= CONFIG["supply_seconds"]:
             try:
                 levels, online, why, model = read_supplies()
+
+                # A transport failure may mean the configured address is stale:
+                # printers move between IPs via DHCP, and PRINTER_URI in the env
+                # file does not follow them. CUPS already knows the live address,
+                # so ask it once and retry against that. One retry only, so a
+                # genuinely dead printer is still reported as unreachable rather
+                # than looping forever.
+                if (levels is None and online is False
+                        and "cannot reach" in (why or "")):
+                    fresh = _queue_device_uri(CONFIG["printer"])
+                    if fresh and fresh != CONFIG["printer_uri"]:
+                        log("configured URI %s unreachable; CUPS reports %s - retrying"
+                            % (CONFIG["printer_uri"], fresh))
+                        saved = CONFIG["printer_uri"]
+                        CONFIG["printer_uri"] = fresh
+                        try:
+                            levels, online, why, model = read_supplies()
+                            if levels is not None:
+                                log("supplies read via CUPS address %s" % fresh)
+                        except Exception as e:
+                            log("retry via CUPS address failed: %s" % e)
+                            CONFIG["printer_uri"] = saved
 
                 # Guard against reporting the wrong device. There are two Brother
                 # printers on this network, so if the device we reached is not the
